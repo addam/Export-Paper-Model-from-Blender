@@ -23,13 +23,13 @@
 # ***** END GPL LICENCE BLOCK *****
 
 bl_addon_info = {
-    'name': 'Mesh: Unfold',
+    'name': 'Export: Paper Model',
     'author': 'Addam Dominec',
-    'version': '0.5',
+    'version': '0.6',
     'blender': (2, 5, 3),
-    'location': 'View3D > Toolbox > Unfold ',
-    'description': 'Unfold a mesh to a flat net',
-    'category': 'Mesh'}
+    'location': 'View3D > Toolbox > Unfold',
+    'description': 'Export printable net of a given mesh',
+    'category': 'Import/Export'}
 
 """
 
@@ -42,8 +42,6 @@ import mathutils as M
 import geometry as G
 import time
 pi=3.141592653589783
-unfolders=dict()
-layout=None
 priority_effect={}
 
 def sign(a):
@@ -57,9 +55,9 @@ def vectavg(vectlist):
 		return M.Vector((0,0))
 	last=vectlist.pop()
 	vectlist.append(last)
-	sum=last.data.co.copy().zero() #keep the dimensions
+	sum=last.co.copy().zero() #keep the dimensions
 	for vect in vectlist:
-		sum+=vect.data.co
+		sum+=vect.co
 	return sum/vectlist.__len__()
 def angle2d(direction):
 	"""Get the view angle of point from origin."""
@@ -85,32 +83,38 @@ class Unfolder:
 	page_size=M.Vector((400,600))
 	def __init__(self, ob):
 		self.ob=ob
-		self.mesh=Mesh(ob.data)
+		self.mesh=Mesh(ob.data, ob.matrix)
 	def unfold(self):
 		"""Decide for seams and preview them to the user."""
 		self.mesh.generate_cuts()
-	def save(self, filename):
+	def save(self, properties):
 		"""Export the document."""
-		if filename[-4:]==".svg" or filename[-4:]==".png":
-			filename=filename[0:-4]
-		self.page_size=M.Vector((bpy.context.scene.unfolder_output_size_x, bpy.context.scene.unfolder_output_size_y)) #in meters
-		self.size=bpy.context.scene.unfolder_output_dpi*100/2.54 #in points per meter
+		filepath=properties.filepath
+		if filepath[-4:]==".svg" or filepath[-4:]==".png":
+			filepath=filepath[0:-4]
+		self.page_size=M.Vector((properties.output_size_x, properties.output_size_y)) #in meters
+		self.size=properties.output_dpi*100/2.54 #in points per meter
 		self.mesh.cut_obvious()
 		if not self.mesh.is_cut_enough():
-			raise UnfoldError("The mesh does not have enough seams. Unfold it first.")
+			self.unfold()
+			#raise UnfoldError("The mesh does not have enough seams. Make it unfoldable first. (Operator \"Make Unfoldable\")")
 		self.mesh.generate_islands()
 		self.mesh.generate_stickers()
 		self.mesh.fit_islands(self.page_size)
-		if not bpy.context.scene.unfolder_output_pure:
+		if not properties.output_pure:
 			self.mesh.save_uv(page_size=self.page_size)
-			self.mesh.save_image(filename, self.page_size*self.size)
+			#this property might be overriden when invoking the Operator
+			selected_to_active=bpy.context.scene.render.bake_active; bpy.context.scene.render.bake_active=properties.bake_selected_to_active
+			self.mesh.save_image(filepath, self.page_size*self.size)
+			#revoke settings
+			bpy.context.scene.render.bake_active=selected_to_active
 		svg=SVG(self.size, self.page_size)
 		svg.add_mesh(self.mesh)
-		svg.write(filename)
+		svg.write(filepath)
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
-	def __init__(self, mesh):
+	def __init__(self, mesh, matrix):
 		self.verts=dict()
 		self.edges=dict()
 		self.faces=dict()
@@ -119,7 +123,7 @@ class Mesh:
 		self.data=mesh
 		self.pages=[]
 		for vert in mesh.verts:
-			self.verts[vert.index]=Vertex(vert, self)
+			self.verts[vert.index]=Vertex(vert, self, matrix)
 		for edge in mesh.edges:
 			self.edges[edge.index]=Edge(edge, self)
 		for face in mesh.faces:
@@ -200,7 +204,8 @@ class Mesh:
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
 		def uvedge_priority(uvedge):
 			"""Retuns whether it is a good idea to create a sticker on this edge"""
-			return (uvedge.va.co-uvedge.vb.co).length
+			#This is just a placeholder
+			return uvedge.va.co
 		for edge_index in self.edges:
 			edge=self.edges[edge_index]
 			if edge.is_cut and len(edge.uvedges)==2:
@@ -313,8 +318,12 @@ class Mesh:
 		islands=list(self.islands)
 		for island in islands:
 			island.generate_bounding_box()
+			largestError=None
 			if island.bounding_box.x > page_size.x or island.bounding_box.y > page_size.y:
-				raise UnfoldError("An island is too big for the page, sorry. The script cannot handle it yet. Island size: "+str(island.bounding_box)+", Page size: "+str(page_size))
+				largestError=island.bounding_box
+			if largestError:
+				sizeRatio=max(island.bounding_box.x/page_size.x, island.bounding_box.y/page_size.y)
+				raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+str(sizeRatio)[:4]+" times.")
 		#sort islands by their ugliness (we need an ugly expression to treat ugliness correctly)
 		islands.sort(key=lambda island: (lambda vector:-pow(vector.x, 2)-pow(vector.y, 2)-pow(vector.x-vector.y, 2))(island.bounding_box))
 		remaining_count=len(islands)
@@ -360,8 +369,14 @@ class Mesh:
 		recall_margin=rd.bake_margin; rd.bake_margin=0
 		recall_clear=rd.bake_clear; rd.bake_clear=False
 		for page in self.pages:
-			image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
-			image.filename=filename+"_"+page.name+".png"
+			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
+			image_name="Unfolded "+self.data.name+" "+page.name
+			obstacle=bpy.data.images.get(image_name)
+			if obstacle:
+				obstacle.name=image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
+			bpy.ops.image.new(name=image_name, width=int(page_size.x), height=int(page_size.y), color=(1,1,1))
+			image=bpy.data.images.get(image_name) #this time it is our new image
+			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
 			texfaces=self.data.active_uv_texture.data
 			for island in page.islands:
@@ -375,8 +390,9 @@ class Mesh:
    
 class Vertex:
 	"""BPy Vertex wrapper"""
-	def __init__(self, vertex, mesh=None):
+	def __init__(self, vertex, mesh=None, matrix=1):
 		self.data=vertex
+		self.co=matrix*vertex.co
 		self.edges=list()
 		self.uvs=list()
 	def __hash__(self):
@@ -461,7 +477,7 @@ class Edge:
 		self.data=edge
 		self.va=mesh.verts[edge.verts[0]]	
 		self.vb=mesh.verts[edge.verts[1]]
-		self.vect=self.vb.data.co-self.va.data.co
+		self.vect=self.vb.co-self.va.co
 		self.length=self.vect.length
 		self.fa=None
 		self.fb=None
@@ -539,7 +555,7 @@ class Face:
 						edge.fa=self
 					else:
 						edge.fb=self
-						is_convex=sign((edge.va.data.co-vectavg(self.verts))*edge.fa.data.normal)
+						is_convex=sign((edge.va.co-vectavg(self.verts))*edge.fa.data.normal)
 						edge.angle=face.normal.angle(edge.fa.data.normal)*is_convex
 	def __hash__(self):
 		return hash(self.data.index)
@@ -691,7 +707,9 @@ class UVVertex:
 		#quick and dirty hack for usage in sets
 		return int(hash(self.co.x)*10000000000+hash(self.co.y))
 	def __eq__(self, other):
-		return self.co==other.co# and self.vertex.data.index==other.vertex.data.index
+		return self.vertex.data.index==other.vertex.data.index and (self.co-other.co).length<0.00001
+	def __ne__(self, other):
+		return not self==other
 	def __str__(self):
 		return "UV ["+str(self.co.x)[0:6]+", "+str(self.co.y)[0:6]+"]"
 	def __repr__(self):
@@ -723,7 +741,7 @@ class UVFace:
 			rot=face.flatten_matrix()
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
-				uvvertex=UVVertex(rot*vertex.data.co, vertex)
+				uvvertex=UVVertex(rot*vertex.co, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.data.index]=uvvertex
 		elif type(face) is UVFace: #copy constructor
@@ -786,28 +804,32 @@ class Sticker(UVFace):
 	is_sticker=True
 	def __init__(self, uvedge, faces=[], other_face=None):
 		"""Sticker is directly appended to the edge given by two UVVerts"""
-		#FIXME: avoid simple overlaps with the sticking target in neighbourhood
 		edge=uvedge.va.co-uvedge.vb.co
-		sticker_width=min(0.005, edge.length/2) #TODO: this should be user editable
+		sticker_width=min(0.005, edge.length/2) #TODO: the 5 millimeters should be user editable
 		other=uvedge.edge.other_uvedge(uvedge) #This is the other uvedge - the sticking target
 		other_edge=other.vb.co-other.va.co
-		cos_a=cos_b=0.5
-		sin_a=sin_b=0.5**0.5
-		len_a=len_b=sticker_width/edge.length
+		cos_a=cos_b=0.5 #angle a is at vertex uvedge.va, b is at uvedge.vb
+		sin_a=sin_b=0.75**0.5
+		len_a=len_b=sticker_width/sin_a
 		#fix overlaps with the most often neighbour - its sticking target
 		if uvedge.va==other.vb:
-			cos_a=min(max(cos_a, 1/(edge.length**2)*(edge*other_edge)), 1) #angles between pi/3 and 0; fix for math errors
+			cos_a=min(max(cos_a, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_a=(1-cos_a**2)**0.5
-			if cos_a < 0:
-				len_a=min(len_a, sticker_width*sin_b/((sin_a+sin_b)*cos_b))
+			len_b=min(len_a, (edge.length*sin_a)/(sin_a*cos_b+sin_b*cos_a))
+			len_a=min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
+			print(sin_a, cos_a, sin_b, cos_b)
 		elif uvedge.vb==other.va:
-			cos_b=min(max(cos_b, 1/(edge.length**2)*(edge*other_edge)), 1) #angles between pi/3 and 0; fix for math errors
+			cos_b=min(max(cos_b, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_b=(1-cos_b**2)**0.5
-			if cos_b < 0:
-				len_b=min(len_b, sticker_width*sin_a/((sin_a+sin_b)*cos_a))
-		v3=uvedge.vb.co+len_a*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b))*edge)
-		v4=uvedge.va.co+len_b*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a))*edge)
-		self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
+			len_a=min(len_a, (edge.length*sin_b)/(sin_a*cos_b+sin_b*cos_a))
+			len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
+			print(sin_a, cos_a, sin_b, cos_b)
+		v3=uvedge.vb.co+len_b*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b))*edge)/edge.length
+		v4=uvedge.va.co+len_a*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a))*edge)/edge.length
+		if v3!=v4:
+			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
+		else:
+			self.verts=[uvedge.vb, UVVertex(v3), uvedge.va]
 		"""for face in faces: #TODO: fix all overlaps
 			self.cut(face) #yep, this is slow
 		if other_face: 
@@ -884,17 +906,19 @@ class SVG:
 				f.write("</svg>")
 				f.close()
 
-class MESH_OT_unfolder_unfold(bpy.types.Operator):
+class MESH_OT_make_unfoldable(bpy.types.Operator):
 	"""Blender Operator: unfold the selected object."""
-	bl_idname = "MESH_OT_unfolder_unfold"
-	bl_label = "Unfold"
-	bl_description = "Unfold the selected object"
+	bl_idname = "MESH_OT_make_unfoldable"
+	bl_label = "Make Unfoldable"
+	bl_description = "Mark seams so that the mesh can be exported as a paper model"
 	bl_options = {'REGISTER', 'UNDO'}
 	priority_effect_convex = bpy.props.FloatProperty(name="Convex", description="Priority effect for convex edges", default=0.5, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_concave = bpy.props.FloatProperty(name="Concave", description="Priority effect for concave edges", default=3, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_last_uncut = bpy.props.FloatProperty(name="Last uncut", description="Priority effect for edges cutting of which would quicken the process", default=3, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0.1, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=-5, soft_min=-10, soft_max=1, subtype='FACTOR')
+	def poll(self, context):
+		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
 		global priority_effect
 		props = self.properties
@@ -914,33 +938,58 @@ class MESH_OT_unfolder_unfold(bpy.types.Operator):
 		unfolder.mesh.data.draw_seams=True
 		return {"FINISHED"}
 
-class MESH_OT_unfolder_save(bpy.types.Operator):
+class EXPORT_OT_paper_model(bpy.types.Operator):
 	"""Blender Operator: save the selected object's net and optionally bake its texture"""
-	bl_idname = "MESH_OT_unfolder_save"
-	bl_label = "Save Net"
-	bl_description = "Save the selected object's net and optionally bake its texture"
-	path = bpy.props.StringProperty(name="File Path", description="Target file to save the SVG", default="unfolded.svg") #Why doesn't this work?
+	bl_idname = "EXPORT_OT_paper_model"
+	bl_label = "Export Paper Model"
+	bl_description = "Export the selected object's net and optionally bake its texture"
+	filepath = bpy.props.StringProperty(name="File Path", description="Target file to save the SVG")
 	filename = bpy.props.StringProperty(name="File Name", description="Name of the file")
 	directory = bpy.props.StringProperty(name="Directory", description="Directory of the file")
+	output_size_x = bpy.props.FloatProperty(name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+	output_size_y = bpy.props.FloatProperty(name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
+	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
+	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
+	def poll(self, context):
+		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
-		bpy.ops.object.scale_apply()
 		unfolder=Unfolder(context.active_object)
 		try:
-			unfolder.save(self.properties.path)
+			unfolder.save(self.properties)
 			return {"FINISHED"}
 		except UnfoldError as error:
 			self.report(type="ERROR_INVALID_INPUT", message=error.args[0])
 			return {"CANCELLED"}
+		except:
+			raise
 	def invoke(self, context, event):
+		sce=context.scene
+		self.properties.output_size_x=sce.unfolder_output_size_x
+		self.properties.output_size_y=sce.unfolder_output_size_y
+		self.properties.output_dpi=sce.unfolder_output_dpi
+		self.properties.output_pure=sce.unfolder_output_pure
+		self.properties.bake_selected_to_active=sce.render.bake_active
 		wm = context.manager
 		wm.add_fileselect(self)
 		return {'RUNNING_MODAL'}
+	def draw(self, context):
+		layout = self.layout
+		col = layout.column(align=True)
+		col.label(text="Page size:")
+		col.prop(self.properties, "output_size_x")
+		col.prop(self.properties, "output_size_y")
+		layout.prop(self.properties, "output_dpi")
+		layout.prop(self.properties, "output_pure")
+		col = layout.column()
+		col.active = not self.properties.output_pure
+		col.prop(self.properties, "bake_selected_to_active")
 
-class VIEW3D_unfolder(bpy.types.Panel):
+class VIEW3D_paper_model(bpy.types.Panel):
 	"""Blender UI Panel definition for Unfolder"""
 	bl_space_type = 'VIEW_3D'
 	bl_region_type = 'TOOLS'
-	bl_label = "Unfold"
+	bl_label = "Export Paper Model"
 	bpy.types.Scene.FloatProperty(attr="unfolder_output_size_x", name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
 	bpy.types.Scene.FloatProperty(attr="unfolder_output_size_y", name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
 	bpy.types.Scene.FloatProperty(attr="unfolder_output_dpi", name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
@@ -951,10 +1000,8 @@ class VIEW3D_unfolder(bpy.types.Panel):
 
 	def draw(self, context):
 		layout = self.layout
-		layout.operator("MESH_OT_unfolder_unfold")
+		layout.operator("MESH_OT_make_unfoldable")
 		col = layout.column()
-		mesh_is_cut_enough=True
-		col.active = mesh_is_cut_enough
 		sub = col.column(align=True)
 		sub.label(text="Page size:")
 		sub.prop(bpy.context.scene, "unfolder_output_size_x", text="Width")
@@ -964,17 +1011,22 @@ class VIEW3D_unfolder(bpy.types.Panel):
 		sub = col.column()
 		sub.active = not bpy.context.scene.unfolder_output_pure
 		sub.prop(context.scene.render, "bake_active", text="Bake Selected to Active")
-		col.operator("MESH_OT_unfolder_save", text="Export Net...")
+		col.operator("export.paper_model", text="Export Net...")
+
+def menu_func(self, context):
+	self.layout.operator("export.paper_model", text="Paper Model (.svg)")
 
 def register():
-	bpy.types.register(VIEW3D_unfolder)
-	bpy.types.register(MESH_OT_unfolder_unfold)
-	bpy.types.register(MESH_OT_unfolder_save)
+	bpy.types.register(VIEW3D_paper_model)
+	bpy.types.register(MESH_OT_make_unfoldable)
+	bpy.types.register(EXPORT_OT_paper_model)
+	bpy.types.INFO_MT_file_export.append(menu_func)
 
 def unregister():
-	bpy.types.unregister(VIEW3D_unfolder)
-	bpy.types.unregister(MESH_OT_unfolder_unfold)
-	bpy.types.unregister(MESH_OT_unfolder_save)
+	bpy.types.unregister(VIEW3D_paper_model)
+	bpy.types.unregister(MESH_OT_make_unfoldable)
+	bpy.types.unregister(EXPORT_OT_paper_model)
+	bpy.types.INFO_MT_file_export.remove(menu_func)
 
 if __name__ == "__main__":
 	register()
