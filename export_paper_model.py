@@ -42,7 +42,12 @@ import mathutils as M
 import geometry as G
 import time
 pi=3.141592653589783
-priority_effect={}
+priority_effect={
+	'convex':0.5,
+	'concave':3,
+	'last_uncut':3,
+	'cut_end':0.1,
+	'last_connecting':-5}
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
@@ -817,13 +822,11 @@ class Sticker(UVFace):
 			sin_a=(1-cos_a**2)**0.5
 			len_b=min(len_a, (edge.length*sin_a)/(sin_a*cos_b+sin_b*cos_a))
 			len_a=min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
-			print(sin_a, cos_a, sin_b, cos_b)
 		elif uvedge.vb==other.va:
 			cos_b=min(max(cos_b, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_b=(1-cos_b**2)**0.5
 			len_a=min(len_a, (edge.length*sin_b)/(sin_a*cos_b+sin_b*cos_a))
 			len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-			print(sin_a, cos_a, sin_b, cos_b)
 		v3=uvedge.vb.co+len_b*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b))*edge)/edge.length
 		v4=uvedge.va.co+len_a*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a))*edge)/edge.length
 		if v3!=v4:
