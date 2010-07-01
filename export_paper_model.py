@@ -29,7 +29,9 @@ bl_addon_info = {
     'blender': (2, 5, 3),
     'location': 'View3D > Toolbox > Unfold',
     'description': 'Export printable net of a given mesh',
-    'category': 'Import/Export'}
+    'category': 'Import/Export',
+    'wiki_url': 'http://wiki.blender.org/index.php/Extensions:2.5/Py/Scripts/File_I-O/Paper_Model',
+    'tracker_url': 'https://projects.blender.org/tracker/index.php?func=detail&aid=22417&group_id=153&atid=467'}
 
 """
 
@@ -47,7 +49,8 @@ priority_effect={
 	'concave':3,
 	'last_uncut':3,
 	'cut_end':0.1,
-	'last_connecting':-5}
+	'last_connecting':-5,
+	'length':0.5}
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
@@ -98,13 +101,14 @@ class Unfolder:
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
 		self.page_size=M.Vector((properties.output_size_x, properties.output_size_y)) #in meters
-		self.size=properties.output_dpi*100/2.54 #in points per meter
+		scale_length=bpy.context.scene.unit_settings.scale_length
+		self.size=properties.output_dpi*scale_length*100/2.54 #in points per meter
 		self.mesh.cut_obvious()
 		if not self.mesh.is_cut_enough():
 			self.unfold()
 			#raise UnfoldError("The mesh does not have enough seams. Make it unfoldable first. (Operator \"Make Unfoldable\")")
 		self.mesh.generate_islands()
-		self.mesh.generate_stickers()
+		self.mesh.generate_stickers(properties.sticker_width)
 		self.mesh.fit_islands(self.page_size)
 		if not properties.output_pure:
 			self.mesh.save_uv(page_size=self.page_size)
@@ -127,8 +131,8 @@ class Mesh:
 		self.islands=list()
 		self.data=mesh
 		self.pages=[]
-		for vert in mesh.verts:
-			self.verts[vert.index]=Vertex(vert, self, matrix)
+		for vertex in mesh.verts:
+			self.verts[vertex.index]=Vertex(vertex, self, matrix)
 		for edge in mesh.edges:
 			self.edges[edge.index]=Edge(edge, self)
 		for face in mesh.faces:
@@ -165,11 +169,13 @@ class Mesh:
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
 		self.cut_obvious()
-		for edge in self.edges:
-			self.edges[edge].generate_priority()
-		self.edges_sorted=sorted(self.edges.values())
-		count_edges_connecting = sum(int(self.edges[edge_id].is_cut is False) for edge_id in self.edges)
+		count_edges_connecting = sum(not self.edges[edge_id].is_cut for edge_id in self.edges)
 		count_faces = len(self.faces)
+		average_length=sum(self.edges[edge_id].length for edge_id in self.edges if not self.edges[edge_id].is_cut)/count_edges_connecting
+		for edge in self.edges:
+			self.edges[edge].generate_priority(average_length)
+		self.edges_sorted=sorted(self.edges.values())
+		#Iteratively cut one edge after another until it is enough
 		while count_edges_connecting > count_faces or not self.is_cut_enough(do_update_priority=True):
 			edge_cut=self.edges_sorted.pop()
 			for edge in edge_cut.va.edges + edge_cut.vb.edges:
@@ -204,20 +210,20 @@ class Mesh:
 		remaining_faces=list(self.faces.values())
 		while len(remaining_faces) > 0:
 			self.islands.append(Island(remaining_faces))
-	def generate_stickers(self):
+	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
 		def uvedge_priority(uvedge):
 			"""Retuns whether it is a good idea to create a sticker on this edge"""
 			#This is just a placeholder
-			return uvedge.va.co
+			return uvedge.va.co.y
 		for edge_index in self.edges:
 			edge=self.edges[edge_index]
 			if edge.is_cut and len(edge.uvedges)==2:
 				if uvedge_priority(edge.uvedges[0]) >= uvedge_priority(edge.uvedges[1]):
-					edge.uvedges[0].island.stickers.append(Sticker(edge.uvedges[0]))
+					edge.uvedges[0].island.stickers.append(Sticker(edge.uvedges[0], default_width))
 				else:
-					edge.uvedges[1].island.stickers.append(Sticker(edge.uvedges[1]))
+					edge.uvedges[1].island.stickers.append(Sticker(edge.uvedges[1], default_width))
 	def fit_islands(self, page_size):
 		"""Move islands so that they fit into pages, based on their bounding boxes"""
 		#this algorithm is not optimal, but cool enough
@@ -449,7 +455,7 @@ class CutTree:
 			pass#print("Join myself")
 class CutPriority:
 	"""A container for edge's priority value"""
-	def __init__(self, angle=0):
+	def __init__(self, angle, rel_length):
 		self.is_last_uncut=False
 		self.is_last_connecting=False
 		self.is_cut_end=False
@@ -457,6 +463,7 @@ class CutPriority:
 			self.value=(angle/pi)*priority_effect['convex']
 		else:
 			self.value=-(angle/pi)*priority_effect['concave']
+		self.value+=rel_length*priority_effect['length']
 	def __gt__(self, other):
 		return self.value > other.value
 	def __lt__(self, other):
@@ -483,7 +490,7 @@ class Edge:
 		self.va=mesh.verts[edge.verts[0]]	
 		self.vb=mesh.verts[edge.verts[1]]
 		self.vect=self.vb.co-self.va.co
-		self.length=self.vect.length
+		self.length=self.vect.length #FIXME: must take the object's matrix into account
 		self.fa=None
 		self.fb=None
 		self.uvedges=[]
@@ -492,9 +499,9 @@ class Edge:
 		self.angle=0
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
-	def generate_priority(self):
+	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
-		self.priority=CutPriority(self.angle)
+		self.priority=CutPriority(self.angle, self.length/average_length)
 	def cut(self):
 		"""Set this edge as cut."""
 		for edge_a in self.va.edges:
@@ -634,7 +641,6 @@ class Island:
 					i += 1 #if the angle is convex, go ahead
 			return verts
 		verts=set()
-		#FIXME: sticker vertices should be also added to this list
 		for face in self.faces + self.stickers:
 			verts=verts.union(face.verts)
 		verts_top=list(verts)
@@ -807,10 +813,12 @@ class UVFace:
 class Sticker(UVFace):
 	"""Sticker face"""
 	is_sticker=True
-	def __init__(self, uvedge, faces=[], other_face=None):
+	def __init__(self, uvedge, default_width=0.005, faces=[], other_face=None):
 		"""Sticker is directly appended to the edge given by two UVVerts"""
+		#faces is a placeholder: it should contain all possibly overlaping faces
+		#other_face is a placeholder too: that should be the sticking target and this sticker must fit into it
 		edge=uvedge.va.co-uvedge.vb.co
-		sticker_width=min(0.005, edge.length/2) #TODO: the 5 millimeters should be user editable
+		sticker_width=min(default_width, edge.length/2)
 		other=uvedge.edge.other_uvedge(uvedge) #This is the other uvedge - the sticking target
 		other_edge=other.vb.co-other.va.co
 		cos_a=cos_b=0.5 #angle a is at vertex uvedge.va, b is at uvedge.vb
@@ -821,12 +829,18 @@ class Sticker(UVFace):
 			cos_a=min(max(cos_a, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_a=(1-cos_a**2)**0.5
 			len_b=min(len_a, (edge.length*sin_a)/(sin_a*cos_b+sin_b*cos_a))
-			len_a=min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
+			if sin_a==0:
+				len_a=0
+			else:
+				len_a=min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
 		elif uvedge.vb==other.va:
 			cos_b=min(max(cos_b, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_b=(1-cos_b**2)**0.5
 			len_a=min(len_a, (edge.length*sin_b)/(sin_a*cos_b+sin_b*cos_a))
-			len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
+			if sin_b==0:
+				len_b=0
+			else:
+				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
 		v3=uvedge.vb.co+len_b*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b))*edge)/edge.length
 		v4=uvedge.va.co+len_a*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a))*edge)/edge.length
 		if v3!=v4:
@@ -881,12 +895,13 @@ class SVG:
 					rot=M.RotationMatrix(island.angle, 2)
 					#debug: bounding box
 					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
+					line_through=" L ".join
 					data_outer=""
 					data_convex=""
 					data_concave=""
 					data_stickers=""
 					for uvedge in island.edges:
-						data_uvedge="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in [uvedge.va, uvedge.vb]])
+						data_uvedge="\nM "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in [uvedge.va, uvedge.vb]])
 						if uvedge.edge.is_cut:
 							data_outer+=data_uvedge
 						else:
@@ -895,9 +910,14 @@ class SVG:
 									data_convex+=data_uvedge
 								elif uvedge.edge.angle<0:
 									data_concave+=data_uvedge
-					for sticker in island.stickers:
-						data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
-					if data_stickers: f.write("<path class='sticker' d='"+data_stickers+"'/>")
+					#for sticker in island.stickers: #Stickers would be all in one path
+					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
+					#if data_stickers: f.write("<path class='sticker' d='"+data_stickers+"'/>")
+					if len(island.stickers)>0:
+						f.write("<g>")
+						for sticker in island.stickers: #Stickers are separate paths in one group
+							f.write("<path class='sticker' d='M "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])+"'/>")
+						f.write("</g>")
 					if data_outer: 
 						if is_image: f.write("<path class='outer_background' d='"+data_outer+"'/>")
 						f.write("<path class='outer' d='"+data_outer+"'/>")
@@ -915,11 +935,13 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 	bl_label = "Make Unfoldable"
 	bl_description = "Mark seams so that the mesh can be exported as a paper model"
 	bl_options = {'REGISTER', 'UNDO'}
-	priority_effect_convex = bpy.props.FloatProperty(name="Convex", description="Priority effect for convex edges", default=0.5, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_concave = bpy.props.FloatProperty(name="Concave", description="Priority effect for concave edges", default=3, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_last_uncut = bpy.props.FloatProperty(name="Last uncut", description="Priority effect for edges cutting of which would quicken the process", default=3, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0.1, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=-5, soft_min=-10, soft_max=1, subtype='FACTOR')
+	edit = bpy.props.BoolProperty(name="", description="", default=False, options={'HIDDEN'})
+	priority_effect_convex = bpy.props.FloatProperty(name="Convex", description="Priority effect for convex edges", default=1, soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_concave = bpy.props.FloatProperty(name="Concave", description="Priority effect for concave edges", default=1, soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_last_uncut = bpy.props.FloatProperty(name="Last uncut", description="Priority effect for edges cutting of which would quicken the process", default=0.3, soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0, soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=0, soft_min=-10, soft_max=1, subtype='FACTOR')
+	priority_effect_length = bpy.props.FloatProperty(name="Length", description="Priority effect of edge length (relative to object dimensions)", default=-0.2, soft_min=-10, soft_max=1, subtype='FACTOR')
 	def poll(self, context):
 		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
@@ -930,16 +952,22 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 		priority_effect['last_uncut']=props.priority_effect_last_uncut
 		priority_effect['cut_end']=props.priority_effect_cut_end
 		priority_effect['last_connecting']=props.priority_effect_last_connecting
-		bpy.ops.object.mode_set()
-		"""if props.edit:
-			bpy.ops.object.editmode_toggle()
-			bpy.ops.mesh.select_all(action="SELECT")
+		priority_effect['length']=props.priority_effect_length
+		orig_mode=context.object.mode
+		"""print(props.edit)
+		if props.edit:
+			bpy.ops.object.mode_set(mode='EDIT')
+			bpy.ops.mesh.select_all(action='SELECT')
+			print("Zvláštní...")
 			bpy.ops.mesh.mark_seam(clear=True)
-			bpy.ops.object.editmode_toggle()"""
+			bpy.ops.mesh.select_all(action='TOGGLE')
+			print("Až sem vše v pořádku")"""
+		bpy.ops.object.mode_set(mode='OBJECT')
 		unfolder=Unfolder(context.active_object)
 		unfolder.unfold()
 		unfolder.mesh.data.draw_seams=True
-		return {"FINISHED"}
+		bpy.ops.object.mode_set(mode=orig_mode)
+		return {'FINISHED'}
 
 class EXPORT_OT_paper_model(bpy.types.Operator):
 	"""Blender Operator: save the selected object's net and optionally bake its texture"""
@@ -954,6 +982,7 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
+	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
 	def poll(self, context):
 		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
@@ -968,11 +997,13 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 			raise
 	def invoke(self, context, event):
 		sce=context.scene
-		self.properties.output_size_x=sce.unfolder_output_size_x
-		self.properties.output_size_y=sce.unfolder_output_size_y
+		scale_length=sce.unit_settings.scale_length
+		self.properties.output_size_x=sce.unfolder_output_size_x/scale_length
+		self.properties.output_size_y=sce.unfolder_output_size_y/scale_length
 		self.properties.output_dpi=sce.unfolder_output_dpi
 		self.properties.output_pure=sce.unfolder_output_pure
 		self.properties.bake_selected_to_active=sce.render.bake_active
+		self.properties.sticker_width=0.005/scale_length
 		wm = context.manager
 		wm.add_fileselect(self)
 		return {'RUNNING_MODAL'}
@@ -987,6 +1018,8 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 		col = layout.column()
 		col.active = not self.properties.output_pure
 		col.prop(self.properties, "bake_selected_to_active")
+		layout.label(text="Document settings:")
+		layout.prop(self.properties, "sticker_width")
 
 class VIEW3D_paper_model(bpy.types.Panel):
 	"""Blender UI Panel definition for Unfolder"""
