@@ -91,7 +91,7 @@ class Unfolder:
 	page_size=M.Vector((400,600))
 	def __init__(self, ob):
 		self.ob=ob
-		self.mesh=Mesh(ob.data, ob.matrix)
+		self.mesh=Mesh(ob.data, ob.matrix_world)
 	def unfold(self):
 		"""Decide for seams and preview them to the user."""
 		self.mesh.generate_cuts()
@@ -823,7 +823,7 @@ class Sticker(UVFace):
 		other_edge=other.vb.co-other.va.co
 		cos_a=cos_b=0.5 #angle a is at vertex uvedge.va, b is at uvedge.vb
 		sin_a=sin_b=0.75**0.5
-		len_a=len_b=sticker_width/sin_a
+		len_a=len_b=sticker_width/sin_a #len_a is length of the side adjacent to vertex a, len_b similarly
 		#fix overlaps with the most often neighbour - its sticking target
 		if uvedge.va==other.vb:
 			cos_a=min(max(cos_a, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
