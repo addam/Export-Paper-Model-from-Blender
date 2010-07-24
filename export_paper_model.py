@@ -45,12 +45,12 @@ import geometry as G
 import time
 pi=3.141592653589783
 priority_effect={
-	'convex':0.5,
-	'concave':3,
-	'last_uncut':3,
-	'cut_end':0.1,
-	'last_connecting':-5,
-	'length':0.5}
+	'convex':1,
+	'concave':1,
+	'last_uncut':0.5,
+	'cut_end':0,
+	'last_connecting':-0.45,
+	'length':-0.2}
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
@@ -327,14 +327,15 @@ class Mesh:
 		#fixme: at first, it should cut all islands that are too big to fit the page
 		#todo: there should be a list of points off the boundary that are created from pairs of open edges
 		islands=list(self.islands)
+		largestErrorRatio=1
 		for island in islands:
 			island.generate_bounding_box()
-			largestError=None
 			if island.bounding_box.x > page_size.x or island.bounding_box.y > page_size.y:
-				largestError=island.bounding_box
-			if largestError:
-				sizeRatio=max(island.bounding_box.x/page_size.x, island.bounding_box.y/page_size.y)
-				raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+str(sizeRatio)[:4]+" times.")
+				errorRatio=max(island.bounding_box.x/page_size.x, island.bounding_box.y/page_size.y)
+				if errorRatio > largestErrorRatio:
+					largestErrorRatio=errorRatio
+		if largestErrorRatio > 1:
+			raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+str(largestErrorRatio)[:4]+" times.")
 		#sort islands by their ugliness (we need an ugly expression to treat ugliness correctly)
 		islands.sort(key=lambda island: (lambda vector:-pow(vector.x, 2)-pow(vector.y, 2)-pow(vector.x-vector.y, 2))(island.bounding_box))
 		remaining_count=len(islands)
@@ -718,7 +719,10 @@ class UVVertex:
 		#quick and dirty hack for usage in sets
 		return int(hash(self.co.x)*10000000000+hash(self.co.y))
 	def __eq__(self, other):
-		return self.vertex.data.index==other.vertex.data.index and (self.co-other.co).length<0.00001
+		if self.vertex and other.vertex:
+			return self.vertex.data.index==other.vertex.data.index and (self.co-other.co).length<0.00001
+		else:
+			return (self.co-other.co).length<0.000005
 	def __ne__(self, other):
 		return not self==other
 	def __str__(self):
@@ -938,9 +942,9 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 	edit = bpy.props.BoolProperty(name="", description="", default=False, options={'HIDDEN'})
 	priority_effect_convex = bpy.props.FloatProperty(name="Convex", description="Priority effect for convex edges", default=1, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_concave = bpy.props.FloatProperty(name="Concave", description="Priority effect for concave edges", default=1, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_last_uncut = bpy.props.FloatProperty(name="Last uncut", description="Priority effect for edges cutting of which would quicken the process", default=0.3, soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_last_uncut = bpy.props.FloatProperty(name="Last uncut", description="Priority effect for edges cutting of which would quicken the process", default=0.5, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=0, soft_min=-10, soft_max=1, subtype='FACTOR')
+	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=-0.45, soft_min=-10, soft_max=1, subtype='FACTOR')
 	priority_effect_length = bpy.props.FloatProperty(name="Length", description="Priority effect of edge length (relative to object dimensions)", default=-0.2, soft_min=-10, soft_max=1, subtype='FACTOR')
 	def poll(self, context):
 		return context.active_object and context.active_object.type=="MESH"
