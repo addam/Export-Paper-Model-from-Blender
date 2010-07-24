@@ -916,7 +916,7 @@ class SVG:
 					if len(island.stickers)>0:
 						f.write("<g>")
 						for sticker in island.stickers: #Stickers are separate paths in one group
-							f.write("<path class='sticker' d='M "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])+"'/>")
+							f.write("<path class='sticker' d='M "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])+" Z'/>")
 						f.write("</g>")
 					if data_outer: 
 						if is_image: f.write("<path class='outer_background' d='"+data_outer+"'/>")
