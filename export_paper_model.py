@@ -409,6 +409,11 @@ class Vertex:
 		self.uvs=list()
 	def __hash__(self):
 		return hash(self.data.index)
+	def __eq__(self, other):
+		if type(other) is type(self):
+			return self.data.index==other.data.index
+		else:
+			return False
 	def is_in_cut(self, needle):
 		"""Test if both vertices are parts of the same cut tree"""
 		time_begin=time.clock()
@@ -719,10 +724,7 @@ class UVVertex:
 		#quick and dirty hack for usage in sets
 		return int(hash(self.co.x)*10000000000+hash(self.co.y))
 	def __eq__(self, other):
-		if self.vertex and other.vertex:
-			return self.vertex.data.index==other.vertex.data.index and (self.co-other.co).length<0.00001
-		else:
-			return (self.co-other.co).length<0.000005
+		return self.vertex==other.vertex and (self.co-other.co).length<0.00001
 	def __ne__(self, other):
 		return not self==other
 	def __str__(self):
