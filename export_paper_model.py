@@ -386,7 +386,7 @@ class Mesh:
 			obstacle=bpy.data.images.get(image_name)
 			if obstacle:
 				obstacle.name=image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
-			bpy.ops.image.new(name=image_name, width=int(page_size.x), height=int(page_size.y), color=(1,1,1))
+			bpy.ops.image.new(name=image_name, width=int(page_size.x), height=int(page_size.y), color=(1,1,1,1))
 			image=bpy.data.images.get(image_name) #this time it is our new image
 			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
@@ -397,6 +397,12 @@ class Mesh:
 						texfaces[uvface.face.data.index].image=image
 			bpy.ops.object.bake_image()
 			image.save()
+			for island in page.islands:
+				for uvface in island.faces:
+					if not uvface.is_sticker:
+						texfaces[uvface.face.data.index].image=None
+			image.user_clear()
+			bpy.data.images.remove(image)
 		rd.bake_margin=recall_margin
 		rd.bake_clear=recall_clear
    
