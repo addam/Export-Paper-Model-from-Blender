@@ -1067,16 +1067,84 @@ class VIEW3D_paper_model(bpy.types.Panel):
 def menu_func(self, context):
 	self.layout.operator("export.paper_model", text="Paper Model (.svg)")
 
+class VIEW3D_PT_paper_model(bpy.types.Panel):
+	bl_label = "Paper Model"
+	bl_space_type = "VIEW_3D"
+	bl_region_type = "UI"
+
+	def display_quads(self, context):
+		import bgl, blf
+		perspMatrix = context.space_data.region_3d.perspective_matrix
+		perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [perspMatrix[i][j] for i in range(4) for j in range(4)])
+		bgl.glLoadIdentity()
+		bgl.glMatrixMode(bgl.GL_PROJECTION)
+		bgl.glLoadMatrixf(perspBuff)
+
+		bgl.glBegin(bgl.GL_LINE_STRIP)
+		bgl.glColor4f(1,0.2,0,1)
+		bgl.glVertex3f(1, 1, 1)
+		bgl.glVertex3f(0, 0, 0)
+		bgl.glEnd()
+		bgl.glBegin(bgl.GL_POLYGON)
+		bgl.glColor4f(1,0.4,0,0.9)
+		bgl.glVertex3f(1, 2, 1)
+		bgl.glVertex3f(0, 2, 0)
+		bgl.glVertex3f(0, 0, 1)
+		bgl.glVertex3f(1, 2, 2)
+		bgl.glEnd()
+
+	def display_labels(self, context):
+		import bgl, blf, mathutils
+		view_mat = context.space_data.region_3d.perspective_matrix
+		
+		vec = view_mat*(mathutils.Vector((1,1,1)).resize4D())
+		# dehomogenise
+		vec = mathutils.Vector((vec[0]/vec[3],vec[1]/vec[3],vec[2]/vec[3]))
+		# get screen information
+		mid_x = context.region.width/2.0
+		mid_y = context.region.height/2.0
+		width = context.region.width
+		height = context.region.height
+		bgl.glColor3f(1,1,0)
+		x = int(mid_x + vec[0]*width/2.0)
+		y = int(mid_y + vec[1]*height/2.0)
+		blf.position(0, x, y, 0)
+		blf.draw(0, "Hello, world!")
+
+	def draw(self, context):
+		layout = self.layout
+		global paper_model_handles
+		region=[region for region in context.area.regions if region.type=='WINDOW'][0]
+		for name in paper_model_handles:
+			value, mode=paper_model_handles[name]
+			property_name="io_paper_model_"+name
+			layout.prop(context.scene, property_name, icon='RESTRICT_VIEW_OFF')
+			if value is None and getattr(context.scene, property_name):
+				paper_model_handles[name]=region.callback_add(getattr(self, name), (context,), mode), mode
+				context.area.tag_redraw()
+			elif value is not None and not getattr(context.scene, property_name):
+				region.callback_remove(value)
+				paper_model_handles[name]=None, mode
+				context.area.tag_redraw()
+
 def register():
+	bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
+	bpy.types.Scene.BoolProperty(attr="io_paper_model_display_quads", name="Display quads")
+	global paper_model_handles
+	paper_model_handles={
+		"display_labels": (None, 'POST_PIXEL'),
+		"display_quads": (None, 'POST_VIEW')}
 	bpy.types.register(VIEW3D_paper_model)
 	bpy.types.register(MESH_OT_make_unfoldable)
 	bpy.types.register(EXPORT_OT_paper_model)
 	bpy.types.INFO_MT_file_export.append(menu_func)
+	bpy.types.register(VIEW3D_PT_paper_model)
 
 def unregister():
 	bpy.types.unregister(VIEW3D_paper_model)
 	bpy.types.unregister(MESH_OT_make_unfoldable)
 	bpy.types.unregister(EXPORT_OT_paper_model)
+	bpy.types.unregister(VIEW3D_PT_paper_model)
 	bpy.types.INFO_MT_file_export.remove(menu_func)
 
 if __name__ == "__main__":
