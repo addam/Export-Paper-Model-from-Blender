@@ -954,7 +954,8 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=-0.45, soft_min=-10, soft_max=1, subtype='FACTOR')
 	priority_effect_length = bpy.props.FloatProperty(name="Length", description="Priority effect of edge length (relative to object dimensions)", default=-0.2, soft_min=-10, soft_max=1, subtype='FACTOR')
-	def poll(self, context):
+	@staticmethod
+	def poll(context):
 		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
 		global priority_effect
@@ -995,7 +996,8 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
-	def poll(self, context):
+	@staticmethod
+	def poll(context):
 		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
 		unfolder=Unfolder(context.active_object)
@@ -1043,7 +1045,8 @@ class VIEW3D_paper_model(bpy.types.Panel):
 	bpy.types.Scene.FloatProperty(attr="unfolder_output_dpi", name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	bpy.types.Scene.BoolProperty(attr="unfolder_output_pure", name="Pure Net", description="Do not bake the bitmap", default=True)
 
-	def poll(self, context):
+	@staticmethod
+	def poll(context):
 		return (context.active_object and context.active_object.type == 'MESH')
 
 	def draw(self, context):
