@@ -51,6 +51,7 @@ priority_effect={
 	'cut_end':0,
 	'last_connecting':-0.45,
 	'length':-0.2}
+lines=[]
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
@@ -71,8 +72,10 @@ def angle2d(direction):
 	"""Get the view angle of point from origin."""
 	if direction.length==0:
 		return None
+	if len(direction)==3:
+		direction=direction.copy().resize2D()
 	angle=direction.angle(M.Vector((1,0)))
-	if direction[0]<0:
+	if direction[1]<0:
 		angle=2*pi-angle #hack for angles greater than pi
 	return angle
 def pairs(sequence):
@@ -83,6 +86,20 @@ def pairs(sequence):
 		yield previous, this
 		previous=this
 	yield this, first
+def z_up_matrix(n):
+	"""Get a rotation matrix that aligns given vector upwards."""
+	b=n.xy.length
+	l=n.length
+	if b>0:
+		return M.Matrix(
+			(n.x*n.z/(b*l),	-n.y/b),
+			(n.y*n.z/(b*l),	n.x/b),
+			(-b/l,					0))
+	else: #no need for rotation
+		return M.Matrix(
+			(1,	0),
+			(0,	sign(n.z)),
+			(0,	0))
 
 class UnfoldError(ValueError):
 	pass
@@ -126,22 +143,29 @@ class Mesh:
 	def __init__(self, mesh, matrix):
 		self.verts=dict()
 		self.edges=dict()
+		self.edges_by_verts_indices={}
 		self.faces=dict()
-		self.edges_sorted=list()
 		self.islands=list()
 		self.data=mesh
 		self.pages=[]
-		for vertex in mesh.verts:
-			self.verts[vertex.index]=Vertex(vertex, self, matrix)
-		for edge in mesh.edges:
-			self.edges[edge.index]=Edge(edge, self)
-		for face in mesh.faces:
-			self.faces[face.index]=Face(face, self)
+		for bpy_vertex in mesh.verts:
+			self.verts[bpy_vertex.index]=Vertex(bpy_vertex, self, matrix)
+		for bpy_edge in mesh.edges:
+			edge=Edge(bpy_edge, self, matrix)
+			self.edges[bpy_edge.index]=edge
+			self.edges_by_verts_indices[(edge.va.index, edge.vb.index)]=edge
+			self.edges_by_verts_indices[(edge.vb.index, edge.va.index)]=edge
+		for bpy_face in mesh.faces:
+			self.faces[bpy_face.index]=Face(bpy_face, self, matrix)
+		global lines
+		lines=[]
+		for index in self.edges:
+			self.edges[index].process_faces()
 	def cut_obvious(self):
 		"""Cut all seams and non-manifold edges."""
 		for i in self.edges:
 			edge=self.edges[i]
-			if edge.data.seam or edge.fa is None or edge.fb is None:
+			if edge.data.seam or len(edge.faces)<2:
 				edge.cut()
 	def is_cut_enough(self, do_update_priority=False):
 		"""Check for loops in the net of connected faces (that indicates the net is not unfoldable)."""
@@ -150,34 +174,50 @@ class Mesh:
 			first=remaining_faces.pop()
 			stack=[(first, None)] #a seed to start from
 			path={first}
+			childno=0
+			path_edges=[]
 			while len(stack) > 0:
-				#test one island
-				current, previous=stack.pop()
-				for edge in current.edges:
-					if not edge.is_cut:
-						next=edge.other_face(current)
-						if next is not previous:
-							if next in path:
-								if do_update_priority:
-									edge.priority.last_uncut() #if this edge might solve the problem
-								return False #if we find a loop, the mesh is not cut enough
-							stack.append((next, current))
-							path.add(next)
-							remaining_faces.remove(next)
+				#Test one island (or rather a wanna-be-island)
+				current_face, previous_edge=stack.pop()
+				print("Current face:", current_face,"Previous edge:", previous_edge)
+				for edge in current_face.edges:
+					if edge is not previous_edge and not edge.is_cut(current_face):
+						path_edges.append(edge)
+						next_face=edge.other_face[current_face]
+						if next_face in path:
+							#We've just found a loop
+							if do_update_priority:
+								edge.priority.last_uncut() #Cutting this edge might solve the problem
+							return False #if we find a loop, the mesh is not cut enough
+						#else:
+						stack.append((next_face, edge))
+						childno+=1
+						path.add(next_face)
+						if next_face not in remaining_faces:
+							print("this is the child no",childno)
+							print("Current face:", current_face,"Next face:", next_face)
+							print("Path:",path, "Path of edges:",path_edges)
+							print("Remaining faces:",remaining_faces)
+							print("Edge has faces in this order:",edge.faces)
+							print("previous_edge:",previous_edge)
+						remaining_faces.remove(next_face)
 		#If we haven't found anything, presume there's nothing wrong
 		return True
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
 		self.cut_obvious()
-		count_edges_connecting = sum(not self.edges[edge_id].is_cut for edge_id in self.edges)
+		count_edges_connecting = sum(not self.edges[edge_id].is_cut() for edge_id in self.edges)
+		if (count_edges_connecting)==0:
+			return True
 		count_faces = len(self.faces)
-		average_length=sum(self.edges[edge_id].length for edge_id in self.edges if not self.edges[edge_id].is_cut)/count_edges_connecting
+		print("Face count:", count_faces)
+		average_length=sum(self.edges[edge_id].length for edge_id in self.edges if not self.edges[edge_id].is_cut())/count_edges_connecting
 		for edge in self.edges:
 			self.edges[edge].generate_priority(average_length)
-		self.edges_sorted=sorted(self.edges.values())
+		edges_sorted=sorted(self.edges.values())
 		#Iteratively cut one edge after another until it is enough
 		while count_edges_connecting > count_faces or not self.is_cut_enough(do_update_priority=True):
-			edge_cut=self.edges_sorted.pop()
+			edge_cut=edges_sorted.pop()
 			for edge in edge_cut.va.edges + edge_cut.vb.edges:
 				if edge is not edge_cut and edge.va.is_in_cut(edge.vb):
 					edge.priority.last_connecting() #Take down priority if cutting this edge would create a new island
@@ -185,8 +225,8 @@ class Mesh:
 				else:
 					edge.priority.cut_end()
 			edge_cut.cut()
-			if len(self.edges_sorted) > 0:
-				self.edges_sorted.sort(key=lambda edge: edge.priority.value)
+			if len(edges_sorted) > 0:
+				edges_sorted.sort(key=lambda edge: edge.priority.value)
 			count_edges_connecting -= 1
 		return True
 	def generate_islands(self):
@@ -194,10 +234,9 @@ class Mesh:
 		def connected_faces(border_edges, inner_faces):
 			outer_faces=list()
 			for edge in border_edges:
-				if edge.fa and not edge.fa in inner_faces and not edge.fa in outer_faces:
-					outer_faces.append(edge.fa)
-				if edge.fb and not edge.fb in inner_faces and not edge.fb in outer_faces:
-					outer_faces.append(edge.fb)
+				for face in edge.faces:
+					if face not in inner_faces and face not in outer_faces:
+						outer_faces.append(face)
 			next_border=list()
 			for face in outer_faces:
 				for edge in face.edges:
@@ -210,6 +249,9 @@ class Mesh:
 		remaining_faces=list(self.faces.values())
 		while len(remaining_faces) > 0:
 			self.islands.append(Island(remaining_faces))
+		#This is bloody dirty, but it should work :P
+		for edge in self.edges.values():
+			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
@@ -219,11 +261,15 @@ class Mesh:
 			return uvedge.va.co.y
 		for edge_index in self.edges:
 			edge=self.edges[edge_index]
-			if edge.is_cut and len(edge.uvedges)==2:
+			if edge.is_cut() and len(edge.uvedges)>=2:
 				if uvedge_priority(edge.uvedges[0]) >= uvedge_priority(edge.uvedges[1]):
 					edge.uvedges[0].island.stickers.append(Sticker(edge.uvedges[0], default_width))
 				else:
 					edge.uvedges[1].island.stickers.append(Sticker(edge.uvedges[1], default_width))
+			if len(edge.uvedges)>2:
+				for additional_uvedge in edge.uvedges[2:]:
+					print("Additional uvedge on",edge)
+					additional_uvedge.island.stickers.append(Sticker(additional_uvedge, default_width))
 	def fit_islands(self, page_size):
 		"""Move islands so that they fit into pages, based on their bounding boxes"""
 		#this algorithm is not optimal, but cool enough
@@ -408,26 +454,36 @@ class Mesh:
    
 class Vertex:
 	"""BPy Vertex wrapper"""
-	def __init__(self, vertex, mesh=None, matrix=1):
-		self.data=vertex
-		self.co=matrix*vertex.co
+	def __init__(self, bpy_vertex, mesh=None, matrix=1):
+		self.data=bpy_vertex
+		self.index=bpy_vertex.index
+		self.co=matrix*bpy_vertex.co
 		self.edges=list()
 		self.uvs=list()
 	def __hash__(self):
-		return hash(self.data.index)
+		return hash(self.index)
 	def __eq__(self, other):
 		if type(other) is type(self):
-			return self.data.index==other.data.index
+			return self.index==other.index
 		else:
 			return False
+	def __sub__(self, other):
+		return self.co-other.co
+	def __rsub__(self, other):
+		if type(other) is type(self):
+			return other.co-self.co
+		else:
+			return other-self.co
+	def __add__(self, other):
+		return self.co+other.co
 	def is_in_cut(self, needle):
 		"""Test if both vertices are parts of the same cut tree"""
 		time_begin=time.clock()
 		tree_self=None
 		for edge_self in self.edges:
-			if edge_self.is_cut:
+			if edge_self.is_cut():
 				for edge_needle in needle.edges:
-					if edge_needle.is_cut:
+					if edge_needle.is_cut():
 						return edge_self.cut_tree is edge_needle.cut_tree
 				else:
 					return False
@@ -458,7 +514,7 @@ class CutTree:
 					path.add(current)
 					for edge in current.edges:
 						next = edge.other_vertex(current)
-						if edge.is_cut and next is not previous and next not in path:
+						if edge.is_cut() and next is not previous and next not in path:
 							other.add(edge) #we should also call something like self.remove(edge), but that would be a waste of time
 							stack.append((next, current))
 			else:
@@ -497,29 +553,106 @@ class CutPriority:
 			self.is_cut_end=True
 class Edge:
 	"""Wrapper for BPy Edge"""
-	def __init__(self, edge, mesh):
+	def __init__(self, edge, mesh, matrix=1):
 		self.data=edge
 		self.va=mesh.verts[edge.verts[0]]	
 		self.vb=mesh.verts[edge.verts[1]]
 		self.vect=self.vb.co-self.va.co
-		self.length=self.vect.length #FIXME: must take the object's matrix into account
-		self.fa=None
-		self.fb=None
+		self.length=self.vect.length
+		self.faces=[]
+		self.angles={}
+		self.other_face={}
 		self.uvedges=[]
-		self.is_cut=False
+		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
 		self.angle=0
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
+	def process_faces(self):
+		"""Reorder faces (if more than two), calculate angle(s) and if normals are wrong, mark edge as cut"""
+		def niceness (angle):
+			"""Return how good idea it would be to leave the given angle uncut"""
+			if angle<0:
+				if priority_effect['concave']!=0:
+					return -1/(angle*priority_effect['concave'])
+			elif angle>0:
+				if priority_effect['convex']!=0:
+					return 1/(angle*priority_effect['convex'])
+			#if angle == 0:
+			return 1000000
+		if len(self.faces)==0:
+			return
+		elif len(self.faces)==1:
+			return
+		#elif len(self.faces)==2:
+		else:
+			global lines
+			from math import sin, cos
+			rot=z_up_matrix(self.vect) #Everything is easier in 2D
+			normal_directions={} #direction of each face's normal, rotated to 2D
+			face_directions={} #direction which each face is pointing in from this edge; rotated to 2D
+			is_normal_cw={}
+			for face in self.faces:
+				normal_directions[face]=angle2d((rot*face.normal).resize2D())
+				face_directions[face]=angle2d((rot*(vectavg(face.verts)-self.va.co)).resize2D())
+				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
+			#Firstly, find which two faces will be the 'main' ones
+			self.faces.sort(key=lambda face: normal_directions[face])
+			print("faces are in this order:", self.faces)
+			best_pair = 0, None, None #tuple: niceness, face #1, face #2
+			for first_face, second_face in pairs(self.faces):
+				if is_normal_cw[first_face] != is_normal_cw[second_face]:
+					#Always calculate the inner angle (between faces' backsides)
+					if not is_normal_cw[first_face]:
+						first_face, second_face = second_face, first_face
+					#Get the angle difference
+					angle_normals=(normal_directions[second_face]-normal_directions[face]) % (2*pi)
+					#Check whether it is better than the current best one
+					if niceness(angle_normals) > best_pair[0]:
+						best_pair=niceness(angle_normals), first_face, second_face
+			#For each face, find the nearest neighbour from its backside
+			print(face_directions,normal_directions)
+			for index, face in enumerate(sorted(self.faces, key=lambda face: face_directions[face])):
+				if is_normal_cw[face]:
+					adjacent_face=self.faces[(index-1) % len(self.faces)]
+				else:
+					adjacent_face=self.faces[(index+1) % len(self.faces)]
+				self.other_face[face]=adjacent_face
+			#Overwrite the calculated neighbours for the two 'main' ones
+			if best_pair[0] > 0:
+				#If we found two nice faces, create a connection between them
+				for first_face, second_face in pairs ([best_pair[1], best_pair[2]]):
+					self.other_face[first_face]=second_face
+				#Reorder the list of faces so that the main ones come first
+				index_first=self.faces.index(best_pair[1])
+				self.faces=self.faces[index_first:] + self.faces[:index_first]
+			else:
+				#If none of the faces is nice, go cut yourself
+				self.cut() 
+			#Calculate angles for each face to the 'other face' (self.other_face[face])
+			for face in self.faces:
+				angle_faces = pi - ((face_directions[self.other_face[face]] - face_directions[face]) % (2*pi))
+				#Always calculate the inner angle (between faces' backsides)
+				if not is_normal_cw[face]:
+					angle_faces = -angle_faces
+				self.angles[face] = angle_faces
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
 		self.priority=CutPriority(self.angle, self.length/average_length)
+	def is_cut(self, face=None):
+		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
+		#Return whether there is a cut between the two main faces
+		if face is None or self.faces.index(face) <= 1:
+			return self.is_main_cut
+		#All other faces (third and more) are automatically treated as cut
+		else:
+			return True
 	def cut(self):
 		"""Set this edge as cut."""
 		for edge_a in self.va.edges:
-			if edge_a.is_cut:
+			if edge_a.is_cut():
 				for edge_b in self.vb.edges:
-					if edge_b.is_cut: #both vertices have cut edges
+					if edge_b.is_cut(): #both vertices have cut edges
 						edge_b.cut_tree.join(edge_a.cut_tree)
 						edge_b.cut_tree.add(self)
 						break
@@ -529,19 +662,23 @@ class Edge:
 				break
 		else: #vertex A has no cut edge
 			for edge_b in self.vb.edges:
-				if edge_b.is_cut:
+				if edge_b.is_cut():
 					edge_b.cut_tree.add(self)
 					break
 			else: #both vertices have no cut edges
 				self.cut_tree=CutTree(self)
 		self.data.seam=True #TODO: this should be optional
-		self.is_cut=True
+		self.is_main_cut=True
 	def __lt__(self, other):
 		"""Compare by priority."""
 		return self.priority < other.priority
 	def __gt__(self, other):
 		"""Compare by priority."""
 		return self.priority > other.priority
+	def __str__(self):
+		return "Edge id: "+str(self.data.index)
+	def __repr__(self):
+		return "Edge(id="+str(self.data.index)+"...)"
 	def other_vertex(self, this):
 		"""Get a vertex of this edge that is not the given one - or None if none of both vertices is the given one."""
 		if self.va is this:
@@ -549,14 +686,6 @@ class Edge:
 		elif self.vb is this:
 			return self.va
 		return None
-	def other_face(self, this):
-		"""Get a face of this edge that is not the given one - or None if none of both faces is the given one."""
-		if this is self.fa:
-			return self.fb
-		elif this is self.fb:
-			return self.fa
-		else:
-			raise ValueError("Edge "+str(self.data.index)+" has faces "+str([self.fa.data.index, self.fb.data.index])+", but not "+str(this.data.index))
 	def other_uvedge(self, this):
 		"""Get an uvedge of this edge that is not the given one - or None if no other uvedge was found."""
 		for uvedge in self.uvedges:
@@ -566,42 +695,25 @@ class Edge:
 			return None
 class Face:
 	"""Wrapper for BPy Face"""
-	def __init__(self, face, mesh):
+	def __init__(self, face, mesh, matrix=1):
 		self.data=face
-		self.edges=list()
+		self.edges=[]
 		self.verts=[mesh.verts[i] for i in face.verts]
-		for vertex in face.verts:
-			for edge in mesh.verts[vertex].edges:
-				if not edge in self.edges and \
-						edge.va in self.verts and edge.vb in self.verts:
-					self.edges.append(edge)
-					if edge.fa==None:
-						edge.fa=self
-					else:
-						edge.fb=self
-						is_convex=sign((edge.va.co-vectavg(self.verts))*edge.fa.data.normal)
-						edge.angle=face.normal.angle(edge.fa.data.normal)*is_convex
+		self.normal=matrix*face.normal
+		for verts_indices in face.edge_keys:
+			edge=mesh.edges_by_verts_indices[verts_indices]
+			self.edges.append(edge)
+			edge.faces.append(self)
 	def __hash__(self):
 		return hash(self.data.index)
-	def flatten_matrix(self):
-		"""Get a rotation matrix that aligns this face with the ground."""
-		n=self.data.normal
-		b=n.xy.length
-		l=n.length
-		if b>0:
-			return M.Matrix(
-				(n.x*n.z/(b*l),	-n.y/b),
-				(n.y*n.z/(b*l),	n.x/b),
-				(-b/l,					0))
-		else: #no need for rotation
-			return M.Matrix(
-				(1,	0),
-				(0,	sign(n.z)),
-				(0,	0))
+	def __str__(self):
+		return "Face id: "+str(self.data.index)
+	def __repr__(self):
+		return "Face(id="+str(self.data.index)+"...)"
 class Island:
 	def __init__(self, faces):
 		"""Find an island in the given set of faces.
-		Note: initializing takes one island out of the given list of faces."""
+		Note: initializing removes one island out of the given list of faces."""
 		self.faces=[]
 		self.edges=[]
 		self.stickers=[]
@@ -611,9 +723,9 @@ class Island:
 		self.is_placed=False
 		self.bounding_box=M.Vector((0,0))
 		#first, find where to begin
-		origin=False
+		origin=None
 		for face in faces:
-			uncut_edge_count=sum(not edge.is_cut for edge in face.edges)
+			uncut_edge_count=sum(not edge.is_cut(face) for edge in face.edges)
 			if uncut_edge_count==1:
 				origin=face
 				faces.remove(origin)
@@ -624,17 +736,19 @@ class Island:
 				break
 		if origin:
 			self.faces.append(UVFace(origin, self))
-			flood_boundary=list()
+			flood_boundary=[]
+			#Create the initial wave
 			for edge in origin.edges:
-				if not edge.is_cut:
-					flood_boundary.append((origin, edge.other_face(origin), edge))
+				if not edge.is_cut(origin):
+					flood_boundary.append((origin, edge.other_face[origin], edge))
+			#Spread the flood
 			while len(flood_boundary)>0:
-				origin, current_face, current_edge=flood_boundary.pop()
-				self.faces.append(UVFace(current_face, self, current_edge))
+				previous_face, current_face, previous_edge=flood_boundary.pop()
+				self.faces.append(UVFace(current_face, self, previous_edge))
 				faces.remove(current_face)
 				for edge in current_face.edges:
-					if edge is not current_edge and not edge.is_cut:
-						flood_boundary.append((current_face, edge.other_face(current_face), edge))
+					if edge is not previous_edge and not edge.is_cut(current_face):
+						flood_boundary.append((current_face, edge.other_face[current_face], edge))
 	def generate_bounding_poly(self):
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
 		def make_convex_curve(verts):
@@ -739,7 +853,7 @@ class UVVertex:
 		return str(self)
 class UVEdge:
 	"""Edge in 2D"""
-	def __init__(self, vertex1, vertex2, island=None, edge=None):
+	def __init__(self, vertex1, vertex2, island, uvface, edge=None):
 		self.va=vertex1
 		self.vb=vertex2
 		self.island=island
@@ -747,6 +861,8 @@ class UVEdge:
 		if edge:
 			self.edge=edge
 			edge.uvedges.append(self)
+		#Another face might be attached to this edge, but we do not care about it
+		self.uvface=uvface 
 class UVFace:
 	"""Face in 2D"""
 	is_sticker=False
@@ -760,8 +876,8 @@ class UVFace:
 			self.verts=[]
 			self.face=face
 			face.uvface=self
-			self.island=None
-			rot=face.flatten_matrix()
+			self.island=island
+			rot=z_up_matrix(face.normal)
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
 				uvvertex=UVVertex(rot*vertex.co, vertex)
@@ -777,7 +893,7 @@ class UVFace:
 			edge_by_verts[(edge.va.data.index, edge.vb.data.index)]=edge
 			edge_by_verts[(edge.vb.data.index, edge.va.data.index)]=edge
 		for va, vb in pairs(self.verts):
-			self.edges.append(UVEdge(va, vb, island, edge_by_verts[(va.vertex.data.index, vb.vertex.data.index)]))
+			self.edges.append(UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.data.index, vb.vertex.data.index)]))
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
 		if fixed_edge:
 			self.attach(fixed_edge)
@@ -790,7 +906,7 @@ class UVFace:
 			return (1/pow(v1.length,2))*M.Matrix(
 				(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
 				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y))
-		other_face=edge.other_face(self.face).uvface
+		other_face=edge.other_face[self.face].uvface
 		this_edge=self.uvvertex_by_id[edge.vb.data.index].co-self.uvvertex_by_id[edge.va.data.index].co
 		other_edge=other_face.uvvertex_by_id[edge.vb.data.index].co-other_face.uvvertex_by_id[edge.va.data.index].co
 		rot=fitting_matrix(this_edge, other_edge)
@@ -798,15 +914,20 @@ class UVFace:
 		for vertex_id in self.uvvertex_by_id:
 			vertex=self.uvvertex_by_id[vertex_id]
 			vertex.co=rot*vertex.co+offset
-			if vertex_id in other_face.uvvertex_by_id: #means that this is a shared vertex; it's doubled, we shall share vertex data with the second face
+			#If this vertex is shared between both faces
+			if vertex_id in other_face.uvvertex_by_id:
+				#it's doubled, we shall share vertex data with the second face
 				self.verts[self.verts.index(self.uvvertex_by_id[vertex_id])]=other_face.uvvertex_by_id[vertex_id]
 				self.uvvertex_by_id[vertex_id]=other_face.uvvertex_by_id[vertex_id]
 			#else: #if the vertex isn't shared, we must calculate its position
+		other_uvedge=this_uvedge=None
 		for uvedge in edge.uvedges:
 			if uvedge in self.edges:
 				this_uvedge=uvedge
 			else:
 				other_uvedge=uvedge
+		if not other_uvedge or not this_uvedge:
+			print (edge.data.index)
 		this_uvedge.va=other_uvedge.vb
 		this_uvedge.vb=other_uvedge.va
 	def get_overlap(self, others):
@@ -914,13 +1035,15 @@ class SVG:
 					data_stickers=""
 					for uvedge in island.edges:
 						data_uvedge="\nM "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in [uvedge.va, uvedge.vb]])
-						if uvedge.edge.is_cut:
+						#FIXME: The following clause won't return correct results for uncut edges with more than two faces connected
+						if uvedge.edge.is_cut(uvedge.uvface.face):
 							data_outer+=data_uvedge
 						else:
 							if uvedge.va.vertex.data.index > uvedge.vb.vertex.data.index: #each edge is in two opposite-oriented variants; we want to add each only once
-								if uvedge.edge.angle>0:
+								angle=uvedge.edge.angles[uvedge.uvface.face]
+								if angle > 0:
 									data_convex+=data_uvedge
-								elif uvedge.edge.angle<0:
+								elif angle < 0:
 									data_concave+=data_uvedge
 					#for sticker in island.stickers: #Stickers would be all in one path
 					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
@@ -1079,18 +1202,20 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		bgl.glLoadIdentity()
 		bgl.glMatrixMode(bgl.GL_PROJECTION)
 		bgl.glLoadMatrixf(perspBuff)
-
-		bgl.glBegin(bgl.GL_LINE_STRIP)
-		bgl.glColor4f(1,0.2,0,1)
-		bgl.glVertex3f(1, 1, 1)
-		bgl.glVertex3f(0, 0, 0)
-		bgl.glEnd()
-		bgl.glBegin(bgl.GL_POLYGON)
+		
+		global lines
+		for s, e in lines:
+			bgl.glBegin(bgl.GL_LINE_STRIP)
+			bgl.glColor4f(1,0.2,0,1)
+			bgl.glVertex3f(s[0], s[1], s[2])
+			bgl.glVertex3f(e[0], e[1], e[2])
+			bgl.glEnd()
+		"""bgl.glBegin(bgl.GL_POLYGON)
 		bgl.glColor4f(1,0.4,0,0.9)
 		bgl.glVertex3f(1, 2, 1)
 		bgl.glVertex3f(0, 2, 0)
 		bgl.glVertex3f(0, 0, 1)
-		bgl.glVertex3f(1, 2, 2)
+		bgl.glVertex3f(1, 2, 2)"""
 		bgl.glEnd()
 
 	def display_labels(self, context):
