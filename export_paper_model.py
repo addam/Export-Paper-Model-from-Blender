@@ -174,15 +174,11 @@ class Mesh:
 			first=remaining_faces.pop()
 			stack=[(first, None)] #a seed to start from
 			path={first}
-			childno=0
-			path_edges=[]
 			while len(stack) > 0:
 				#Test one island (or rather a wanna-be-island)
 				current_face, previous_edge=stack.pop()
-				print("Current face:", current_face,"Previous edge:", previous_edge)
 				for edge in current_face.edges:
 					if edge is not previous_edge and not edge.is_cut(current_face):
-						path_edges.append(edge)
 						next_face=edge.other_face[current_face]
 						if next_face in path:
 							#We've just found a loop
@@ -191,15 +187,7 @@ class Mesh:
 							return False #if we find a loop, the mesh is not cut enough
 						#else:
 						stack.append((next_face, edge))
-						childno+=1
 						path.add(next_face)
-						if next_face not in remaining_faces:
-							print("this is the child no",childno)
-							print("Current face:", current_face,"Next face:", next_face)
-							print("Path:",path, "Path of edges:",path_edges)
-							print("Remaining faces:",remaining_faces)
-							print("Edge has faces in this order:",edge.faces)
-							print("previous_edge:",previous_edge)
 						remaining_faces.remove(next_face)
 		#If we haven't found anything, presume there's nothing wrong
 		return True
@@ -210,7 +198,6 @@ class Mesh:
 		if (count_edges_connecting)==0:
 			return True
 		count_faces = len(self.faces)
-		print("Face count:", count_faces)
 		average_length=sum(self.edges[edge_id].length for edge_id in self.edges if not self.edges[edge_id].is_cut())/count_edges_connecting
 		for edge in self.edges:
 			self.edges[edge].generate_priority(average_length)
@@ -586,8 +573,6 @@ class Edge:
 			return
 		#elif len(self.faces)==2:
 		else:
-			global lines
-			from math import sin, cos
 			rot=z_up_matrix(self.vect) #Everything is easier in 2D
 			normal_directions={} #direction of each face's normal, rotated to 2D
 			face_directions={} #direction which each face is pointing in from this edge; rotated to 2D
@@ -598,7 +583,6 @@ class Edge:
 				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
-			print("faces are in this order:", self.faces)
 			best_pair = 0, None, None #tuple: niceness, face #1, face #2
 			for first_face, second_face in pairs(self.faces):
 				if is_normal_cw[first_face] != is_normal_cw[second_face]:
@@ -611,7 +595,6 @@ class Edge:
 					if niceness(angle_normals) > best_pair[0]:
 						best_pair=niceness(angle_normals), first_face, second_face
 			#For each face, find the nearest neighbour from its backside
-			print(face_directions,normal_directions)
 			for index, face in enumerate(sorted(self.faces, key=lambda face: face_directions[face])):
 				if is_normal_cw[face]:
 					adjacent_face=self.faces[(index-1) % len(self.faces)]
