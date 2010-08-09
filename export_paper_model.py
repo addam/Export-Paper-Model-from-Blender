@@ -255,7 +255,6 @@ class Mesh:
 					edge.uvedges[1].island.stickers.append(Sticker(edge.uvedges[1], default_width))
 			if len(edge.uvedges)>2:
 				for additional_uvedge in edge.uvedges[2:]:
-					print("Additional uvedge on",edge)
 					additional_uvedge.island.stickers.append(Sticker(additional_uvedge, default_width))
 	def fit_islands(self, page_size):
 		"""Move islands so that they fit into pages, based on their bounding boxes"""
@@ -552,7 +551,6 @@ class Edge:
 		self.uvedges=[]
 		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
-		self.angle=0
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
 	def process_faces(self):
@@ -570,6 +568,7 @@ class Edge:
 		if len(self.faces)==0:
 			return
 		elif len(self.faces)==1:
+			self.angles[self.faces[0]]=pi
 			return
 		#elif len(self.faces)==2:
 		else:
@@ -616,12 +615,12 @@ class Edge:
 			for face in self.faces:
 				angle_faces = pi - ((face_directions[self.other_face[face]] - face_directions[face]) % (2*pi))
 				#Always calculate the inner angle (between faces' backsides)
-				if not is_normal_cw[face]:
+				if is_normal_cw[face]:
 					angle_faces = -angle_faces
 				self.angles[face] = angle_faces
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
-		self.priority=CutPriority(self.angle, self.length/average_length)
+		self.priority=CutPriority(self.angles[self.faces[0]], self.length/average_length)
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
@@ -995,8 +994,8 @@ class SVG:
 				f.write("<svg xmlns:svg='http://www.w3.org/2000/svg' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' width='"+str(self.page_size.x*self.size)+"px' height='"+str(self.page_size.y*self.size)+"px'>")
 				f.write("""<style type="text/css">
 					path {fill:none; stroke-width:1px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}
-					path.concave {stroke:#000; stroke-dasharray:4,8; stroke-dashoffset:0}
-					path.convex {stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}
+					path.concave {stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}
+					path.convex {stroke:#000; stroke-dasharray:4,8; stroke-dashoffset:0}
 					path.outer {stroke:#000; stroke-dasharray:none; stroke-width:1.5px}
 					path.background {stroke:#fff}
 					path.outer_background {stroke:#fff; stroke-width:2px}
@@ -1067,7 +1066,7 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 		global priority_effect
 		props = self.properties
 		priority_effect['convex']=props.priority_effect_convex
-		priority_effect['concave']=props.priority_effect_convex
+		priority_effect['concave']=props.priority_effect_concave
 		priority_effect['last_uncut']=props.priority_effect_last_uncut
 		priority_effect['cut_end']=props.priority_effect_cut_end
 		priority_effect['last_connecting']=props.priority_effect_last_connecting
