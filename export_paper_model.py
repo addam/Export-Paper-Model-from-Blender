@@ -52,6 +52,7 @@ priority_effect={
 	'last_connecting':-0.45,
 	'length':-0.2}
 lines=[]
+twisted_quads=[]
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
@@ -64,10 +65,15 @@ def vectavg(vectlist):
 		return M.Vector((0,0))
 	last=vectlist.pop()
 	vectlist.append(last)
-	sum=last.co.copy().zero() #keep the dimensions
-	for vect in vectlist:
-		sum+=vect.co
-	return sum/vectlist.__len__()
+	if type(last) is Vertex:
+		vect_sum=last.co.copy().zero() #keep the dimensions
+		for vect in vectlist:
+			vect_sum+=vect.co
+	else:
+		vect_sum=last.copy().zero() #keep the dimensions
+		for vect in vectlist:
+			vect_sum+=vect
+	return vect_sum/vectlist.__len__()
 def angle2d(direction):
 	"""Get the view angle of point from origin."""
 	if direction.length==0:
@@ -130,17 +136,18 @@ class Unfolder:
 		if not properties.output_pure:
 			self.mesh.save_uv(page_size=self.page_size)
 			#this property might be overriden when invoking the Operator
-			selected_to_active=bpy.context.scene.render.bake_active; bpy.context.scene.render.bake_active=properties.bake_selected_to_active
+			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
 			self.mesh.save_image(filepath, self.page_size*self.size)
 			#revoke settings
-			bpy.context.scene.render.bake_active=selected_to_active
-		svg=SVG(self.size, self.page_size)
+			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
+		svg=SVG(self.size, self.page_size, properties.output_pure)
 		svg.add_mesh(self.mesh)
 		svg.write(filepath)
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
 	def __init__(self, mesh, matrix):
+		global lines, twisted_quads
 		self.verts=dict()
 		self.edges=dict()
 		self.edges_by_verts_indices={}
@@ -148,7 +155,7 @@ class Mesh:
 		self.islands=list()
 		self.data=mesh
 		self.pages=[]
-		for bpy_vertex in mesh.verts:
+		for bpy_vertex in mesh.vertices:
 			self.verts[bpy_vertex.index]=Vertex(bpy_vertex, self, matrix)
 		for bpy_edge in mesh.edges:
 			edge=Edge(bpy_edge, self, matrix)
@@ -156,16 +163,15 @@ class Mesh:
 			self.edges_by_verts_indices[(edge.va.index, edge.vb.index)]=edge
 			self.edges_by_verts_indices[(edge.vb.index, edge.va.index)]=edge
 		for bpy_face in mesh.faces:
-			self.faces[bpy_face.index]=Face(bpy_face, self, matrix)
-		global lines
-		lines=[]
+			face=Face(bpy_face, self, matrix)
+			self.faces[bpy_face.index]=face
 		for index in self.edges:
 			self.edges[index].process_faces()
 	def cut_obvious(self):
 		"""Cut all seams and non-manifold edges."""
 		for i in self.edges:
 			edge=self.edges[i]
-			if edge.data.seam or len(edge.faces)<2:
+			if edge.data.use_seam or len(edge.faces)<2: #NOTE: Here is one of the rare cases when using the original BPy data (fuck this.)
 				edge.cut()
 	def is_cut_enough(self, do_update_priority=False):
 		"""Check for loops in the net of connected faces (that indicates the net is not unfoldable)."""
@@ -193,6 +199,11 @@ class Mesh:
 		return True
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
+		#Check that all quads are flat and raise an error if not
+		global twisted_quads
+		twisted_quads=[]
+		for index in self.faces:
+			self.faces[index].check_twisted()
 		self.cut_obvious()
 		count_edges_connecting = sum(not self.edges[edge_id].is_cut() for edge_id in self.edges)
 		if (count_edges_connecting)==0:
@@ -208,7 +219,7 @@ class Mesh:
 			for edge in edge_cut.va.edges + edge_cut.vb.edges:
 				if edge is not edge_cut and edge.va.is_in_cut(edge.vb):
 					edge.priority.last_connecting() #Take down priority if cutting this edge would create a new island
-					edge.data.sharp=True
+					edge.data.use_edge_sharp=True
 				else:
 					edge.priority.cut_end()
 			edge_cut.cut()
@@ -404,14 +415,14 @@ class Mesh:
 		bpy.ops.object.mode_set()
 		bpy.ops.mesh.uv_texture_add()
 		#note: expecting that the active object's data is self.mesh
-		tex=self.data.active_uv_texture
+		tex=self.data.uv_textures.active
 		tex.name="Unfolded"
 		for island in self.islands:
 			island.save_uv(tex, page_size)
 	def save_image(self, filename, page_size=M.Vector((744, 1052))): #page_size is in pixels
 		rd=bpy.context.scene.render
 		recall_margin=rd.bake_margin; rd.bake_margin=0
-		recall_clear=rd.bake_clear; rd.bake_clear=False
+		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
 		for page in self.pages:
 			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
 			image_name="Unfolded "+self.data.name+" "+page.name
@@ -422,7 +433,7 @@ class Mesh:
 			image=bpy.data.images.get(image_name) #this time it is our new image
 			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
-			texfaces=self.data.active_uv_texture.data
+			texfaces=self.data.uv_textures.active.data
 			for island in page.islands:
 				for uvface in island.faces:
 					if not uvface.is_sticker:
@@ -436,7 +447,7 @@ class Mesh:
 			image.user_clear()
 			bpy.data.images.remove(image)
 		rd.bake_margin=recall_margin
-		rd.bake_clear=recall_clear
+		rd.use_bake_clear=recall_clear
    
 class Vertex:
 	"""BPy Vertex wrapper"""
@@ -541,8 +552,8 @@ class Edge:
 	"""Wrapper for BPy Edge"""
 	def __init__(self, edge, mesh, matrix=1):
 		self.data=edge
-		self.va=mesh.verts[edge.verts[0]]	
-		self.vb=mesh.verts[edge.verts[1]]
+		self.va=mesh.verts[edge.vertices[0]]	
+		self.vb=mesh.verts[edge.vertices[1]]
 		self.vect=self.vb.co-self.va.co
 		self.length=self.vect.length
 		self.faces=[]
@@ -649,7 +660,7 @@ class Edge:
 					break
 			else: #both vertices have no cut edges
 				self.cut_tree=CutTree(self)
-		self.data.seam=True #TODO: this should be optional
+		self.data.use_seam=True #TODO: this should be optional NOTE:Here, the original BPy Edge data is used (fuck it.)
 		self.is_main_cut=True
 	def __lt__(self, other):
 		"""Compare by priority."""
@@ -680,12 +691,27 @@ class Face:
 	def __init__(self, face, mesh, matrix=1):
 		self.data=face
 		self.edges=[]
-		self.verts=[mesh.verts[i] for i in face.verts]
+		self.verts=[mesh.verts[i] for i in face.vertices]
 		self.normal=matrix*face.normal
 		for verts_indices in face.edge_keys:
 			edge=mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
 			edge.faces.append(self)
+	def check_twisted(self):
+		if len(self.verts) > 3:
+			global twisted_quads
+			vert_a=self.verts[0]
+			normals=[]
+			for vert_b, vert_c in zip(self.verts[1:-1], self.verts[2: ]):
+				normal=(vert_b.co-vert_a.co).cross(vert_c.co-vert_b.co)
+				normal.normalize()
+				normals.append(normal)
+			average_normal=vectavg(normals)
+			for normal in normals:
+				if (normal-average_normal).length > 0.03: #TODO: this threshold should be editable or well chosen at least
+					twisted_quads.append(self.verts)
+					return True
+		return False
 	def __hash__(self):
 		return hash(self.data.index)
 	def __str__(self):
@@ -776,7 +802,7 @@ class Island:
 		for vertex_b in verts_convex:
 			angle=angle2d(vertex_b.co-vertex_a.co)
 			if angle is not None:
-				rot=M.RotationMatrix(angle, 2)
+				rot=M.Matrix.Rotation(angle, 2)
 				#find the dimensions in both directions
 				bottom_left=M.Vector((0,0))
 				top_right=M.Vector((0,0))
@@ -802,7 +828,7 @@ class Island:
 		for face in self.faces:
 			if not face.is_sticker:
 				texface=tex.data[face.face.data.index]
-				rot=M.RotationMatrix(self.angle, 2)
+				rot=M.Matrix.Rotation(self.angle, 2)
 				for i in range(len(face.verts)):
 					uv=rot*face.verts[i].co+self.pos+self.offset
 					texface.uv_raw[2*i]=uv.x/page_size.x
@@ -972,12 +998,13 @@ class Sticker(UVFace):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, size=1, page_size=M.Vector((0.210, 0.297))):
+	def __init__(self, size=1, page_size=M.Vector((0.210, 0.297)), pure_net=True):
 		"""Initialize document settings.
 		size: factor to all vertex coordinates (float)
 		page_size: document dimensions in meters (vector)"""
 		self.size=size
 		self.page_size=page_size
+		self.pure_net=pure_net
 	def add_mesh(self, mesh):
 		"""Set the Mesh to process."""
 		self.mesh=mesh
@@ -987,7 +1014,6 @@ class SVG:
 		return str(vector.x*self.size)+" "+str((self.page_size.y-vector.y)*self.size)
 	def write(self, filename):
 		"""Write data to a file given by its name."""
-		is_image=not bpy.context.scene.unfolder_output_pure
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
@@ -1002,12 +1028,12 @@ class SVG:
 					path.sticker {fill: #fff; stroke: #000; fill-opacity: 0.4; stroke-opacity: 0.7}
 					rect {fill:#ccc; stroke:none}
 				</style>""")
-				if is_image:
+				if not self.pure_net:
 					f.write("<image x='0' y='0' width='"+str(self.page_size.x*self.size)+"' height='"+str(self.page_size.y*self.size)+"' xlink:href='file://"+filename+"_"+page.name+".png'/>")
 				f.write("<g>")
 				for island in page.islands:
 					f.write("<g>")
-					rot=M.RotationMatrix(island.angle, 2)
+					rot=M.Matrix.Rotation(island.angle, 2)
 					#debug: bounding box
 					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
 					line_through=" L ".join
@@ -1036,9 +1062,9 @@ class SVG:
 							f.write("<path class='sticker' d='M "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])+" Z'/>")
 						f.write("</g>")
 					if data_outer: 
-						if is_image: f.write("<path class='outer_background' d='"+data_outer+"'/>")
+						if not self.pure_net: f.write("<path class='outer_background' d='"+data_outer+"'/>")
 						f.write("<path class='outer' d='"+data_outer+"'/>")
-					if is_image and (data_convex or data_concave): f.write("<path class='background' d='"+data_convex+data_concave+"'/>")
+					if not self.pure_net and (data_convex or data_concave): f.write("<path class='background' d='"+data_convex+data_concave+"'/>")
 					if data_convex: f.write("<path class='convex' d='"+data_convex+"'/>")
 					if data_concave: f.write("<path class='concave' d='"+data_concave+"'/>")
 					f.write("</g>")
@@ -1059,8 +1085,9 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0, soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=-0.45, soft_min=-10, soft_max=1, subtype='FACTOR')
 	priority_effect_length = bpy.props.FloatProperty(name="Length", description="Priority effect of edge length (relative to object dimensions)", default=-0.2, soft_min=-10, soft_max=1, subtype='FACTOR')
-	@staticmethod
-	def poll(context):
+	
+	@classmethod
+	def poll(cls, context):
 		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
 		global priority_effect
@@ -1072,19 +1099,14 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 		priority_effect['last_connecting']=props.priority_effect_last_connecting
 		priority_effect['length']=props.priority_effect_length
 		orig_mode=context.object.mode
-		"""print(props.edit)
-		if props.edit:
-			bpy.ops.object.mode_set(mode='EDIT')
-			bpy.ops.mesh.select_all(action='SELECT')
-			print("Zvláštní...")
-			bpy.ops.mesh.mark_seam(clear=True)
-			bpy.ops.mesh.select_all(action='TOGGLE')
-			print("Až sem vše v pořádku")"""
 		bpy.ops.object.mode_set(mode='OBJECT')
 		unfolder=Unfolder(context.active_object)
 		unfolder.unfold()
-		unfolder.mesh.data.draw_seams=True
+		unfolder.mesh.data.show_edge_seams=True
 		bpy.ops.object.mode_set(mode=orig_mode)
+		global twisted_quads
+		#if len(twisted_quads) > 0:
+		#	self.report(type="ERROR_INVALID_INPUT", message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
 		return {'FINISHED'}
 
 class EXPORT_OT_paper_model(bpy.types.Operator):
@@ -1101,8 +1123,9 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
-	@staticmethod
-	def poll(context):
+	
+	@classmethod
+	def poll(cls, context):
 		return context.active_object and context.active_object.type=="MESH"
 	def execute(self, context):
 		unfolder=Unfolder(context.active_object)
@@ -1121,9 +1144,9 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 		self.properties.output_size_y=sce.unfolder_output_size_y/scale_length
 		self.properties.output_dpi=sce.unfolder_output_dpi
 		self.properties.output_pure=sce.unfolder_output_pure
-		self.properties.bake_selected_to_active=sce.render.bake_active
+		self.properties.bake_selected_to_active=sce.render.use_bake_selected_to_active
 		self.properties.sticker_width=0.005/scale_length
-		wm = context.manager
+		wm = context.window_manager
 		wm.add_fileselect(self)
 		return {'RUNNING_MODAL'}
 	def draw(self, context):
@@ -1145,13 +1168,14 @@ class VIEW3D_paper_model(bpy.types.Panel):
 	bl_space_type = 'VIEW_3D'
 	bl_region_type = 'TOOLS'
 	bl_label = "Export Paper Model"
-	bpy.types.Scene.FloatProperty(attr="unfolder_output_size_x", name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
-	bpy.types.Scene.FloatProperty(attr="unfolder_output_size_y", name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
-	bpy.types.Scene.FloatProperty(attr="unfolder_output_dpi", name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
-	bpy.types.Scene.BoolProperty(attr="unfolder_output_pure", name="Pure Net", description="Do not bake the bitmap", default=True)
-
-	@staticmethod
-	def poll(context):
+	
+	bpy.types.Scene.unfolder_output_size_x = bpy.props.FloatProperty(name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+	bpy.types.Scene.unfolder_output_size_y = bpy.props.FloatProperty(name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+	bpy.types.Scene.unfolder_output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
+	bpy.types.Scene.unfolder_output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
+	
+	@classmethod
+	def poll(cls, context):
 		return (context.active_object and context.active_object.type == 'MESH')
 
 	def draw(self, context):
@@ -1165,8 +1189,8 @@ class VIEW3D_paper_model(bpy.types.Panel):
 		col.prop(bpy.context.scene, "unfolder_output_dpi", text="DPI")
 		col.prop(bpy.context.scene, "unfolder_output_pure")
 		sub = col.column()
-		sub.active = not bpy.context.scene.unfolder_output_pure
-		sub.prop(context.scene.render, "bake_active", text="Bake Selected to Active")
+		sub.active = not context.scene.unfolder_output_pure
+		sub.prop(context.scene.render, "use_bake_selected_to_active", text="Bake Selected to Active")
 		col.operator("export.paper_model", text="Export Net...")
 
 def menu_func(self, context):
@@ -1176,7 +1200,6 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 	bl_label = "Paper Model"
 	bl_space_type = "VIEW_3D"
 	bl_region_type = "UI"
-
 	def display_quads(self, context):
 		import bgl, blf
 		perspMatrix = context.space_data.region_3d.perspective_matrix
@@ -1185,20 +1208,25 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		bgl.glMatrixMode(bgl.GL_PROJECTION)
 		bgl.glLoadMatrixf(perspBuff)
 		
-		global lines
+		"""bgl.glColor4f(1,0.2,0,0.2)
+		blf.position(0, 1, 1, 1)
+		blf.aspect(0,0.005)
+		blf.size(0,12,150)
+		blf.draw(0, "Hello, world!")
+		blf.aspect(0, 1)"""
+		global lines, twisted_quads
 		for s, e in lines:
 			bgl.glBegin(bgl.GL_LINE_STRIP)
 			bgl.glColor4f(1,0.2,0,1)
 			bgl.glVertex3f(s[0], s[1], s[2])
 			bgl.glVertex3f(e[0], e[1], e[2])
 			bgl.glEnd()
-		"""bgl.glBegin(bgl.GL_POLYGON)
-		bgl.glColor4f(1,0.4,0,0.9)
-		bgl.glVertex3f(1, 2, 1)
-		bgl.glVertex3f(0, 2, 0)
-		bgl.glVertex3f(0, 0, 1)
-		bgl.glVertex3f(1, 2, 2)"""
-		bgl.glEnd()
+		for quad in twisted_quads:
+			bgl.glBegin(bgl.GL_POLYGON)
+			bgl.glColor4f(1,0.4,0,1)
+			for vertex in quad:
+				bgl.glVertex3f(vertex.co[0], vertex.co[1], vertex.co[2])
+			bgl.glEnd()
 
 	def display_labels(self, context):
 		import bgl, blf, mathutils
@@ -1223,8 +1251,8 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		global paper_model_handles
 		region=[region for region in context.area.regions if region.type=='WINDOW'][0]
 		for name in paper_model_handles:
-			value, mode=paper_model_handles[name]
-			property_name="io_paper_model_"+name
+			value, mode = paper_model_handles[name]
+			property_name = "io_paper_model_"+name
 			layout.prop(context.scene, property_name, icon='RESTRICT_VIEW_OFF')
 			if value is None and getattr(context.scene, property_name):
 				paper_model_handles[name]=region.callback_add(getattr(self, name), (context,), mode), mode
@@ -1235,23 +1263,23 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 				context.area.tag_redraw()
 
 def register():
-	bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
-	bpy.types.Scene.BoolProperty(attr="io_paper_model_display_quads", name="Display quads")
+	#bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
+	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Display quads", description="Highlight tilted quad faces that cannot be unfolded correctly")
 	global paper_model_handles
 	paper_model_handles={
-		"display_labels": (None, 'POST_PIXEL'),
+		#"display_labels": (None, 'POST_PIXEL'),
 		"display_quads": (None, 'POST_VIEW')}
-	bpy.types.register(VIEW3D_paper_model)
-	bpy.types.register(MESH_OT_make_unfoldable)
-	bpy.types.register(EXPORT_OT_paper_model)
+	#bpy.types.register(VIEW3D_paper_model) DEPR
+	#bpy.types.register(MESH_OT_make_unfoldable)
+	#bpy.types.register(EXPORT_OT_paper_model)
 	bpy.types.INFO_MT_file_export.append(menu_func)
-	bpy.types.register(VIEW3D_PT_paper_model)
+	#bpy.types.register(VIEW3D_PT_paper_model)
 
 def unregister():
-	bpy.types.unregister(VIEW3D_paper_model)
-	bpy.types.unregister(MESH_OT_make_unfoldable)
-	bpy.types.unregister(EXPORT_OT_paper_model)
-	bpy.types.unregister(VIEW3D_PT_paper_model)
+#	bpy.types.unregister(VIEW3D_paper_model) DEPR
+#	bpy.types.unregister(MESH_OT_make_unfoldable)
+#	bpy.types.unregister(EXPORT_OT_paper_model)
+#	bpy.types.unregister(VIEW3D_PT_paper_model)
 	bpy.types.INFO_MT_file_export.remove(menu_func)
 
 if __name__ == "__main__":
