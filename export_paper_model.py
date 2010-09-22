@@ -54,6 +54,7 @@ priority_effect={
 lines=[]
 twisted_quads=[]
 
+strf="{:.1f}".format
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
 	if a == 0:
@@ -115,32 +116,35 @@ class Unfolder:
 	def __init__(self, ob):
 		self.ob=ob
 		self.mesh=Mesh(ob.data, ob.matrix_world)
-	def unfold(self):
-		"""Decide for seams and preview them to the user."""
-		self.mesh.generate_cuts()
+
+	def prepare(self, properties):
+		self.mesh.cut_obvious()
+		if not self.mesh.is_cut_enough():
+			self.mesh.generate_cuts()
+			#raise UnfoldError("The mesh does not have enough seams. Make it unfoldable first. (Operator \"Make Unfoldable\")")
+		self.mesh.generate_islands()
+		self.mesh.finalize_islands(False)
+
 	def save(self, properties):
 		"""Export the document."""
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
-		self.page_size=M.Vector((properties.output_size_x, properties.output_size_y)) #in meters
-		scale_length=bpy.context.scene.unit_settings.scale_length
-		self.size=properties.output_dpi*scale_length*100/2.54 #in points per meter
-		self.mesh.cut_obvious()
-		if not self.mesh.is_cut_enough():
-			self.unfold()
-			#raise UnfoldError("The mesh does not have enough seams. Make it unfoldable first. (Operator \"Make Unfoldable\")")
-		self.mesh.generate_islands()
-		self.mesh.generate_stickers(properties.sticker_width)
-		self.mesh.fit_islands(self.page_size)
+		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) #real page size in meters FIXME: must be scaled according to unit settings
+		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
+		ppm = properties.output_dpi * 100 / 2.54 #points per meter
+		self.mesh.generate_stickers(default_width = properties.sticker_width * page_size.y / scale)
+		#Scale everything so that page height is 1
+		self.mesh.finalize_islands(scale_factor = scale / page_size.y)
+		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
-			self.mesh.save_uv(page_size=self.page_size)
+			self.mesh.save_uv(aspect_ratio = page_size.x / page_size.y)
 			#this property might be overriden when invoking the Operator
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
-			self.mesh.save_image(filepath, self.page_size*self.size)
+			self.mesh.save_image(filepath, page_size * ppm)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
-		svg=SVG(self.size, self.page_size, properties.output_pure)
+		svg=SVG(page_size * ppm, properties.output_pure)
 		svg.add_mesh(self.mesh)
 		svg.write(filepath)
 
@@ -167,12 +171,14 @@ class Mesh:
 			self.faces[bpy_face.index]=face
 		for index in self.edges:
 			self.edges[index].process_faces()
+	
 	def cut_obvious(self):
 		"""Cut all seams and non-manifold edges."""
 		for i in self.edges:
 			edge=self.edges[i]
 			if edge.data.use_seam or len(edge.faces)<2: #NOTE: Here is one of the rare cases when using the original BPy data (fuck this.)
 				edge.cut()
+	
 	def is_cut_enough(self, do_update_priority=False):
 		"""Check for loops in the net of connected faces (that indicates the net is not unfoldable)."""
 		remaining_faces=list(self.faces.values())
@@ -197,6 +203,7 @@ class Mesh:
 						remaining_faces.remove(next_face)
 		#If we haven't found anything, presume there's nothing wrong
 		return True
+	
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
 		#Check that all quads are flat and raise an error if not
@@ -227,6 +234,7 @@ class Mesh:
 				edges_sorted.sort(key=lambda edge: edge.priority.value)
 			count_edges_connecting -= 1
 		return True
+	
 	def generate_islands(self):
 		"""Divide faces into several Islands."""
 		def connected_faces(border_edges, inner_faces):
@@ -250,6 +258,7 @@ class Mesh:
 		#This is bloody dirty, but it should work :P
 		for edge in self.edges.values():
 			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
+	
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
@@ -261,18 +270,33 @@ class Mesh:
 			edge=self.edges[edge_index]
 			if edge.is_cut() and len(edge.uvedges)>=2:
 				if uvedge_priority(edge.uvedges[0]) >= uvedge_priority(edge.uvedges[1]):
-					edge.uvedges[0].island.stickers.append(Sticker(edge.uvedges[0], default_width))
+					edge.uvedges[0].island.add(Sticker(edge.uvedges[0], default_width))
 				else:
-					edge.uvedges[1].island.stickers.append(Sticker(edge.uvedges[1], default_width))
+					edge.uvedges[1].island.add(Sticker(edge.uvedges[1], default_width))
 			if len(edge.uvedges)>2:
 				for additional_uvedge in edge.uvedges[2:]:
-					additional_uvedge.island.stickers.append(Sticker(additional_uvedge, default_width))
-	def fit_islands(self, page_size):
+					additional_uvedge.island.add(Sticker(additional_uvedge, default_width))
+	
+	def finalize_islands(self, do_split_islands=True, scale_factor=1):
+		for island in self.islands:
+			island.apply_scale(scale_factor)
+			island.generate_bounding_box()
+	
+	def largest_island_ratio(self, page_size):
+		largest_ratio=0
+		for island in self.islands:
+			ratio=max(island.bounding_box.x/page_size.x, island.bounding_box.y/page_size.y)
+			largest_ratio=max(ratio, largest_ratio)
+		return largest_ratio
+	
+	def fit_islands(self, aspect_ratio):
 		"""Move islands so that they fit into pages, based on their bounding boxes"""
 		#this algorithm is not optimal, but cool enough
 		#it handles with two basic domains:
 		#list of Points: they describe all sensible free rectangle area available on the page
 		#Boundaries: linked list of points around the used area and the page - makes many calculations a lot easier
+		page_size=M.Vector((aspect_ratio, 1))
+		print("Page size:",page_size)
 		class Boundary:
 			"""Generic point in usable boundary defined by rectangles and borders of the page"""
 			def __init__(self, x, y):
@@ -369,16 +393,10 @@ class Mesh:
 				return "Point at "+str(self.boundary.x)+" "+str(self.boundary.y)+" of available area "+str(self.area)
 		#fixme: at first, it should cut all islands that are too big to fit the page
 		#todo: there should be a list of points off the boundary that are created from pairs of open edges
+		largest_island_ratio = self.largest_island_ratio(page_size) 
+		if largest_island_ratio > 1:
+			raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+strf(largest_island_ratio)+" times.")
 		islands=list(self.islands)
-		largestErrorRatio=1
-		for island in islands:
-			island.generate_bounding_box()
-			if island.bounding_box.x > page_size.x or island.bounding_box.y > page_size.y:
-				errorRatio=max(island.bounding_box.x/page_size.x, island.bounding_box.y/page_size.y)
-				if errorRatio > largestErrorRatio:
-					largestErrorRatio=errorRatio
-		if largestErrorRatio > 1:
-			raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+str(largestErrorRatio)[:4]+" times.")
 		#sort islands by their ugliness (we need an ugly expression to treat ugliness correctly)
 		islands.sort(key=lambda island: (lambda vector:-pow(vector.x, 2)-pow(vector.y, 2)-pow(vector.x-vector.y, 2))(island.bounding_box))
 		remaining_count=len(islands)
@@ -411,15 +429,17 @@ class Mesh:
 							break
 					points.sort(key=lambda point: point.niceness) #ugly points first (to get rid of them)
 			self.pages.append(page)
-	def save_uv(self, page_size=M.Vector((744, 1052))): #page_size is in pixels
+	
+	def save_uv(self, aspect_ratio=1): #page_size is in pixels
 		bpy.ops.object.mode_set()
 		bpy.ops.mesh.uv_texture_add()
 		#note: expecting that the active object's data is self.mesh
 		tex=self.data.uv_textures.active
 		tex.name="Unfolded"
 		for island in self.islands:
-			island.save_uv(tex, page_size)
-	def save_image(self, filename, page_size=M.Vector((744, 1052))): #page_size is in pixels
+			island.save_uv(tex, aspect_ratio)
+	
+	def save_image(self, filename, page_size_pixels:M.Vector):
 		rd=bpy.context.scene.render
 		recall_margin=rd.bake_margin; rd.bake_margin=0
 		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
@@ -429,7 +449,7 @@ class Mesh:
 			obstacle=bpy.data.images.get(image_name)
 			if obstacle:
 				obstacle.name=image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
-			bpy.ops.image.new(name=image_name, width=int(page_size.x), height=int(page_size.y), color=(1,1,1,1))
+			bpy.ops.image.new(name=image_name, width=int(page_size_pixels.x), height=int(page_size_pixels.y), color=(1,1,1,1))
 			image=bpy.data.images.get(image_name) #this time it is our new image
 			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
@@ -581,7 +601,6 @@ class Edge:
 		elif len(self.faces)==1:
 			self.angles[self.faces[0]]=pi
 			return
-		#elif len(self.faces)==2:
 		else:
 			rot=z_up_matrix(self.vect) #Everything is easier in 2D
 			normal_directions={} #direction of each face's normal, rotated to 2D
@@ -724,6 +743,7 @@ class Island:
 		Note: initializing removes one island out of the given list of faces."""
 		self.faces=[]
 		self.edges=[]
+		self.verts=set()
 		self.stickers=[]
 		self.pos=M.Vector((0,0))
 		self.offset=M.Vector((0,0))
@@ -740,10 +760,10 @@ class Island:
 				break
 			if uncut_edge_count==0: #single-face island
 				faces.remove(face)
-				self.faces.append(UVFace(face, self))
+				self.add(UVFace(face, self))
 				break
 		if origin:
-			self.faces.append(UVFace(origin, self))
+			self.add(UVFace(origin, self))
 			flood_boundary=[]
 			#Create the initial wave
 			for edge in origin.edges:
@@ -752,11 +772,17 @@ class Island:
 			#Spread the flood
 			while len(flood_boundary)>0:
 				previous_face, current_face, previous_edge=flood_boundary.pop()
-				self.faces.append(UVFace(current_face, self, previous_edge))
+				self.add(UVFace(current_face, self, previous_edge))
 				faces.remove(current_face)
 				for edge in current_face.edges:
 					if edge is not previous_edge and not edge.is_cut(current_face):
 						flood_boundary.append((current_face, edge.other_face[current_face], edge))
+	def add(self, face):
+		self.verts.update(set(face.verts))
+		if face.is_sticker:
+			self.stickers.append(face)
+		else:
+			self.faces.append(face)
 	def generate_bounding_poly(self):
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
 		def make_convex_curve(verts):
@@ -774,13 +800,13 @@ class Island:
 				else:
 					i += 1 #if the angle is convex, go ahead
 			return verts
-		verts=set()
+		self.verts=set()
 		for face in self.faces + self.stickers:
-			verts=verts.union(face.verts)
-		verts_top=list(verts)
+			self.verts.update(face.verts)
+		verts_top=list(self.verts)
 		verts_top.sort(key=lambda vertex: vertex.co.x) #sorted left to right
 		make_convex_curve(verts_top)
-		verts_bottom=list(verts)
+		verts_bottom=list(self.verts)
 		verts_bottom.sort(key=lambda vertex: -vertex.co.x) #sorted right to left
 		make_convex_curve(verts_bottom)
 		#remove left and right ends and concatenate the lists to form a polygon in the right order
@@ -821,7 +847,12 @@ class Island:
 		self.angle=best_box[1]
 		self.bounding_box=best_box[2]
 		self.offset=-best_box[3]
-	def save_uv(self, tex, page_size=M.Vector((744, 1052))): #page_size is in pixels
+	def apply_scale(self, scale=1):
+		if scale != 1:
+			print ("Applying scale to",len(self.faces),"faces and",len(self.verts),"vertices")
+			for vertex in self.verts:
+				vertex.co *= scale
+	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
 		tex: UV Texture layer to use (BPy MeshTextureFaceLayer struct)
 		page_size: size of the page in pixels (vector)"""
@@ -831,8 +862,8 @@ class Island:
 				rot=M.Matrix.Rotation(self.angle, 2)
 				for i in range(len(face.verts)):
 					uv=rot*face.verts[i].co+self.pos+self.offset
-					texface.uv_raw[2*i]=uv.x/page_size.x
-					texface.uv_raw[2*i+1]=uv.y/page_size.y
+					texface.uv_raw[2*i]=uv.x/aspect_ratio
+					texface.uv_raw[2*i+1]=uv.y
 
 class Page:
 	"""Container for several Islands"""
@@ -842,7 +873,6 @@ class Page:
 		self.name="page"+str(num)
 	def add(self, island):
 		self.islands.append(island)
-
 class UVVertex:
 	"""Vertex in 2D"""
 	def __init__(self, vector, vertex=None):
@@ -850,18 +880,26 @@ class UVVertex:
 		self.vertex=vertex
 	def __hash__(self):
 		#quick and dirty hack for usage in sets
-		return int(hash(self.co.x)*10000000000+hash(self.co.y))
+		if self.vertex:
+			return self.vertex.index
+		else:
+			#DEBUG
+			return 1#int(hash(self.co.x)+hash(self.co.y))
 	def __eq__(self, other):
-		return self.vertex==other.vertex and (self.co-other.co).length<0.00001
+		#DEBUG
+		equality= self is other#self.vertex==other.vertex and (self.co-other.co).length<1
+		if equality:
+			print ("EQUAL!!!")
+		return equality
 	def __ne__(self, other):
-		return not self==other
+		return not self == other
 	def __str__(self):
-		return "UV ["+str(self.co.x)[0:6]+", "+str(self.co.y)[0:6]+"]"
+		return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
 	def __repr__(self):
 		return str(self)
 class UVEdge:
 	"""Edge in 2D"""
-	def __init__(self, vertex1, vertex2, island, uvface, edge=None):
+	def __init__(self, vertex1:UVVertex, vertex2:UVVertex, island:Island, uvface, edge:Edge=None):
 		self.va=vertex1
 		self.vb=vertex2
 		self.island=island
@@ -869,12 +907,12 @@ class UVEdge:
 		if edge:
 			self.edge=edge
 			edge.uvedges.append(self)
-		#Another face might be attached to this edge, but we do not care about it
-		self.uvface=uvface 
+		#Every UVEdge is attached to only one UVFace. They are doubled, if needed, because they both have to point clockwise around their faces
+		self.uvface=uvface
 class UVFace:
 	"""Face in 2D"""
 	is_sticker=False
-	def __init__(self, face, island=None, fixed_edge=None):
+	def __init__(self, face:Face, island:Island, fixed_edge:Edge=None):
 		"""Creace an UVFace from a Face and a fixed edge.
 		face: Face to take coordinates from
 		island: Island to register itself in
@@ -890,7 +928,7 @@ class UVFace:
 			for vertex in face.verts:
 				uvvertex=UVVertex(rot*vertex.co, vertex)
 				self.verts.append(uvvertex)
-				self.uvvertex_by_id[vertex.data.index]=uvvertex
+				self.uvvertex_by_id[vertex.index]=uvvertex
 		elif type(face) is UVFace: #copy constructor
 			self.verts=list(face.verts)
 			self.face=face.face
@@ -898,46 +936,55 @@ class UVFace:
 		self.edges=[]
 		edge_by_verts={}
 		for edge in face.edges:
-			edge_by_verts[(edge.va.data.index, edge.vb.data.index)]=edge
-			edge_by_verts[(edge.vb.data.index, edge.va.data.index)]=edge
+			edge_by_verts[(edge.va.index, edge.vb.index)]=edge
+			edge_by_verts[(edge.vb.index, edge.va.index)]=edge
 		for va, vb in pairs(self.verts):
-			self.edges.append(UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.data.index, vb.vertex.data.index)]))
+			self.edges.append(UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.index, vb.vertex.index)]))
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
+		self.check("construct")
 		if fixed_edge:
 			self.attach(fixed_edge)
+	
+	def check(self, message=""):
+		for this_uvedge in self.edges:
+			if this_uvedge.va not in self.verts:
+				print("My UVEdge doesn't belong to myself",this_uvedge.va.vertex.index, object.__repr__(this_uvedge), message)
+			if this_uvedge.vb not in self.verts:
+				print("My UVEdge doesn't belong to myself",this_uvedge.vb.vertex.index, object.__repr__(this_uvedge), message)
+		for vertex_id, vertex in self.uvvertex_by_id.items():
+			if vertex not in self.verts:
+				print("UVVertex found by ID does not exist")
+		
 	def attach(self, edge):
 		"""Attach this face so that it sticks onto its neighbour by the given edge (thus forgetting two verts)."""
-		if not edge.va.data.index in self.uvvertex_by_id or not edge.vb.data.index in self.uvvertex_by_id:
-			raise ValueError("Self.verts: "+str([index for index in self.uvvertex_by_id])+" Edge.verts: "+str([edge.va.data.index, edge.vb.data.index]))
+		if not edge.va.index in self.uvvertex_by_id or not edge.vb.index in self.uvvertex_by_id:
+			raise ValueError("Self.verts: "+str([index for index in self.uvvertex_by_id])+" Edge.verts: "+str([edge.va.index, edge.vb.index]))
 		def fitting_matrix(v1, v2):
 			"""Matrix that rotates v1 to the same direction as v2"""
 			return (1/pow(v1.length,2))*M.Matrix(
 				(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
 				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y))
-		other_face=edge.other_face[self.face].uvface
-		this_edge=self.uvvertex_by_id[edge.vb.data.index].co-self.uvvertex_by_id[edge.va.data.index].co
-		other_edge=other_face.uvvertex_by_id[edge.vb.data.index].co-other_face.uvvertex_by_id[edge.va.data.index].co
-		rot=fitting_matrix(this_edge, other_edge)
-		offset=other_face.uvvertex_by_id[edge.va.data.index].co-rot*self.uvvertex_by_id[edge.va.data.index].co
-		for vertex_id in self.uvvertex_by_id:
-			vertex=self.uvvertex_by_id[vertex_id]
-			vertex.co=rot*vertex.co+offset
+		other_uvface=edge.other_face[self.face].uvface
+		this_edge_vector=self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
+		other_edge_vector=other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
+		rot=fitting_matrix(this_edge_vector, other_edge_vector)
+		offset=other_uvface.uvvertex_by_id[edge.va.index].co-rot*self.uvvertex_by_id[edge.va.index].co
+		for vertex_id, uvvertex in self.uvvertex_by_id.items():
 			#If this vertex is shared between both faces
-			if vertex_id in other_face.uvvertex_by_id:
+			if vertex_id in other_uvface.uvvertex_by_id:
 				#it's doubled, we shall share vertex data with the second face
-				self.verts[self.verts.index(self.uvvertex_by_id[vertex_id])]=other_face.uvvertex_by_id[vertex_id]
-				self.uvvertex_by_id[vertex_id]=other_face.uvvertex_by_id[vertex_id]
-			#else: #if the vertex isn't shared, we must calculate its position
-		other_uvedge=this_uvedge=None
-		for uvedge in edge.uvedges:
-			if uvedge in self.edges:
-				this_uvedge=uvedge
-			else:
-				other_uvedge=uvedge
-		if not other_uvedge or not this_uvedge:
-			print (edge.data.index)
-		this_uvedge.va=other_uvedge.vb
-		this_uvedge.vb=other_uvedge.va
+				self.verts.remove(uvvertex)
+				new_uvvertex = other_uvface.uvvertex_by_id[vertex_id]
+				self.verts.append(new_uvvertex)
+				self.uvvertex_by_id[vertex_id] = new_uvvertex
+				for uvedge in self.edges:
+					if uvedge.va is uvvertex:
+						uvedge.va = new_uvvertex
+					if uvedge.vb is uvvertex:
+						uvedge.vb = new_uvvertex
+			else: #if the vertex isn't shared, we must calculate its position
+				uvvertex.co = rot * uvvertex.co + offset
+		self.check("after")
 	def get_overlap(self, others):
 		"""Get a face from the given list that overlaps with this - or None if none of them overlaps."""
 		if len(self.verts)==3:
@@ -998,26 +1045,26 @@ class Sticker(UVFace):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, size=1, page_size=M.Vector((0.210, 0.297)), pure_net=True):
+	def __init__(self, page_size_pixels:M.Vector, pure_net=True):
 		"""Initialize document settings.
-		size: factor to all vertex coordinates (float)
-		page_size: document dimensions in meters (vector)"""
-		self.size=size
-		self.page_size=page_size
-		self.pure_net=pure_net
+		page_size_pixels: document dimensions in pixels
+		pure_net: if True, do not use image"""
+		self.page_size = page_size_pixels
+		self.scale = page_size_pixels.y
+		self.pure_net = pure_net
 	def add_mesh(self, mesh):
 		"""Set the Mesh to process."""
 		self.mesh=mesh
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
 		vector=rot*vector+pos
-		return str(vector.x*self.size)+" "+str((self.page_size.y-vector.y)*self.size)
+		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
 	def write(self, filename):
 		"""Write data to a file given by its name."""
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
-				f.write("<svg xmlns:svg='http://www.w3.org/2000/svg' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' width='"+str(self.page_size.x*self.size)+"px' height='"+str(self.page_size.y*self.size)+"px'>")
+				f.write("<svg xmlns:svg='http://www.w3.org/2000/svg' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' width='" + str(self.page_size.x) + "px' height='" + str(self.page_size.y) + "px'>")
 				f.write("""<style type="text/css">
 					path {fill:none; stroke-width:1px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}
 					path.concave {stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}
@@ -1029,44 +1076,43 @@ class SVG:
 					rect {fill:#ccc; stroke:none}
 				</style>""")
 				if not self.pure_net:
-					f.write("<image x='0' y='0' width='"+str(self.page_size.x*self.size)+"' height='"+str(self.page_size.y*self.size)+"' xlink:href='file://"+filename+"_"+page.name+".png'/>")
+					f.write("<image x='0' y='0' width='" + str(self.page_size.x) + "' height='" + str(self.page_size.y) + "' xlink:href='file://" + filename + "_" + page.name + ".png'/>")
 				f.write("<g>")
 				for island in page.islands:
 					f.write("<g>")
-					rot=M.Matrix.Rotation(island.angle, 2)
+					rot = M.Matrix.Rotation(island.angle, 2)
 					#debug: bounding box
 					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
-					line_through=" L ".join
-					data_outer=""
-					data_convex=""
-					data_concave=""
-					data_stickers=""
+					line_through = " L ".join
+					data_outer = data_convex = data_concave = data_stickers = ""
 					for uvedge in island.edges:
-						data_uvedge="\nM "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in [uvedge.va, uvedge.vb]])
+						data_uvedge = "\nM " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in [uvedge.va, uvedge.vb]])
 						#FIXME: The following clause won't return correct results for uncut edges with more than two faces connected
 						if uvedge.edge.is_cut(uvedge.uvface.face):
-							data_outer+=data_uvedge
+							data_outer += data_uvedge
 						else:
 							if uvedge.va.vertex.data.index > uvedge.vb.vertex.data.index: #each edge is in two opposite-oriented variants; we want to add each only once
-								angle=uvedge.edge.angles[uvedge.uvface.face]
+								angle = uvedge.edge.angles[uvedge.uvface.face]
 								if angle > 0:
-									data_convex+=data_uvedge
+									data_convex += data_uvedge
 								elif angle < 0:
-									data_concave+=data_uvedge
+									data_concave += data_uvedge
 					#for sticker in island.stickers: #Stickers would be all in one path
 					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
 					#if data_stickers: f.write("<path class='sticker' d='"+data_stickers+"'/>")
-					if len(island.stickers)>0:
+					if len(island.stickers) > 0:
 						f.write("<g>")
 						for sticker in island.stickers: #Stickers are separate paths in one group
-							f.write("<path class='sticker' d='M "+line_through([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])+" Z'/>")
+							f.write("<path class='sticker' d='M " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts]) + " Z'/>")
 						f.write("</g>")
 					if data_outer: 
-						if not self.pure_net: f.write("<path class='outer_background' d='"+data_outer+"'/>")
-						f.write("<path class='outer' d='"+data_outer+"'/>")
-					if not self.pure_net and (data_convex or data_concave): f.write("<path class='background' d='"+data_convex+data_concave+"'/>")
-					if data_convex: f.write("<path class='convex' d='"+data_convex+"'/>")
-					if data_concave: f.write("<path class='concave' d='"+data_concave+"'/>")
+						if not self.pure_net:
+							f.write("<path class='outer_background' d='" + data_outer + "'/>")
+						f.write("<path class='outer' d='" + data_outer + "'/>")
+					if not self.pure_net and (data_convex or data_concave):
+						f.write("<path class='background' d='" + data_convex + data_concave + "'/>")
+					if data_convex: f.write("<path class='convex' d='" + data_convex+"'/>")
+					if data_concave: f.write("<path class='concave' d='" + data_concave+"'/>")
 					f.write("</g>")
 				f.write("</g>")
 				f.write("</svg>")
@@ -1123,32 +1169,34 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
+	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.001, soft_max=10, subtype="FACTOR")
+	unfolder=None
+	largest_island_ratio=0
 	
 	@classmethod
 	def poll(cls, context):
 		return context.active_object and context.active_object.type=="MESH"
+	
 	def execute(self, context):
-		unfolder=Unfolder(context.active_object)
 		try:
-			unfolder.save(self.properties)
+			self.unfolder.save(self.properties)
 			return {"FINISHED"}
 		except UnfoldError as error:
 			self.report(type="ERROR_INVALID_INPUT", message=error.args[0])
 			return {"CANCELLED"}
 		except:
 			raise
+	
 	def invoke(self, context, event):
 		sce=context.scene
-		scale_length=sce.unit_settings.scale_length
-		self.properties.output_size_x=sce.unfolder_output_size_x/scale_length
-		self.properties.output_size_y=sce.unfolder_output_size_y/scale_length
-		self.properties.output_dpi=sce.unfolder_output_dpi
-		self.properties.output_pure=sce.unfolder_output_pure
-		self.properties.bake_selected_to_active=sce.render.use_bake_selected_to_active
-		self.properties.sticker_width=0.005/scale_length
+		self.properties.bake_selected_to_active = sce.render.use_bake_selected_to_active
+		
+		self.unfolder=Unfolder(context.active_object)
+		self.unfolder.prepare(self.properties)
 		wm = context.window_manager
 		wm.add_fileselect(self)
 		return {'RUNNING_MODAL'}
+	
 	def draw(self, context):
 		layout = self.layout
 		col = layout.column(align=True)
@@ -1156,15 +1204,23 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 		col.prop(self.properties, "output_size_x")
 		col.prop(self.properties, "output_size_y")
 		layout.prop(self.properties, "output_dpi")
-		layout.prop(self.properties, "output_pure")
+		layout.label(text="Model scale:")
+		layout.prop(self.properties, "model_scale")
+		scale_ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale
+		if scale_ratio > 1:
+			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
+		else:
+			layout.label(text="Largest island is 1/"+strf(1/scale_ratio)+" of page")
 		col = layout.column()
+		layout.prop(self.properties, "output_pure")
 		col.active = not self.properties.output_pure
 		col.prop(self.properties, "bake_selected_to_active")
 		layout.label(text="Document settings:")
 		layout.prop(self.properties, "sticker_width")
 
+""" 
 class VIEW3D_paper_model(bpy.types.Panel):
-	"""Blender UI Panel definition for Unfolder"""
+	Blender UI Panel definition for Unfolder
 	bl_space_type = 'VIEW_3D'
 	bl_region_type = 'TOOLS'
 	bl_label = "Export Paper Model"
@@ -1192,6 +1248,7 @@ class VIEW3D_paper_model(bpy.types.Panel):
 		sub.active = not context.scene.unfolder_output_pure
 		sub.prop(context.scene.render, "use_bake_selected_to_active", text="Bake Selected to Active")
 		col.operator("export.paper_model", text="Export Net...")
+"""
 
 def menu_func(self, context):
 	self.layout.operator("export.paper_model", text="Paper Model (.svg)")
@@ -1217,13 +1274,16 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		global lines, twisted_quads
 		for s, e in lines:
 			bgl.glBegin(bgl.GL_LINE_STRIP)
-			bgl.glColor4f(1,0.2,0,1)
+			bgl.glColor4f(1,0.2,0,0.7)
 			bgl.glVertex3f(s[0], s[1], s[2])
 			bgl.glVertex3f(e[0], e[1], e[2])
+			
 			bgl.glEnd()
+		bgl.glEnable(bgl.GL_BLEND)
+		bgl.glBlendFunc (bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA);
+		bgl.glColor4f(1,0.4,0,0.3)
 		for quad in twisted_quads:
 			bgl.glBegin(bgl.GL_POLYGON)
-			bgl.glColor4f(1,0.4,0,1)
 			for vertex in quad:
 				bgl.glVertex3f(vertex.co[0], vertex.co[1], vertex.co[2])
 			bgl.glEnd()
@@ -1264,19 +1324,17 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 
 def register():
 	#bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
-	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Display quads", description="Highlight tilted quad faces that cannot be unfolded correctly")
+	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="Highlight tilted quad faces that would be distorted by export")
 	global paper_model_handles
 	paper_model_handles={
 		#"display_labels": (None, 'POST_PIXEL'),
 		"display_quads": (None, 'POST_VIEW')}
-	#bpy.types.register(VIEW3D_paper_model) DEPR
 	#bpy.types.register(MESH_OT_make_unfoldable)
 	#bpy.types.register(EXPORT_OT_paper_model)
 	bpy.types.INFO_MT_file_export.append(menu_func)
 	#bpy.types.register(VIEW3D_PT_paper_model)
 
 def unregister():
-#	bpy.types.unregister(VIEW3D_paper_model) DEPR
 #	bpy.types.unregister(MESH_OT_make_unfoldable)
 #	bpy.types.unregister(EXPORT_OT_paper_model)
 #	bpy.types.unregister(VIEW3D_PT_paper_model)
