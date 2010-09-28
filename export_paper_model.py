@@ -25,9 +25,9 @@
 bl_addon_info = {
     'name': 'Export: Paper Model',
     'author': 'Addam Dominec',
-    'version': '0.6',
-    'blender': (2, 5, 3),
-    'location': 'View3D > Toolbox > Unfold',
+    'version': '0.7',
+    'blender': (2, 5, 4),
+    'location': 'File > Export > Paper Model',
     'description': 'Export printable net of a given mesh',
     'category': 'Import/Export',
     'wiki_url': 'http://wiki.blender.org/index.php/Extensions:2.5/Py/Scripts/File_I-O/Paper_Model',
@@ -43,6 +43,7 @@ import bpy
 import mathutils as M
 import geometry as G
 import time
+from heapq import heappush, heappop
 pi=3.141592653589783
 priority_effect={
 	'convex':1,
@@ -112,25 +113,27 @@ class UnfoldError(ValueError):
 	pass
 
 class Unfolder:
-	page_size=M.Vector((400,600))
 	def __init__(self, ob):
 		self.ob=ob
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 
 	def prepare(self, properties):
+		"""Something that should be part of the constructor - TODO """
 		self.mesh.cut_obvious()
 		if not self.mesh.is_cut_enough():
 			self.mesh.generate_cuts()
 			#raise UnfoldError("The mesh does not have enough seams. Make it unfoldable first. (Operator \"Make Unfoldable\")")
 		self.mesh.generate_islands()
+		self.mesh.fix_overlaps()
 		self.mesh.finalize_islands(False)
+		self.mesh.save_uv()
 
 	def save(self, properties):
 		"""Export the document."""
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
-		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) #real page size in meters FIXME: must be scaled according to unit settings
+		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) #real page size in meters FIXME: must be scaled according to unit settings ?
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 #points per meter
 		self.mesh.generate_stickers(default_width = properties.sticker_width * page_size.y / scale)
@@ -139,7 +142,7 @@ class Unfolder:
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
 			self.mesh.save_uv(aspect_ratio = page_size.x / page_size.y)
-			#this property might be overriden when invoking the Operator
+			#TODO: do we really need a switch of our own?
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
 			self.mesh.save_image(filepath, page_size * ppm)
 			#revoke settings
@@ -226,7 +229,7 @@ class Mesh:
 			for edge in edge_cut.va.edges + edge_cut.vb.edges:
 				if edge is not edge_cut and edge.va.is_in_cut(edge.vb):
 					edge.priority.last_connecting() #Take down priority if cutting this edge would create a new island
-					edge.data.use_edge_sharp=True
+					#DEBUG: edge.data.use_edge_sharp=True
 				else:
 					edge.priority.cut_end()
 			edge_cut.cut()
@@ -255,9 +258,21 @@ class Mesh:
 		remaining_faces=list(self.faces.values())
 		while len(remaining_faces) > 0:
 			self.islands.append(Island(remaining_faces))
-		#This is bloody dirty, but it should work :P
+		#FIXME: Why this?
 		for edge in self.edges.values():
 			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
+	
+	def fix_overlaps(self):
+		"""Split all self-overlapping Islands as needed"""
+		remaining_islands = list(self.islands)
+		while len(remaining_islands) > 0:
+			island = remaining_islands.pop()
+			uvfaces = island.get_overlap()
+			if uvfaces:
+				island_parts = island.split(*uvfaces)
+				self.islands.remove(island)
+				self.islands += island_parts
+				remaining_islands += island_parts #check the new ones too
 	
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
@@ -266,14 +281,13 @@ class Mesh:
 			"""Retuns whether it is a good idea to create a sticker on this edge"""
 			#This is just a placeholder
 			return uvedge.va.co.y
-		for edge_index in self.edges:
-			edge=self.edges[edge_index]
-			if edge.is_cut() and len(edge.uvedges)>=2:
+		for edge in self.edges.values():
+			if edge.is_cut() and len(edge.uvedges) >= 2:
 				if uvedge_priority(edge.uvedges[0]) >= uvedge_priority(edge.uvedges[1]):
 					edge.uvedges[0].island.add(Sticker(edge.uvedges[0], default_width))
 				else:
 					edge.uvedges[1].island.add(Sticker(edge.uvedges[1], default_width))
-			if len(edge.uvedges)>2:
+			if len(edge.uvedges) > 2:
 				for additional_uvedge in edge.uvedges[2:]:
 					additional_uvedge.island.add(Sticker(additional_uvedge, default_width))
 	
@@ -296,7 +310,6 @@ class Mesh:
 		#list of Points: they describe all sensible free rectangle area available on the page
 		#Boundaries: linked list of points around the used area and the page - makes many calculations a lot easier
 		page_size=M.Vector((aspect_ratio, 1))
-		print("Page size:",page_size)
 		class Boundary:
 			"""Generic point in usable boundary defined by rectangles and borders of the page"""
 			def __init__(self, x, y):
@@ -445,25 +458,27 @@ class Mesh:
 		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
 		for page in self.pages:
 			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
-			image_name="Unfolded "+self.data.name+" "+page.name
+			image_name=(self.data.name[:16]+" "+page.name+" Unfolded")[:20]
 			obstacle=bpy.data.images.get(image_name)
 			if obstacle:
 				obstacle.name=image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
 			bpy.ops.image.new(name=image_name, width=int(page_size_pixels.x), height=int(page_size_pixels.y), color=(1,1,1,1))
 			image=bpy.data.images.get(image_name) #this time it is our new image
+			if not image:
+				print (image_name)
 			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
 			texfaces=self.data.uv_textures.active.data
 			for island in page.islands:
 				for uvface in island.faces:
 					if not uvface.is_sticker:
-						texfaces[uvface.face.data.index].image=image
+						texfaces[uvface.face.index].image=image
 			bpy.ops.object.bake_image()
 			image.save()
 			for island in page.islands:
 				for uvface in island.faces:
 					if not uvface.is_sticker:
-						texfaces[uvface.face.data.index].image=None
+						texfaces[uvface.face.index].image=None
 			image.user_clear()
 			bpy.data.images.remove(image)
 		rd.bake_margin=recall_margin
@@ -578,7 +593,7 @@ class Edge:
 		self.length=self.vect.length
 		self.faces=[]
 		self.angles={}
-		self.other_face={}
+		self.other_face={} #FIXME: this should be rather a function, damn this mess
 		self.uvedges=[]
 		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
@@ -705,15 +720,17 @@ class Edge:
 				return uvedge
 		else:
 			return None
+
 class Face:
 	"""Wrapper for BPy Face"""
-	def __init__(self, face, mesh, matrix=1):
-		self.data=face
-		self.edges=[]
-		self.verts=[mesh.verts[i] for i in face.vertices]
-		self.normal=matrix*face.normal
-		for verts_indices in face.edge_keys:
-			edge=mesh.edges_by_verts_indices[verts_indices]
+	def __init__(self, bpy_face, mesh, matrix=1):
+		self.data = bpy_face
+		self.index = bpy_face.index
+		self.edges = list()
+		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
+		self.normal = matrix * bpy_face.normal
+		for verts_indices in bpy_face.edge_keys:
+			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
 			edge.faces.append(self)
 	def check_twisted(self):
@@ -732,15 +749,16 @@ class Face:
 					return True
 		return False
 	def __hash__(self):
-		return hash(self.data.index)
+		return hash(self.index)
 	def __str__(self):
-		return "Face id: "+str(self.data.index)
+		return "Face id: "+str(self.index)
 	def __repr__(self):
-		return "Face(id="+str(self.data.index)+"...)"
+		return "Face(id="+str(self.index)+"...)"
 class Island:
-	def __init__(self, faces):
-		"""Find an island in the given set of faces.
+	def __init__(self, faces=None, origin=None, uvfaces=None):
+		"""Find an island in the given set of Faces or UVFaces.
 		Note: initializing removes one island out of the given list of faces."""
+		#TODO: removing from the given list is a bit clumsy
 		self.faces=[]
 		self.edges=[]
 		self.verts=set()
@@ -750,20 +768,34 @@ class Island:
 		self.angle=0
 		self.is_placed=False
 		self.bounding_box=M.Vector((0,0))
-		#first, find where to begin
-		origin=None
-		for face in faces:
-			uncut_edge_count=sum(not edge.is_cut(face) for edge in face.edges)
-			if uncut_edge_count==1:
-				origin=face
+		
+		if uvfaces: #Construct from given UVFaces (typically when splitting an island into two)
+			self.faces = list(uvfaces)
+			for uvface in self.faces:
+				self.verts.update(set(uvface.verts))
+				self.edges += uvface.edges
+				for uvedge in uvface.edges:
+					uvedge.island = self
+				uvface.island = self
+		else: #Take one island from given list of Faces
+			if not origin:
+				#first, find where to begin
+				for face in faces:
+					uncut_edge_count=sum(not edge.is_cut(face) for edge in face.edges)
+					if uncut_edge_count==1:
+						origin=face
+						break
+					if uncut_edge_count==0: #single-face island
+						faces.remove(face)
+						self.add(UVFace(face, self))
+						return
+			if type(origin) is UVFace:
+				self.add(origin)
+				origin=origin.face
+			else:
+				self.add(UVFace(origin, self))
+			if faces:
 				faces.remove(origin)
-				break
-			if uncut_edge_count==0: #single-face island
-				faces.remove(face)
-				self.add(UVFace(face, self))
-				break
-		if origin:
-			self.add(UVFace(origin, self))
 			flood_boundary=[]
 			#Create the initial wave
 			for edge in origin.edges:
@@ -773,17 +805,18 @@ class Island:
 			while len(flood_boundary)>0:
 				previous_face, current_face, previous_edge=flood_boundary.pop()
 				self.add(UVFace(current_face, self, previous_edge))
-				faces.remove(current_face)
+				if faces:
+					faces.remove(current_face)
 				for edge in current_face.edges:
 					if edge is not previous_edge and not edge.is_cut(current_face):
 						flood_boundary.append((current_face, edge.other_face[current_face], edge))
-	def add(self, face):
-		self.verts.update(set(face.verts))
-		if face.is_sticker:
-			self.stickers.append(face)
+	def add(self, uvface):
+		self.verts.update(set(uvface.verts))
+		if uvface.is_sticker:
+			self.stickers.append(uvface)
 		else:
-			self.faces.append(face)
-	def generate_bounding_poly(self):
+			self.faces.append(uvface)
+	def generate_bounding_poly(self) -> list:
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
 		def make_convex_curve(verts):
 			"""Remove vertices from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
@@ -847,23 +880,72 @@ class Island:
 		self.angle=best_box[1]
 		self.bounding_box=best_box[2]
 		self.offset=-best_box[3]
+	def get_overlap(self) -> "(UVFace, UVFace)":
+		"""Get two overlapping UVFaces of this Island"""
+		#TODO: Quadratic complexity is dreadful
+		for uvface in self.faces:
+			overlap_uvface = uvface.get_overlap(self.faces)
+			if overlap_uvface:
+				return uvface, overlap_uvface
+	def split(self, uvface_a, uvface_b) -> "(Island, Island)":
+		"""Split this Island in half between two given UVFaces"""
+		#DEBUG
+		if uvface_a.is_sticker or uvface_b.is_sticker:
+			raise Exception("There are stickers already")
+		if uvface_a.island is not self or uvface_b.island is not self:
+			raise Exception ("The faces are not mine")
+		def distance(uvedge_a, uvedge_b) -> float:
+			"""Distance between centers of two edges"""
+			center_to_center = (uvedge_b.va.co + uvedge_b.vb.co - uvedge_a.va.co - uvedge_a.vb.co)/2
+			return center_to_center.length
+		island_faces = {True: set((uvface_a,)), #Faces visited from face A
+			False: set((uvface_b,))} #  or we can easily get ... from face B
+		flood = [ #Faces to visit next: distance, face, edge, is_from_a
+			(0, uvface_a, None, True),
+			(0, uvface_b, None, False)]
+		while len(flood) > 0:
+			prev_distance, prev_uvface, prev_uvedge, is_from_a = heappop(flood)
+			for next_uvedge in prev_uvface.edges:
+				if not next_uvedge.edge.is_cut(prev_uvface.face):
+					next_uvface = next_uvedge.edge.other_face[prev_uvface.face].uvface
+					if next_uvface in island_faces[is_from_a]:
+						pass
+					elif next_uvface in island_faces[not is_from_a]:
+						#This edge will divide the two resulting Islands
+						next_uvedge.edge.cut()
+						#Just remember, return to it later
+						old_va = next_uvedge.va; old_vb = next_uvedge.vb
+					else:
+						island_faces[is_from_a].add(next_uvface)
+						if prev_uvedge:
+							heappush(flood, (prev_distance + distance(prev_uvedge, next_uvedge), next_uvface, next_uvedge, is_from_a))
+						else:
+							heappush(flood, (prev_distance, next_uvface, next_uvedge, is_from_a))
+		#Double the vertices
+		va = UVVertex(old_va); vb = UVVertex(old_vb)
+		for uvface in island_faces[True]:
+			uvface.replace_uvvertex(old_va, va)
+			uvface.replace_uvvertex(old_vb, vb)
+		island_a = Island(uvfaces = island_faces[True])
+		island_b = Island(uvfaces = island_faces[False])
+		return island_a, island_b 
+	
 	def apply_scale(self, scale=1):
 		if scale != 1:
-			print ("Applying scale to",len(self.faces),"faces and",len(self.verts),"vertices")
 			for vertex in self.verts:
 				vertex.co *= scale
 	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
 		tex: UV Texture layer to use (BPy MeshTextureFaceLayer struct)
 		page_size: size of the page in pixels (vector)"""
-		for face in self.faces:
-			if not face.is_sticker:
-				texface=tex.data[face.face.data.index]
-				rot=M.Matrix.Rotation(self.angle, 2)
-				for i in range(len(face.verts)):
-					uv=rot*face.verts[i].co+self.pos+self.offset
-					texface.uv_raw[2*i]=uv.x/aspect_ratio
-					texface.uv_raw[2*i+1]=uv.y
+		for uvface in self.faces:
+			if not uvface.is_sticker:
+				texface = tex.data[uvface.face.index]
+				rot = M.Matrix.Rotation(self.angle, 2)
+				for i, uvvertex in enumerate(uvface.verts):
+					uv = rot * uvvertex.co + self.pos + self.offset
+					texface.uv_raw[2*i] = uv.x / aspect_ratio
+					texface.uv_raw[2*i+1] = uv.y
 
 class Page:
 	"""Container for several Islands"""
@@ -876,8 +958,12 @@ class Page:
 class UVVertex:
 	"""Vertex in 2D"""
 	def __init__(self, vector, vertex=None):
-		self.co=(M.Vector(vector)).resize2D()
-		self.vertex=vertex
+		if type(vector) is UVVertex: #Copy constructor
+			self.co=vector.co.copy()
+			self.vertex=vector.vertex
+		else:
+			self.co=(M.Vector(vector)).resize2D()
+			self.vertex=vertex
 	def __hash__(self):
 		#quick and dirty hack for usage in sets
 		if self.vertex:
@@ -887,10 +973,8 @@ class UVVertex:
 			return 1#int(hash(self.co.x)+hash(self.co.y))
 	def __eq__(self, other):
 		#DEBUG
-		equality= self is other#self.vertex==other.vertex and (self.co-other.co).length<1
-		if equality:
-			print ("EQUAL!!!")
-		return equality
+		#self.vertex==other.vertex and (self.co-other.co).length<1
+		return self is other
 	def __ne__(self, other):
 		return not self == other
 	def __str__(self):
@@ -909,6 +993,17 @@ class UVEdge:
 			edge.uvedges.append(self)
 		#Every UVEdge is attached to only one UVFace. They are doubled, if needed, because they both have to point clockwise around their faces
 		self.uvface=uvface
+	def __lt__(self, other):
+		if type(other) is UVEdge:
+			return self.edge.index < other.edge.index
+		else:
+			return False
+	def __gt__(self, other):
+		if type(other) is UVEdge:
+			return self.edge.index > other.edge.index
+		else:
+			return True
+
 class UVFace:
 	"""Face in 2D"""
 	is_sticker=False
@@ -929,7 +1024,7 @@ class UVFace:
 				uvvertex=UVVertex(rot*vertex.co, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
-		elif type(face) is UVFace: #copy constructor
+		elif type(face) is UVFace: #copy constructor TODO: DOES NOT WORK
 			self.verts=list(face.verts)
 			self.face=face.face
 			self.uvvertex_by_id=dict(face.uvvertex_by_id)
@@ -941,10 +1036,31 @@ class UVFace:
 		for va, vb in pairs(self.verts):
 			self.edges.append(UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.index, vb.vertex.index)]))
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
+		#DEBUG:
 		self.check("construct")
 		if fixed_edge:
 			self.attach(fixed_edge)
 	
+	def __lt__(self, other):
+		"""Hack for usage in heaps"""
+		return self.face.index < other.face.index
+	
+	def __repr__(self):
+		return "UVFace("+str(self.face.index)+")"
+	
+	def replace_uvvertex(self, current, new):
+		if current in self.verts:
+			self.verts[self.verts.index(current)] = new
+			if current.vertex is not new.vertex:
+				self.uvvertex_by_id.pop(current.vertex.index)
+			self.uvvertex_by_id[new.vertex.index] = new
+			for uvedge in self.edges:
+				if uvedge.va == current:
+					uvedge.va = new
+				if uvedge.vb == current:
+					uvedge.vb = new
+	
+	#DEBUG:
 	def check(self, message=""):
 		for this_uvedge in self.edges:
 			if this_uvedge.va not in self.verts:
@@ -985,19 +1101,46 @@ class UVFace:
 			else: #if the vertex isn't shared, we must calculate its position
 				uvvertex.co = rot * uvvertex.co + offset
 		self.check("after")
-	def get_overlap(self, others):
+	
+	def get_overlap(self, others) -> "UVFace":
 		"""Get a face from the given list that overlaps with this - or None if none of them overlaps."""
-		if len(self.verts)==3:
-			for face in others:
-				for vertex in face.verts:
-					if G.PointInTriangle2D(vertex.co, self.verts[0].co, self.verts[1].co, self.verts[2].co):
-						return face
-		elif len(self.verts)==4:
-			for face in others:
-				for vertex in face.verts:
-					if G.PointInQuad2D(vertex.co, self.verts[0].co, self.verts[1].co, self.verts[2].co, self.verts[3].co):
-						return face
+		#FIXME: this is bloody slow
+		#FIXME: and still, it doesn't work for overlapping neighbours!
+		rot = M.Matrix((0, 1), (-1, 0))
+		for uvface in others:
+			if uvface is not self:
+				for this_uvedge in self.edges:
+					A = this_uvedge.va.co
+					B = this_uvedge.vb.co
+					E = rot * (B-A)
+					for other_uvedge in uvface.edges[::2]: #hehe, the number 2 should be optimisation... kind of an air conditioner in hell
+						if (this_uvedge.va is not other_uvedge.va and this_uvedge.vb is not other_uvedge.va and
+								this_uvedge.vb is not other_uvedge.va and this_uvedge.vb is not other_uvedge.vb):
+							#Check if the edges overlap
+							#DEBUG:
+							C = other_uvedge.va.co
+							D = other_uvedge.vb.co
+							F = rot * (D-C)
+							try:
+								a = ((A-C) * E) / ((D-C) * E)
+								b = ((C-A) * F) / ((B-A) * F)
+								#FIXME: when these were _ge_ and _le_, it returned more than needed - why?
+								if a > 0 and a < 1 and b > 0 and b < 1:
+									return uvface
+							except ZeroDivisionError:
+								pass
+		#if len(self.verts)==3:
+			#for uvface in others:
+				#for uvvertex in uvface.verts:
+					#if uvvertex not in self.verts and G.PointInTriangle2D(uvvertex.co, self.verts[0].co, self.verts[1].co, self.verts[2].co):
+						#return uvface
+		#elif len(self.verts)==4:
+			#for uvface in others:
+				#for uvvertex in uvface.verts:
+					#if uvvertex not in self.verts and G.PointInQuad2D(uvvertex.co, self.verts[0].co, self.verts[1].co, self.verts[2].co, self.verts[3].co):
+						#return uvface
 		return None
+
 class Sticker(UVFace):
 	"""Sticker face"""
 	is_sticker=True
@@ -1091,11 +1234,11 @@ class SVG:
 						if uvedge.edge.is_cut(uvedge.uvface.face):
 							data_outer += data_uvedge
 						else:
-							if uvedge.va.vertex.data.index > uvedge.vb.vertex.data.index: #each edge is in two opposite-oriented variants; we want to add each only once
+							if uvedge.va.vertex.index > uvedge.vb.vertex.index: #each edge is in two opposite-oriented variants; we want to add each only once
 								angle = uvedge.edge.angles[uvedge.uvface.face]
-								if angle > 0:
+								if angle > 0.01:
 									data_convex += data_uvedge
-								elif angle < 0:
+								elif angle < -0.01:
 									data_concave += data_uvedge
 					#for sticker in island.stickers: #Stickers would be all in one path
 					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
