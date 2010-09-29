@@ -1113,7 +1113,7 @@ class UVFace:
 					A = this_uvedge.va.co
 					B = this_uvedge.vb.co
 					E = rot * (B-A)
-					for other_uvedge in uvface.edges[::2]: #hehe, the number 2 should be optimisation... kind of an air conditioner in hell
+					for other_uvedge in uvface.edges:
 						if (this_uvedge.va is not other_uvedge.va and this_uvedge.vb is not other_uvedge.va and
 								this_uvedge.vb is not other_uvedge.va and this_uvedge.vb is not other_uvedge.vb):
 							#Check if the edges overlap
@@ -1354,8 +1354,8 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
 		else:
 			layout.label(text="Largest island is 1/"+strf(1/scale_ratio)+" of page")
-		col = layout.column()
 		layout.prop(self.properties, "output_pure")
+		col = layout.column()
 		col.active = not self.properties.output_pure
 		col.prop(self.properties, "bake_selected_to_active")
 		layout.label(text="Document settings:")
