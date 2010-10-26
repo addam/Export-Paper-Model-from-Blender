@@ -41,7 +41,7 @@ Additional links:
 """
 import bpy
 import mathutils as M
-import geometry as G
+import mathutils.geometry as G
 import time
 from heapq import heappush, heappop
 pi=3.141592653589783
@@ -1062,6 +1062,7 @@ class UVFace:
 	
 	#DEBUG:
 	def check(self, message=""):
+		return False #UNDEBUG :)
 		for this_uvedge in self.edges:
 			if this_uvedge.va not in self.verts:
 				print("My UVEdge doesn't belong to myself",this_uvedge.va.vertex.index, object.__repr__(this_uvedge), message)
@@ -1070,6 +1071,9 @@ class UVFace:
 		for vertex_id, vertex in self.uvvertex_by_id.items():
 			if vertex not in self.verts:
 				print("UVVertex found by ID does not exist")
+		if len(self.verts) > 3:
+			if (self.verts[0].co-self.verts[2].co).angle(self.verts[1].co-self.verts[3].co)<pi/10:
+				print("This face is weirdly twisted",self.face.index, message)
 		
 	def attach(self, edge):
 		"""Attach this face so that it sticks onto its neighbour by the given edge (thus forgetting two verts)."""
@@ -1089,9 +1093,8 @@ class UVFace:
 			#If this vertex is shared between both faces
 			if vertex_id in other_uvface.uvvertex_by_id:
 				#it's doubled, we shall share vertex data with the second face
-				self.verts.remove(uvvertex)
 				new_uvvertex = other_uvface.uvvertex_by_id[vertex_id]
-				self.verts.append(new_uvvertex)
+				self.verts[self.verts.index(uvvertex)]=new_uvvertex
 				self.uvvertex_by_id[vertex_id] = new_uvvertex
 				for uvedge in self.edges:
 					if uvedge.va is uvvertex:
@@ -1352,7 +1355,7 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 		scale_ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale
 		if scale_ratio > 1:
 			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
-		else:
+		elif scale_ratio > 0:
 			layout.label(text="Largest island is 1/"+strf(1/scale_ratio)+" of page")
 		layout.prop(self.properties, "output_pure")
 		col = layout.column()
