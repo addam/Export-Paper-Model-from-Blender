@@ -25,10 +25,11 @@
 bl_addon_info = {
     'name': 'Export: Paper Model',
     'author': 'Addam Dominec',
-    'version': '0.7',
-    'blender': (2, 5, 4),
+    'version': (0,7),
+    'blender': (2, 5, 5),
+    'api': 33355,
     'location': 'File > Export > Paper Model',
-    'description': 'Export printable net of a given mesh',
+    'description': 'Export printable net of the selected mesh',
     'category': 'Import/Export',
     'wiki_url': 'http://wiki.blender.org/index.php/Extensions:2.5/Py/Scripts/File_I-O/Paper_Model',
     'tracker_url': 'https://projects.blender.org/tracker/index.php?func=detail&aid=22417&group_id=153&atid=467'}
@@ -100,14 +101,14 @@ def z_up_matrix(n):
 	l=n.length
 	if b>0:
 		return M.Matrix(
-			(n.x*n.z/(b*l),	-n.y/b),
-			(n.y*n.z/(b*l),	n.x/b),
-			(-b/l,					0))
+			(n.x*n.z/(b*l),	-n.y/b,	0),
+			(n.y*n.z/(b*l),	n.x/b,	0),
+			(-b/l,0,0))
 	else: #no need for rotation
 		return M.Matrix(
-			(1,	0),
-			(0,	sign(n.z)),
-			(0,	0))
+			(1,	0,	0),
+			(0,	sign(n.z),	0),
+			(0,0,0))
 
 class UnfoldError(ValueError):
 	pass
@@ -489,7 +490,7 @@ class Vertex:
 	def __init__(self, bpy_vertex, mesh=None, matrix=1):
 		self.data=bpy_vertex
 		self.index=bpy_vertex.index
-		self.co=matrix*bpy_vertex.co
+		self.co=bpy_vertex.co*matrix
 		self.edges=list()
 		self.uvs=list()
 	def __hash__(self):
@@ -622,8 +623,8 @@ class Edge:
 			face_directions={} #direction which each face is pointing in from this edge; rotated to 2D
 			is_normal_cw={}
 			for face in self.faces:
-				normal_directions[face]=angle2d((rot*face.normal).resize2D())
-				face_directions[face]=angle2d((rot*(vectavg(face.verts)-self.va.co)).resize2D())
+				normal_directions[face]=angle2d((face.normal*rot).resize2D())
+				face_directions[face]=angle2d(((vectavg(face.verts)*rot-self.va.co)).resize2D())
 				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
@@ -728,23 +729,24 @@ class Face:
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
-		self.normal = matrix * bpy_face.normal
+		self.normal = bpy_face.normal*matrix
 		for verts_indices in bpy_face.edge_keys:
 			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
 			edge.faces.append(self)
 	def check_twisted(self):
 		if len(self.verts) > 3:
-			global twisted_quads
+			global twisted_quads, lines
 			vert_a=self.verts[0]
 			normals=[]
 			for vert_b, vert_c in zip(self.verts[1:-1], self.verts[2: ]):
 				normal=(vert_b.co-vert_a.co).cross(vert_c.co-vert_b.co)
-				normal.normalize()
+				normal /= (vert_b.co-vert_a.co).length * (vert_c.co-vert_b.co).length #parallel edges have lesser weight, but lenght does not have an effect
 				normals.append(normal)
+				lines.append(((vert_b.co+vert_c.co)/2, (vert_b.co+vert_c.co)/2+normal.copy().normalize()))
 			average_normal=vectavg(normals)
 			for normal in normals:
-				if (normal-average_normal).length > 0.03: #TODO: this threshold should be editable or well chosen at least
+				if normal.angle(average_normal) > 0.01: #TODO: this threshold should be editable or well chosen at least
 					twisted_quads.append(self.verts)
 					return True
 		return False
@@ -865,7 +867,7 @@ class Island:
 				#find the dimensions in both directions
 				bottom_left=M.Vector((0,0))
 				top_right=M.Vector((0,0))
-				verts_rotated=list(map(lambda vertex: rot*vertex.co, verts_convex))
+				verts_rotated=list(map(lambda vertex: vertex.co*rot, verts_convex))
 				bottom_left.x=min(map(lambda vertex: vertex.x, verts_rotated))
 				bottom_left.y=min(map(lambda vertex: vertex.y, verts_rotated))
 				top_right.x=max(map(lambda vertex: vertex.x, verts_rotated))
@@ -943,7 +945,7 @@ class Island:
 				texface = tex.data[uvface.face.index]
 				rot = M.Matrix.Rotation(self.angle, 2)
 				for i, uvvertex in enumerate(uvface.verts):
-					uv = rot * uvvertex.co + self.pos + self.offset
+					uv = uvvertex.co * rot + self.pos + self.offset
 					texface.uv_raw[2*i] = uv.x / aspect_ratio
 					texface.uv_raw[2*i+1] = uv.y
 
@@ -1021,7 +1023,7 @@ class UVFace:
 			rot=z_up_matrix(face.normal)
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
-				uvvertex=UVVertex(rot*vertex.co, vertex)
+				uvvertex=UVVertex(vertex.co*rot, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
 		elif type(face) is UVFace: #copy constructor TODO: DOES NOT WORK
@@ -1088,7 +1090,7 @@ class UVFace:
 		this_edge_vector=self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
 		other_edge_vector=other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
 		rot=fitting_matrix(this_edge_vector, other_edge_vector)
-		offset=other_uvface.uvvertex_by_id[edge.va.index].co-rot*self.uvvertex_by_id[edge.va.index].co
+		offset=other_uvface.uvvertex_by_id[edge.va.index].co-self.uvvertex_by_id[edge.va.index].co*rot
 		for vertex_id, uvvertex in self.uvvertex_by_id.items():
 			#If this vertex is shared between both faces
 			if vertex_id in other_uvface.uvvertex_by_id:
@@ -1102,7 +1104,7 @@ class UVFace:
 					if uvedge.vb is uvvertex:
 						uvedge.vb = new_uvvertex
 			else: #if the vertex isn't shared, we must calculate its position
-				uvvertex.co = rot * uvvertex.co + offset
+				uvvertex.co = uvvertex.co*rot + offset
 		self.check("after")
 	
 	def get_overlap(self, others) -> "UVFace":
@@ -1115,7 +1117,7 @@ class UVFace:
 				for this_uvedge in self.edges:
 					A = this_uvedge.va.co
 					B = this_uvedge.vb.co
-					E = rot * (B-A)
+					E = (B-A) * rot
 					for other_uvedge in uvface.edges:
 						if (this_uvedge.va is not other_uvedge.va and this_uvedge.vb is not other_uvedge.va and
 								this_uvedge.vb is not other_uvedge.va and this_uvedge.vb is not other_uvedge.vb):
@@ -1123,7 +1125,7 @@ class UVFace:
 							#DEBUG:
 							C = other_uvedge.va.co
 							D = other_uvedge.vb.co
-							F = rot * (D-C)
+							F = (D-C) * rot
 							try:
 								a = ((A-C) * E) / ((D-C) * E)
 								b = ((C-A) * F) / ((B-A) * F)
@@ -1175,8 +1177,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3=uvedge.vb.co+len_b*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b))*edge)/edge.length
-		v4=uvedge.va.co+len_a*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a))*edge)/edge.length
+		v3=uvedge.vb.co+len_b*edge*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b)))/edge.length
+		v4=uvedge.va.co+len_a*edge*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a)))/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
@@ -1203,7 +1205,7 @@ class SVG:
 		self.mesh=mesh
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
-		vector=rot*vector+pos
+		vector=vector*rot+pos
 		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
 	def write(self, filename):
 		"""Write data to a file given by its name."""
@@ -1438,7 +1440,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		import bgl, blf, mathutils
 		view_mat = context.space_data.region_3d.perspective_matrix
 		
-		vec = view_mat*(mathutils.Vector((1,1,1)).resize4D())
+		vec = mathutils.Vector((1,1,1)).resize4D()*view_mat
 		# dehomogenise
 		vec = mathutils.Vector((vec[0]/vec[3],vec[1]/vec[3],vec[2]/vec[3]))
 		# get screen information
@@ -1470,7 +1472,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 
 def register():
 	#bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
-	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="Highlight tilted quad faces that would be distorted by export")
+	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="*not working* Highlight tilted quad faces that would be distorted by export")
 	global paper_model_handles
 	paper_model_handles={
 		#"display_labels": (None, 'POST_PIXEL'),
