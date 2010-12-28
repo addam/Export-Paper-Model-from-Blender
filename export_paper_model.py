@@ -27,7 +27,7 @@ bl_addon_info = {
     'author': 'Addam Dominec',
     'version': (0,7),
     'blender': (2, 5, 5),
-    'api': 33355,
+    'api': 33903,
     'location': 'File > Export > Paper Model',
     'description': 'Export printable net of the selected mesh',
     'category': 'Import/Export',
@@ -118,7 +118,7 @@ class Unfolder:
 		self.ob=ob
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 
-	def prepare(self, properties):
+	def prepare(self, properties=None):
 		"""Something that should be part of the constructor - TODO """
 		self.mesh.cut_obvious()
 		if not self.mesh.is_cut_enough():
@@ -170,18 +170,24 @@ class Mesh:
 			self.edges[bpy_edge.index]=edge
 			self.edges_by_verts_indices[(edge.va.index, edge.vb.index)]=edge
 			self.edges_by_verts_indices[(edge.vb.index, edge.va.index)]=edge
+		#DEBUG: this was just an idea.
+		#scale = matrix.copy().invert().scale_part()
+		#normatrix = M.Matrix.Scale(scale.length, 3, scale)*matrix.rotation_part()
 		for bpy_face in mesh.faces:
-			face=Face(bpy_face, self, matrix)
+			face=Face(bpy_face, self)#, normatrix)
 			self.faces[bpy_face.index]=face
 		for index in self.edges:
 			self.edges[index].process_faces()
 	
 	def cut_obvious(self):
 		"""Cut all seams and non-manifold edges."""
+		count=0
 		for i in self.edges:
 			edge=self.edges[i]
-			if edge.data.use_seam or len(edge.faces)<2: #NOTE: Here is one of the rare cases when using the original BPy data (fuck this.)
+			if not edge.is_cut() and (edge.data.use_seam or len(edge.faces)<2): #NOTE: Here is one of the rare cases when using the original BPy data (fuck this.)
 				edge.cut()
+				count+=1
+		#DEBUG: print("There were", count, "obvious cuts.")
 	
 	def is_cut_enough(self, do_update_priority=False):
 		"""Check for loops in the net of connected faces (that indicates the net is not unfoldable)."""
@@ -195,9 +201,15 @@ class Mesh:
 				current_face, previous_edge=stack.pop()
 				for edge in current_face.edges:
 					if edge is not previous_edge and not edge.is_cut(current_face):
-						next_face=edge.other_face[current_face]
+						#DEBUG:
+						try:
+							next_face=edge.other_face[current_face]
+						except KeyError:
+							print ("papermodel FATAL ERROR in topology:", previous_edge, current_face, edge, edge.is_cut(), edge.is_cut(current_face), edge.data.use_seam)
 						if next_face in path:
 							#We've just found a loop
+							#DEBUG print (edge, next_face);
+							#edge.data.use_edge_sharp = True
 							if do_update_priority:
 								edge.priority.last_uncut() #Cutting this edge might solve the problem
 							return False #if we find a loop, the mesh is not cut enough
@@ -215,7 +227,7 @@ class Mesh:
 		twisted_quads=[]
 		for index in self.faces:
 			self.faces[index].check_twisted()
-		self.cut_obvious()
+		#self.cut_obvious()
 		count_edges_connecting = sum(not self.edges[edge_id].is_cut() for edge_id in self.edges)
 		if (count_edges_connecting)==0:
 			return True
@@ -225,12 +237,16 @@ class Mesh:
 			self.edges[edge].generate_priority(average_length)
 		edges_sorted=sorted(self.edges.values())
 		#Iteratively cut one edge after another until it is enough
-		while count_edges_connecting > count_faces or not self.is_cut_enough(do_update_priority=True):
+		#DEBUG print ("connecting:", count_edges_connecting, "faces:", count_faces)
+		while not self.is_cut_enough(do_update_priority=True): #FIXME: terribly missing this optimisation: count_edges_connecting > count_faces or not 
+			#the real thing missing is a function to detect "last connecting" and update priority, without checking cut_enough
+			#I should better think it over... :/
 			edge_cut=edges_sorted.pop()
 			for edge in edge_cut.va.edges + edge_cut.vb.edges:
 				if edge is not edge_cut and edge.va.is_in_cut(edge.vb):
 					edge.priority.last_connecting() #Take down priority if cutting this edge would create a new island
-					#DEBUG: edge.data.use_edge_sharp=True
+					#DEBUG: 
+					#edge.data.use_edge_sharp=True
 				else:
 					edge.priority.cut_end()
 			edge_cut.cut()
@@ -257,8 +273,16 @@ class Mesh:
 			return outer_faces
 		self.islands=[]
 		remaining_faces=list(self.faces.values())
+		#DEBUG: checking the transformation went ok
+		global differences
+		differences = list()
 		while len(remaining_faces) > 0:
 			self.islands.append(Island(remaining_faces))
+		differences.sort(reverse=True)
+		if differences[0][0]>10e-5:
+			print ("papermodel ERROR in geometry: several faces will be deformed")
+			for diff in differences[0:5]:
+				print (diff)
 		#FIXME: Why this?
 		for edge in self.edges.values():
 			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
@@ -466,7 +490,7 @@ class Mesh:
 			bpy.ops.image.new(name=image_name, width=int(page_size_pixels.x), height=int(page_size_pixels.y), color=(1,1,1,1))
 			image=bpy.data.images.get(image_name) #this time it is our new image
 			if not image:
-				print (image_name)
+				print ("papermodel ERROR: could not get image", image_name)
 			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
 			texfaces=self.data.uv_textures.active.data
@@ -618,19 +642,24 @@ class Edge:
 			self.angles[self.faces[0]]=pi
 			return
 		else:
+			#hacks for edges with two or more faces connected
 			rot=z_up_matrix(self.vect) #Everything is easier in 2D
 			normal_directions={} #direction of each face's normal, rotated to 2D
 			face_directions={} #direction which each face is pointing in from this edge; rotated to 2D
 			is_normal_cw={}
 			for face in self.faces:
+				#DEBUG
+				if (face.normal*rot).z > 10e-4:
+					print ("papermodel ERROR in geometry, deformed face:", face.normal*rot)
 				normal_directions[face]=angle2d((face.normal*rot).resize2D())
-				face_directions[face]=angle2d(((vectavg(face.verts)*rot-self.va.co)).resize2D())
+				face_directions[face]=angle2d(((vectavg(face.verts)-self.va.co)*rot).resize2D())
 				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
 			best_pair = 0, None, None #tuple: niceness, face #1, face #2
 			for first_face, second_face in pairs(self.faces):
 				if is_normal_cw[first_face] != is_normal_cw[second_face]:
+					used = True
 					#Always calculate the inner angle (between faces' backsides)
 					if not is_normal_cw[first_face]:
 						first_face, second_face = second_face, first_face
@@ -666,7 +695,8 @@ class Edge:
 				self.angles[face] = angle_faces
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
-		self.priority=CutPriority(self.angles[self.faces[0]], self.length/average_length)
+		#print ("angle: ", self.angles[self.faces[0]])
+		self.priority = CutPriority(self.angles[self.faces[0]], self.length/average_length)
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
@@ -725,11 +755,13 @@ class Edge:
 class Face:
 	"""Wrapper for BPy Face"""
 	def __init__(self, bpy_face, mesh, matrix=1):
+		#TODO: would be nice to reuse the existing normal if possible; but recalculation seems to be more stable
 		self.data = bpy_face
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
-		self.normal = bpy_face.normal*matrix
+		self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalize()
+		#(bpy_face.normal*matrix).normalize()
 		for verts_indices in bpy_face.edge_keys:
 			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
@@ -854,8 +886,9 @@ class Island:
 			"""Calculate the score - the bigger result, the better box."""
 			return 1/(size.x*size.y)
 		verts_convex = self.generate_bounding_poly()
+		#DEBUG
 		if len(verts_convex)==0:
-			print ("Fuck it.")
+			print ("papermodel ERROR: unable to calculate convex hull")
 			return M.Vector((0,0))
 		#go through all edges and search for the best solution
 		best_box=(0, 0, M.Vector((0,0)), M.Vector((0,0))) #(score, angle, box) for the best score
@@ -1026,6 +1059,12 @@ class UVFace:
 				uvvertex=UVVertex(vertex.co*rot, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
+			#DEBUG: check lengths
+			diff=1
+			for (va, uva), (vb, uvb) in pairs(zip(face.verts, self.verts)):
+				diff *= (va.co-vb.co).length/(uva.co-uvb.co).length
+			global differences
+			differences.append((diff, face.normal))
 		elif type(face) is UVFace: #copy constructor TODO: DOES NOT WORK
 			self.verts=list(face.verts)
 			self.face=face.face
@@ -1067,15 +1106,15 @@ class UVFace:
 		return False #UNDEBUG :)
 		for this_uvedge in self.edges:
 			if this_uvedge.va not in self.verts:
-				print("My UVEdge doesn't belong to myself",this_uvedge.va.vertex.index, object.__repr__(this_uvedge), message)
+				print("papermodel ERROR: My UVEdge doesn't belong to myself",this_uvedge.va.vertex.index, object.__repr__(this_uvedge), message)
 			if this_uvedge.vb not in self.verts:
-				print("My UVEdge doesn't belong to myself",this_uvedge.vb.vertex.index, object.__repr__(this_uvedge), message)
+				print("papermodel ERROR: My UVEdge doesn't belong to myself",this_uvedge.vb.vertex.index, object.__repr__(this_uvedge), message)
 		for vertex_id, vertex in self.uvvertex_by_id.items():
 			if vertex not in self.verts:
-				print("UVVertex found by ID does not exist")
+				print("papermodel ERROR: UVVertex found by ID does not exist")
 		if len(self.verts) > 3:
 			if (self.verts[0].co-self.verts[2].co).angle(self.verts[1].co-self.verts[3].co)<pi/10:
-				print("This face is weirdly twisted",self.face.index, message)
+				print("papermodel NOTICE: This face is weirdly twisted",self.face.index, message)
 		
 	def attach(self, edge):
 		"""Attach this face so that it sticks onto its neighbour by the given edge (thus forgetting two verts)."""
@@ -1295,7 +1334,7 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 		orig_mode=context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
 		unfolder=Unfolder(context.active_object)
-		unfolder.unfold()
+		unfolder.prepare()
 		unfolder.mesh.data.show_edge_seams=True
 		bpy.ops.object.mode_set(mode=orig_mode)
 		global twisted_quads
@@ -1342,7 +1381,7 @@ class EXPORT_OT_paper_model(bpy.types.Operator):
 		self.unfolder=Unfolder(context.active_object)
 		self.unfolder.prepare(self.properties)
 		wm = context.window_manager
-		wm.add_fileselect(self)
+		wm.fileselect_add(self)
 		return {'RUNNING_MODAL'}
 	
 	def draw(self, context):
