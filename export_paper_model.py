@@ -22,17 +22,20 @@
 #
 # ***** END GPL LICENCE BLOCK *****
 
-bl_addon_info = {
-    'name': 'Export: Paper Model',
-    'author': 'Addam Dominec',
-    'version': (0,7),
-    'blender': (2, 5, 5),
-    'api': 33903,
-    'location': 'File > Export > Paper Model',
-    'description': 'Export printable net of the selected mesh',
-    'category': 'Import/Export',
-    'wiki_url': 'http://wiki.blender.org/index.php/Extensions:2.5/Py/Scripts/File_I-O/Paper_Model',
-    'tracker_url': 'https://projects.blender.org/tracker/index.php?func=detail&aid=22417&group_id=153&atid=467'}
+bl_info = {
+	"name": "Export Paper Model",
+	"author": "Addam Dominec",
+	"version": (0,7),
+	"blender": (2, 5, 5),
+	"api": 33903,
+	"location": "File > Export > Paper Model",
+	"warning": "",
+	"description": "Export printable net of the selected mesh",
+	"category": "Import-Export",
+	"wiki_url": "http://wiki.blender.org/index.php/Extensions:2.5/Py/" \
+		"Scripts/File_I-O/Paper_Model",
+	"tracker_url": "https://projects.blender.org/tracker/index.php?" \
+		"func=detail&aid=22417&group_id=153&atid=467"}
 
 """
 
@@ -43,7 +46,6 @@ Additional links:
 import bpy
 import mathutils as M
 import mathutils.geometry as G
-import time
 from heapq import heappush, heappop
 pi=3.141592653589783
 priority_effect={
@@ -69,11 +71,13 @@ def vectavg(vectlist):
 	last=vectlist.pop()
 	vectlist.append(last)
 	if type(last) is Vertex:
-		vect_sum=last.co.copy().zero() #keep the dimensions
+		vect_sum=last.co.copy() #keep the dimensions
+		vect_sum.zero()
 		for vect in vectlist:
 			vect_sum+=vect.co
 	else:
-		vect_sum=last.copy().zero() #keep the dimensions
+		vect_sum=last.copy() #keep the dimensions
+		vect_sum.zero()
 		for vect in vectlist:
 			vect_sum+=vect
 	return vect_sum/vectlist.__len__()
@@ -82,7 +86,8 @@ def angle2d(direction):
 	if direction.length==0:
 		return None
 	if len(direction)==3:
-		direction=direction.copy().resize2D()
+		direction=direction.copy()
+		direction.resize_2d()
 	angle=direction.angle(M.Vector((1,0)))
 	if direction[1]<0:
 		angle=2*pi-angle #hack for angles greater than pi
@@ -100,15 +105,15 @@ def z_up_matrix(n):
 	b=n.xy.length
 	l=n.length
 	if b>0:
-		return M.Matrix(
+		return M.Matrix((
 			(n.x*n.z/(b*l),	-n.y/b,	0),
 			(n.y*n.z/(b*l),	n.x/b,	0),
-			(-b/l,0,0))
+			(-b/l,0,0)))
 	else: #no need for rotation
-		return M.Matrix(
+		return M.Matrix((
 			(1,	0,	0),
 			(0,	sign(n.z),	0),
-			(0,0,0))
+			(0,0,0)))
 
 class UnfoldError(ValueError):
 	pass
@@ -535,7 +540,6 @@ class Vertex:
 		return self.co+other.co
 	def is_in_cut(self, needle):
 		"""Test if both vertices are parts of the same cut tree"""
-		time_begin=time.clock()
 		tree_self=None
 		for edge_self in self.edges:
 			if edge_self.is_cut():
@@ -651,8 +655,8 @@ class Edge:
 				#DEBUG
 				if (face.normal*rot).z > 10e-4:
 					print ("papermodel ERROR in geometry, deformed face:", face.normal*rot)
-				normal_directions[face]=angle2d((face.normal*rot).resize2D())
-				face_directions[face]=angle2d(((vectavg(face.verts)-self.va.co)*rot).resize2D())
+				normal_directions[face]=angle2d((face.normal*rot).xy)
+				face_directions[face]=angle2d(((vectavg(face.verts)-self.va.co)*rot).xy)
 				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
@@ -760,8 +764,8 @@ class Face:
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
-		self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalize()
-		#(bpy_face.normal*matrix).normalize()
+		self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalized()
+		#(bpy_face.normal*matrix).normalized()
 		for verts_indices in bpy_face.edge_keys:
 			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
@@ -775,7 +779,7 @@ class Face:
 				normal=(vert_b.co-vert_a.co).cross(vert_c.co-vert_b.co)
 				normal /= (vert_b.co-vert_a.co).length * (vert_c.co-vert_b.co).length #parallel edges have lesser weight, but lenght does not have an effect
 				normals.append(normal)
-				lines.append(((vert_b.co+vert_c.co)/2, (vert_b.co+vert_c.co)/2+normal.copy().normalize()))
+				lines.append(((vert_b.co+vert_c.co)/2, (vert_b.co+vert_c.co)/2+normal.copy().normalized()))
 			average_normal=vectavg(normals)
 			for normal in normals:
 				if normal.angle(average_normal) > 0.01: #TODO: this threshold should be editable or well chosen at least
@@ -997,7 +1001,7 @@ class UVVertex:
 			self.co=vector.co.copy()
 			self.vertex=vector.vertex
 		else:
-			self.co=(M.Vector(vector)).resize2D()
+			self.co=(M.Vector(vector)).xy
 			self.vertex=vertex
 	def __hash__(self):
 		#quick and dirty hack for usage in sets
@@ -1122,9 +1126,9 @@ class UVFace:
 			raise ValueError("Self.verts: "+str([index for index in self.uvvertex_by_id])+" Edge.verts: "+str([edge.va.index, edge.vb.index]))
 		def fitting_matrix(v1, v2):
 			"""Matrix that rotates v1 to the same direction as v2"""
-			return (1/pow(v1.length,2))*M.Matrix(
+			return (1/pow(v1.length,2))*M.Matrix((
 				(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
-				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y))
+				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
 		other_uvface=edge.other_face[self.face].uvface
 		this_edge_vector=self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
 		other_edge_vector=other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
@@ -1150,7 +1154,7 @@ class UVFace:
 		"""Get a face from the given list that overlaps with this - or None if none of them overlaps."""
 		#FIXME: this is bloody slow
 		#FIXME: and still, it doesn't work for overlapping neighbours!
-		rot = M.Matrix((0, 1), (-1, 0))
+		rot = M.Matrix(((0, 1), (-1, 0)))
 		for uvface in others:
 			if uvface is not self:
 				for this_uvedge in self.edges:
@@ -1216,8 +1220,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3=uvedge.vb.co+len_b*edge*(M.Matrix((cos_b, sin_b), (-sin_b, cos_b)))/edge.length
-		v4=uvedge.va.co+len_a*edge*(M.Matrix((-cos_a, sin_a), (-sin_a, -cos_a)))/edge.length
+		v3=uvedge.vb.co+len_b*edge*(M.Matrix(((cos_b, sin_b), (-sin_b, cos_b))))/edge.length
+		v4=uvedge.va.co+len_a*edge*(M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a))))/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
@@ -1305,9 +1309,9 @@ class SVG:
 				f.write("</svg>")
 				f.close()
 
-class MESH_OT_make_unfoldable(bpy.types.Operator):
+class MakeUnfoldable(bpy.types.Operator):
 	"""Blender Operator: unfold the selected object."""
-	bl_idname = "MESH_OT_make_unfoldable"
+	bl_idname = "mesh.make_unfoldable"
 	bl_label = "Make Unfoldable"
 	bl_description = "Mark seams so that the mesh can be exported as a paper model"
 	bl_options = {'REGISTER', 'UNDO'}
@@ -1342,9 +1346,9 @@ class MESH_OT_make_unfoldable(bpy.types.Operator):
 		#	self.report(type="ERROR_INVALID_INPUT", message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
 		return {'FINISHED'}
 
-class EXPORT_OT_paper_model(bpy.types.Operator):
+class ExportPaperModel(bpy.types.Operator):
 	"""Blender Operator: save the selected object's net and optionally bake its texture"""
-	bl_idname = "EXPORT_OT_paper_model"
+	bl_idname = "export_mesh.paper_model"
 	bl_label = "Export Paper Model"
 	bl_description = "Export the selected object's net and optionally bake its texture"
 	filepath = bpy.props.StringProperty(name="File Path", description="Target file to save the SVG")
@@ -1423,7 +1427,7 @@ class VIEW3D_paper_model(bpy.types.Panel):
 
 	def draw(self, context):
 		layout = self.layout
-		layout.operator("MESH_OT_make_unfoldable")
+		layout.operator("mesh.make_unfoldable")
 		col = layout.column()
 		sub = col.column(align=True)
 		sub.label(text="Page size:")
@@ -1438,7 +1442,7 @@ class VIEW3D_paper_model(bpy.types.Panel):
 """
 
 def menu_func(self, context):
-	self.layout.operator("export.paper_model", text="Paper Model (.svg)")
+	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
 
 class VIEW3D_PT_paper_model(bpy.types.Panel):
 	bl_label = "Paper Model"
@@ -1479,7 +1483,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		import bgl, blf, mathutils
 		view_mat = context.space_data.region_3d.perspective_matrix
 		
-		vec = mathutils.Vector((1,1,1)).resize4D()*view_mat
+		vec = mathutils.Vector((1,1,1,1))*view_mat
 		# dehomogenise
 		vec = mathutils.Vector((vec[0]/vec[3],vec[1]/vec[3],vec[2]/vec[3]))
 		# get screen information
@@ -1510,21 +1514,24 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 				context.area.tag_redraw()
 
 def register():
+	bpy.utils.register_module(__name__)
+
 	#bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
 	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="*not working* Highlight tilted quad faces that would be distorted by export")
 	global paper_model_handles
 	paper_model_handles={
 		#"display_labels": (None, 'POST_PIXEL'),
 		"display_quads": (None, 'POST_VIEW')}
-	#bpy.types.register(MESH_OT_make_unfoldable)
-	#bpy.types.register(EXPORT_OT_paper_model)
+	#bpy.types.register(MakeUnfoldable)
+	#bpy.types.register(ExportPaperModel)
 	bpy.types.INFO_MT_file_export.append(menu_func)
 	#bpy.types.register(VIEW3D_PT_paper_model)
 
 def unregister():
-#	bpy.types.unregister(MESH_OT_make_unfoldable)
-#	bpy.types.unregister(EXPORT_OT_paper_model)
+#	bpy.types.unregister(MakeUnfoldable)
+#	bpy.types.unregister(ExportPaperModel)
 #	bpy.types.unregister(VIEW3D_PT_paper_model)
+	bpy.utils.unregister_module(__name__)
 	bpy.types.INFO_MT_file_export.remove(menu_func)
 
 if __name__ == "__main__":
