@@ -26,8 +26,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0,7),
-	"blender": (2, 5, 5),
-	"api": 33903,
+	"blender": (2, 5, 6),
+	"api": 35302,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the selected mesh",
@@ -57,6 +57,8 @@ priority_effect={
 	'length':-0.2}
 lines=[]
 twisted_quads=[]
+labels=dict()
+area = None
 
 strf="{:.1f}".format
 def sign(a):
@@ -230,6 +232,9 @@ class Mesh:
 		#Check that all quads are flat and raise an error if not
 		global twisted_quads
 		twisted_quads=[]
+		global labels
+		labels = dict()
+		global area
 		for index in self.faces:
 			self.faces[index].check_twisted()
 		#self.cut_obvious()
@@ -255,6 +260,7 @@ class Mesh:
 				else:
 					edge.priority.cut_end()
 			edge_cut.cut()
+			area.tag_redraw()
 			if len(edges_sorted) > 0:
 				edges_sorted.sort(key=lambda edge: edge.priority.value)
 			count_edges_connecting -= 1
@@ -337,7 +343,7 @@ class Mesh:
 		"""Move islands so that they fit into pages, based on their bounding boxes"""
 		#this algorithm is not optimal, but cool enough
 		#it handles with two basic domains:
-		#list of Points: they describe all sensible free rectangle area available on the page
+		#list of Points: they describe all sensible free rectangle area available on the page (one rectangle per Point)
 		#Boundaries: linked list of points around the used area and the page - makes many calculations a lot easier
 		page_size=M.Vector((aspect_ratio, 1))
 		class Boundary:
@@ -519,7 +525,7 @@ class Vertex:
 	def __init__(self, bpy_vertex, mesh=None, matrix=1):
 		self.data=bpy_vertex
 		self.index=bpy_vertex.index
-		self.co=bpy_vertex.co*matrix
+		self.co=matrix*bpy_vertex.co
 		self.edges=list()
 		self.uvs=list()
 	def __hash__(self):
@@ -584,6 +590,10 @@ class CutTree:
 			pass#print("Join myself")
 class CutPriority:
 	"""A container for edge's priority value"""
+	def label_update(self):
+		"""Debug tool"""
+		global labels
+		labels[self][1] = strf(self.value)
 	def __init__(self, angle, rel_length):
 		self.is_last_uncut=False
 		self.is_last_connecting=False
@@ -602,16 +612,19 @@ class CutPriority:
 		if not self.is_last_connecting:
 			self.value+=priority_effect['last_connecting']
 			self.is_last_connecting=True
+		self.label_update()
 	def last_uncut(self):
 		"""Update priority: this edge is one of the last that need to be cut for the mesh to be unfoldable.""" 
 		if not self.is_last_uncut:
 			self.value+=priority_effect['last_uncut']
 			self.is_last_uncut=True
+		self.label_update()
 	def cut_end(self):
 		"""Update priority: another edge in neighbourhood has been cut."""
 		if not self.is_cut_end:
 			self.value+=priority_effect['cut_end']
 			self.is_cut_end=True
+		self.label_update()
 class Edge:
 	"""Wrapper for BPy Edge"""
 	def __init__(self, edge, mesh, matrix=1):
@@ -653,10 +666,10 @@ class Edge:
 			is_normal_cw={}
 			for face in self.faces:
 				#DEBUG
-				if (face.normal*rot).z > 10e-4:
-					print ("papermodel ERROR in geometry, deformed face:", face.normal*rot)
-				normal_directions[face]=angle2d((face.normal*rot).xy)
-				face_directions[face]=angle2d(((vectavg(face.verts)-self.va.co)*rot).xy)
+				if (rot*face.normal).z > 10e-4:
+					print ("papermodel ERROR in geometry, deformed face:", rot*face.normal)
+				normal_directions[face]=angle2d((rot*face.normal).xy)
+				face_directions[face]=angle2d((rot*(vectavg(face.verts)-self.va.co)).xy)
 				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
@@ -701,6 +714,7 @@ class Edge:
 		"""Calculate initial priority value."""
 		#print ("angle: ", self.angles[self.faces[0]])
 		self.priority = CutPriority(self.angles[self.faces[0]], self.length/average_length)
+		labels[self.priority] = [(self.va+self.vb)*0.5, strf(self.priority.value)]
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
@@ -731,6 +745,8 @@ class Edge:
 				self.cut_tree=CutTree(self)
 		self.data.use_seam=True #TODO: this should be optional NOTE:Here, the original BPy Edge data is used (fuck it.)
 		self.is_main_cut=True
+		labels[self.priority] = [(self.va+self.vb)*0.5, strf(self.priority.value)]
+
 	def __lt__(self, other):
 		"""Compare by priority."""
 		return self.priority < other.priority
@@ -904,7 +920,7 @@ class Island:
 				#find the dimensions in both directions
 				bottom_left=M.Vector((0,0))
 				top_right=M.Vector((0,0))
-				verts_rotated=list(map(lambda vertex: vertex.co*rot, verts_convex))
+				verts_rotated=list(map(lambda vertex: rot*vertex.co, verts_convex))
 				bottom_left.x=min(map(lambda vertex: vertex.x, verts_rotated))
 				bottom_left.y=min(map(lambda vertex: vertex.y, verts_rotated))
 				top_right.x=max(map(lambda vertex: vertex.x, verts_rotated))
@@ -982,7 +998,7 @@ class Island:
 				texface = tex.data[uvface.face.index]
 				rot = M.Matrix.Rotation(self.angle, 2)
 				for i, uvvertex in enumerate(uvface.verts):
-					uv = uvvertex.co * rot + self.pos + self.offset
+					uv = rot * uvvertex.co + self.pos + self.offset
 					texface.uv_raw[2*i] = uv.x / aspect_ratio
 					texface.uv_raw[2*i+1] = uv.y
 
@@ -1060,7 +1076,7 @@ class UVFace:
 			rot=z_up_matrix(face.normal)
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
-				uvvertex=UVVertex(vertex.co*rot, vertex)
+				uvvertex=UVVertex(rot*vertex.co, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
 			#DEBUG: check lengths
@@ -1129,11 +1145,11 @@ class UVFace:
 			return (1/pow(v1.length,2))*M.Matrix((
 				(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
 				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
-		other_uvface=edge.other_face[self.face].uvface
-		this_edge_vector=self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
-		other_edge_vector=other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
-		rot=fitting_matrix(this_edge_vector, other_edge_vector)
-		offset=other_uvface.uvvertex_by_id[edge.va.index].co-self.uvvertex_by_id[edge.va.index].co*rot
+		other_uvface = edge.other_face[self.face].uvface
+		this_edge_vector = self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
+		other_edge_vector = other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
+		rot = fitting_matrix(this_edge_vector, other_edge_vector)
+		offset = other_uvface.uvvertex_by_id[edge.va.index].co - rot*self.uvvertex_by_id[edge.va.index].co
 		for vertex_id, uvvertex in self.uvvertex_by_id.items():
 			#If this vertex is shared between both faces
 			if vertex_id in other_uvface.uvvertex_by_id:
@@ -1147,7 +1163,7 @@ class UVFace:
 					if uvedge.vb is uvvertex:
 						uvedge.vb = new_uvvertex
 			else: #if the vertex isn't shared, we must calculate its position
-				uvvertex.co = uvvertex.co*rot + offset
+				uvvertex.co = rot*uvvertex.co + offset
 		self.check("after")
 	
 	def get_overlap(self, others) -> "UVFace":
@@ -1160,7 +1176,7 @@ class UVFace:
 				for this_uvedge in self.edges:
 					A = this_uvedge.va.co
 					B = this_uvedge.vb.co
-					E = (B-A) * rot
+					E = rot * (B-A)
 					for other_uvedge in uvface.edges:
 						if (this_uvedge.va is not other_uvedge.va and this_uvedge.vb is not other_uvedge.va and
 								this_uvedge.vb is not other_uvedge.va and this_uvedge.vb is not other_uvedge.vb):
@@ -1168,7 +1184,7 @@ class UVFace:
 							#DEBUG:
 							C = other_uvedge.va.co
 							D = other_uvedge.vb.co
-							F = (D-C) * rot
+							F = rot * (D-C)
 							try:
 								a = ((A-C) * E) / ((D-C) * E)
 								b = ((C-A) * F) / ((B-A) * F)
@@ -1248,10 +1264,11 @@ class SVG:
 		self.mesh=mesh
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
-		vector=vector*rot+pos
+		vector = rot*vector + pos
 		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
 	def write(self, filename):
 		"""Write data to a file given by its name."""
+		line_through = " L ".join #utility function
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
@@ -1274,7 +1291,6 @@ class SVG:
 					rot = M.Matrix.Rotation(island.angle, 2)
 					#debug: bounding box
 					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
-					line_through = " L ".join
 					data_outer = data_convex = data_concave = data_stickers = ""
 					for uvedge in island.edges:
 						data_uvedge = "\nM " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in [uvedge.va, uvedge.vb]])
@@ -1337,6 +1353,8 @@ class MakeUnfoldable(bpy.types.Operator):
 		priority_effect['length']=props.priority_effect_length
 		orig_mode=context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
+		global area
+		area = context.area
 		unfolder=Unfolder(context.active_object)
 		unfolder.prepare()
 		unfolder.mesh.data.show_edge_seams=True
@@ -1448,6 +1466,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 	bl_label = "Paper Model"
 	bl_space_type = "VIEW_3D"
 	bl_region_type = "UI"
+	handles = dict()
 	def display_quads(self, context):
 		import bgl, blf
 		perspMatrix = context.space_data.region_3d.perspective_matrix
@@ -1483,23 +1502,26 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		import bgl, blf, mathutils
 		view_mat = context.space_data.region_3d.perspective_matrix
 		
-		vec = mathutils.Vector((1,1,1,1))*view_mat
-		# dehomogenise
-		vec = mathutils.Vector((vec[0]/vec[3],vec[1]/vec[3],vec[2]/vec[3]))
-		# get screen information
+		global labels
 		mid_x = context.region.width/2.0
 		mid_y = context.region.height/2.0
 		width = context.region.width
 		height = context.region.height
 		bgl.glColor3f(1,1,0)
-		x = int(mid_x + vec[0]*width/2.0)
-		y = int(mid_y + vec[1]*height/2.0)
-		blf.position(0, x, y, 0)
-		blf.draw(0, "Hello, world!")
+		for position, label in labels.values():
+			position.resize_4d()
+			vec = view_mat * position
+			vec /= vec[3]
+			x = int(mid_x + vec[0]*width/2.0)
+			y = int(mid_y + vec[1]*height/2.0)
+			blf.position(0, x, y, 0)
+			blf.draw(0, label)
+	display_labels.handle = None
 
 	def draw(self, context):
 		layout = self.layout
-		global paper_model_handles
+		layout.prop(context.scene, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
+		"""global paper_model_handles
 		region=[region for region in context.area.regions if region.type=='WINDOW'][0]
 		for name in paper_model_handles:
 			value, mode = paper_model_handles[name]
@@ -1511,25 +1533,25 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 			elif value is not None and not getattr(context.scene, property_name):
 				region.callback_remove(value)
 				paper_model_handles[name]=None, mode
-				context.area.tag_redraw()
+				context.area.tag_redraw()"""
+	
+def prop_changed(self, context):
+	region = [region for region in context.area.regions if region.type=='WINDOW'][0]
+	display_labels = VIEW3D_PT_paper_model.display_labels
+	if self.io_paper_model_display_labels:
+		display_labels.handle = region.callback_add(display_labels, (self, context), "POST_PIXEL")
+	else:
+		region.callback_remove(display_labels.handle)
 
 def register():
 	bpy.utils.register_module(__name__)
 
-	#bpy.types.Scene.BoolProperty(attr="io_paper_model_display_labels", name="Display labels")
+	bpy.types.Scene.io_paper_model_display_labels = bpy.props.BoolProperty(attr="io_paper_model_display_labels", name="Display labels", update=prop_changed)
 	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="*not working* Highlight tilted quad faces that would be distorted by export")
-	global paper_model_handles
-	paper_model_handles={
-		#"display_labels": (None, 'POST_PIXEL'),
-		"display_quads": (None, 'POST_VIEW')}
-	#bpy.types.register(MakeUnfoldable)
-	#bpy.types.register(ExportPaperModel)
 	bpy.types.INFO_MT_file_export.append(menu_func)
 	#bpy.types.register(VIEW3D_PT_paper_model)
 
 def unregister():
-#	bpy.types.unregister(MakeUnfoldable)
-#	bpy.types.unregister(ExportPaperModel)
 #	bpy.types.unregister(VIEW3D_PT_paper_model)
 	bpy.utils.unregister_module(__name__)
 	bpy.types.INFO_MT_file_export.remove(menu_func)
