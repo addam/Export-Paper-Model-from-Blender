@@ -49,29 +49,29 @@ import mathutils.geometry as G
 from heapq import heappush, heappop
 pi=3.141592653589783
 priority_effect={
-	'convex':1,
+	'convex':0.5,
 	'concave':1,
-	'last_uncut':0.5,
-	'cut_end':0,
-	'last_connecting':-0.45,
-	'length':-0.2}
-lines=[]
-twisted_quads=[]
-labels=dict()
-area = None
+	'on_cycle':1,
+	'length':-0.05}
+lines = list()
+twisted_quads = list()
+labels = dict()
+highlight_faces = list()
 
 strf="{:.1f}".format
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
 	if a == 0:
 		return 0
-	return a/abs(a)
+	if a < 0:
+		return -1
+	else:
+		return 1
 def vectavg(vectlist):
 	"""Vector average of given list."""
 	if len(vectlist)==0:
 		return M.Vector((0,0))
-	last=vectlist.pop()
-	vectlist.append(last)
+	last=vectlist[0]
 	if type(last) is Vertex:
 		vect_sum=last.co.copy() #keep the dimensions
 		vect_sum.zero()
@@ -83,14 +83,14 @@ def vectavg(vectlist):
 		for vect in vectlist:
 			vect_sum+=vect
 	return vect_sum/vectlist.__len__()
-def angle2d(direction):
+def angle2d(direction, unit_vector=M.Vector((1,0))):
 	"""Get the view angle of point from origin."""
-	if direction.length==0:
-		return None
-	if len(direction)==3:
+	if direction.length == 0.0:
+		raise ValueError("Zero vector does not define an angle")
+	if len(direction) >= 3: #for 3d vectors
 		direction=direction.copy()
 		direction.resize_2d()
-	angle=direction.angle(M.Vector((1,0)))
+	angle=direction.angle(unit_vector)
 	if direction[1]<0:
 		angle=2*pi-angle #hack for angles greater than pi
 	return angle
@@ -130,7 +130,6 @@ class Unfolder:
 		self.mesh.cut_obvious()
 		if not self.mesh.is_cut_enough():
 			self.mesh.generate_cuts()
-			#raise UnfoldError("The mesh does not have enough seams. Make it unfoldable first. (Operator \"Make Unfoldable\")")
 		self.mesh.generate_islands()
 		self.mesh.fix_overlaps()
 		self.mesh.finalize_islands(False)
@@ -165,24 +164,21 @@ class Mesh:
 		global lines, twisted_quads
 		self.verts=dict()
 		self.edges=dict()
-		self.edges_by_verts_indices={}
+		self.edges_by_verts_indices=dict()
 		self.faces=dict()
 		self.islands=list()
 		self.data=mesh
-		self.pages=[]
+		self.pages=list()
 		for bpy_vertex in mesh.vertices:
 			self.verts[bpy_vertex.index]=Vertex(bpy_vertex, self, matrix)
 		for bpy_edge in mesh.edges:
 			edge=Edge(bpy_edge, self, matrix)
-			self.edges[bpy_edge.index]=edge
-			self.edges_by_verts_indices[(edge.va.index, edge.vb.index)]=edge
-			self.edges_by_verts_indices[(edge.vb.index, edge.va.index)]=edge
-		#DEBUG: this was just an idea.
-		#scale = matrix.copy().invert().scale_part()
-		#normatrix = M.Matrix.Scale(scale.length, 3, scale)*matrix.rotation_part()
+			self.edges[bpy_edge.index] = edge
+			self.edges_by_verts_indices[(edge.va.index, edge.vb.index)] = edge
+			self.edges_by_verts_indices[(edge.vb.index, edge.va.index)] = edge
 		for bpy_face in mesh.faces:
-			face=Face(bpy_face, self)#, normatrix)
-			self.faces[bpy_face.index]=face
+			face = Face(bpy_face, self)
+			self.faces[bpy_face.index] = face
 		for index in self.edges:
 			self.edges[index].process_faces()
 	
@@ -190,80 +186,76 @@ class Mesh:
 		"""Cut all seams and non-manifold edges."""
 		count=0
 		for i in self.edges:
-			edge=self.edges[i]
+			edge = self.edges[i]
 			if not edge.is_cut() and (edge.data.use_seam or len(edge.faces)<2): #NOTE: Here is one of the rare cases when using the original BPy data (fuck this.)
 				edge.cut()
-				count+=1
-		#DEBUG: print("There were", count, "obvious cuts.")
+				count += 1
 	
 	def is_cut_enough(self, do_update_priority=False):
 		"""Check for loops in the net of connected faces (that indicates the net is not unfoldable)."""
-		remaining_faces=list(self.faces.values())
-		while len(remaining_faces) > 0: #try all faces
-			first=remaining_faces.pop()
-			stack=[(first, None)] #a seed to start from
-			path={first}
-			while len(stack) > 0:
-				#Test one island (or rather a wanna-be-island)
-				current_face, previous_edge=stack.pop()
-				for edge in current_face.edges:
-					if edge is not previous_edge and not edge.is_cut(current_face):
-						#DEBUG:
-						try:
-							next_face=edge.other_face[current_face]
-						except KeyError:
-							print ("papermodel FATAL ERROR in topology:", previous_edge, current_face, edge, edge.is_cut(), edge.is_cut(current_face), edge.data.use_seam)
-						if next_face in path:
-							#We've just found a loop
-							#DEBUG print (edge, next_face);
-							#edge.data.use_edge_sharp = True
-							if do_update_priority:
-								edge.priority.last_uncut() #Cutting this edge might solve the problem
-							return False #if we find a loop, the mesh is not cut enough
-						#else:
-						stack.append((next_face, edge))
-						path.add(next_face)
-						remaining_faces.remove(next_face)
-		#If we haven't found anything, presume there's nothing wrong
-		return True
+		cut_enough = True
+		remaining_faces = set(self.faces.values())
+		while remaining_faces:
+			#traverse this wanna-be island depth-first, marking all cycles of faces still connected
+			first_face = remaining_faces.pop() #a seed to start from
+			stack = [(first_face, None)]
+			remaining_faces.add(first_face)
+			parents = dict()
+			path = dict() #loop counts for each node (i.e. face)
+			while stack:
+				face, back_edge = stack.pop()
+				if face not in path:
+					#diving deeper into the tree
+					path[face] = 0
+					stack.append((face, back_edge)) #mark a return path
+					for edge in face.edges:
+						if edge is not back_edge and not edge.is_cut(face):
+							neighbour = edge.other_face[face]
+							if neighbour not in remaining_faces:
+								pass
+							elif neighbour in path:
+								if parents.get(face) is not neighbour:
+									#We've just found a cycle
+									if not do_update_priority:
+										return False
+									edge.set_cycle(True)
+									cut_enough = False
+									path[face] += 1
+									path[neighbour] -= 1
+							else:
+								parents[neighbour] = face
+								stack.append((neighbour, edge))
+				elif face in remaining_faces:
+					#returning upwards
+					parent = parents.get(face)
+					if parent and do_update_priority:
+						path[parent] += path[face]
+						if path[face] > 0:
+							back_edge.set_cycle(True)
+						else:
+							back_edge.set_cycle(False)
+					remaining_faces.remove(face)
+		return cut_enough
 	
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
-		#Check that all quads are flat and raise an error if not
-		global twisted_quads
-		twisted_quads=[]
-		global labels
+		global twisted_quads, labels
+		twisted_quads = list()
 		labels = dict()
-		global area
+		#Silently check that all quads are flat
 		for index in self.faces:
 			self.faces[index].check_twisted()
-		#self.cut_obvious()
-		count_edges_connecting = sum(not self.edges[edge_id].is_cut() for edge_id in self.edges)
-		if (count_edges_connecting)==0:
+		edges_connecting = [self.edges[edge_id] for edge_id in self.edges if not self.edges[edge_id].is_cut()]
+		if not edges_connecting:
 			return True
-		count_faces = len(self.faces)
-		average_length=sum(self.edges[edge_id].length for edge_id in self.edges if not self.edges[edge_id].is_cut())/count_edges_connecting
-		for edge in self.edges:
-			self.edges[edge].generate_priority(average_length)
-		edges_sorted=sorted(self.edges.values())
+		average_length = sum(edge.length for edge in edges_connecting) / len(edges_connecting)
+		for edge in edges_connecting:
+			edge.generate_priority(average_length)
 		#Iteratively cut one edge after another until it is enough
-		#DEBUG print ("connecting:", count_edges_connecting, "faces:", count_faces)
-		while not self.is_cut_enough(do_update_priority=True): #FIXME: terribly missing this optimisation: count_edges_connecting > count_faces or not 
-			#the real thing missing is a function to detect "last connecting" and update priority, without checking cut_enough
-			#I should better think it over... :/
-			edge_cut=edges_sorted.pop()
-			for edge in edge_cut.va.edges + edge_cut.vb.edges:
-				if edge is not edge_cut and edge.va.is_in_cut(edge.vb):
-					edge.priority.last_connecting() #Take down priority if cutting this edge would create a new island
-					#DEBUG: 
-					#edge.data.use_edge_sharp=True
-				else:
-					edge.priority.cut_end()
+		while edges_connecting and not self.is_cut_enough(do_update_priority=True):
+			edges_connecting.sort(key = lambda edge: edge.priority)
+			edge_cut = edges_connecting.pop()
 			edge_cut.cut()
-			area.tag_redraw()
-			if len(edges_sorted) > 0:
-				edges_sorted.sort(key=lambda edge: edge.priority.value)
-			count_edges_connecting -= 1
 		return True
 	
 	def generate_islands(self):
@@ -282,7 +274,7 @@ class Mesh:
 			if len(next_border)>0:
 				outer_faces.extend(connected_faces(next_border, outer_faces))
 			return outer_faces
-		self.islands=[]
+		self.islands=list()
 		remaining_faces=list(self.faces.values())
 		#DEBUG: checking the transformation went ok
 		global differences
@@ -290,10 +282,11 @@ class Mesh:
 		while len(remaining_faces) > 0:
 			self.islands.append(Island(remaining_faces))
 		differences.sort(reverse=True)
-		if differences[0][0]>10e-5:
-			print ("papermodel ERROR in geometry: several faces will be deformed")
+		if differences[0][0]>1+1e-5:
+			print ("""Papermodel warning: there are non-flat faces, which will be deformed in the output image.
+			Showing first five values (normally they should be very close to 1.0):""")
 			for diff in differences[0:5]:
-				print (diff)
+				print ("{:.5f}".format(diff[0]))
 		#FIXME: Why this?
 		for edge in self.edges.values():
 			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
@@ -454,7 +447,7 @@ class Mesh:
 			#create a new page and try to fit as many islands onto it as possible
 			page=Page(page_num)
 			page_num+=1
-			points=[]
+			points=list()
 			#We start with the whole page
 			a=Boundary(page_size.x, page_size.y)
 			b=Boundary(0, page_size.y)
@@ -544,6 +537,11 @@ class Vertex:
 			return other-self.co
 	def __add__(self, other):
 		return self.co+other.co
+	def __str__(self):
+		return "Vertex {} at: {}".format(self.index, self.co[0:2])
+	def __repr__(self):
+		return "Vertex(id={}...)".format(self.index)
+		
 	def is_in_cut(self, needle):
 		"""Test if both vertices are parts of the same cut tree"""
 		tree_self=None
@@ -556,75 +554,6 @@ class Vertex:
 					return False
 				break
 		return False #just in case
-class CutTree:
-	"""Optimisation for finding connections in cut edges"""
-	def __init__(self, edge):
-		self.id=edge.data.index
-		#print("New tree ", self.id)
-		self.edge=edge
-		self.edge_count=1
-	def add(self, edge):
-		"""Add an edge to this cut tree"""
-		self.edge_count+=1
-		edge.cut_tree=self
-		pass#print ("Add", str(self.edge_count)+"th ("+str(edge.data.index)+")")
-	def join(self, other):
-		"""Join two (still separate) cut trees"""
-		if self is not other:
-			if self.edge_count <= other.edge_count:
-				#print ("Join ", self.id, " (", self.edge_count, " edges) to ", other.id, " (", other.edge_count, " edges).")
-				other.add(self.edge)
-				path=set()
-				stack=[(self.edge.va, None)]
-				while len(stack) > 0:
-					current, previous=stack.pop()
-					path.add(current)
-					for edge in current.edges:
-						next = edge.other_vertex(current)
-						if edge.is_cut() and next is not previous and next not in path:
-							other.add(edge) #we should also call something like self.remove(edge), but that would be a waste of time
-							stack.append((next, current))
-			else:
-				other.join(self)
-		else:
-			pass#print("Join myself")
-class CutPriority:
-	"""A container for edge's priority value"""
-	def label_update(self):
-		"""Debug tool"""
-		global labels
-		labels[self][1] = strf(self.value)
-	def __init__(self, angle, rel_length):
-		self.is_last_uncut=False
-		self.is_last_connecting=False
-		self.is_cut_end=False
-		if(angle>0):
-			self.value=(angle/pi)*priority_effect['convex']
-		else:
-			self.value=-(angle/pi)*priority_effect['concave']
-		self.value+=rel_length*priority_effect['length']
-	def __gt__(self, other):
-		return self.value > other.value
-	def __lt__(self, other):
-		return self.value < other.value
-	def last_connecting(self):
-		"""Update priority: cutting this edge would divide an island into two."""
-		if not self.is_last_connecting:
-			self.value+=priority_effect['last_connecting']
-			self.is_last_connecting=True
-		self.label_update()
-	def last_uncut(self):
-		"""Update priority: this edge is one of the last that need to be cut for the mesh to be unfoldable.""" 
-		if not self.is_last_uncut:
-			self.value+=priority_effect['last_uncut']
-			self.is_last_uncut=True
-		self.label_update()
-	def cut_end(self):
-		"""Update priority: another edge in neighbourhood has been cut."""
-		if not self.is_cut_end:
-			self.value+=priority_effect['cut_end']
-			self.is_cut_end=True
-		self.label_update()
 class Edge:
 	"""Wrapper for BPy Edge"""
 	def __init__(self, edge, mesh, matrix=1):
@@ -633,14 +562,15 @@ class Edge:
 		self.vb=mesh.verts[edge.vertices[1]]
 		self.vect=self.vb.co-self.va.co
 		self.length=self.vect.length
-		self.faces=[]
-		self.angles={}
-		self.other_face={} #FIXME: this should be rather a function, damn this mess
-		self.uvedges=[]
+		self.faces=list()
+		self.angles=dict()
+		self.other_face=dict() #FIXME: this should be rather a function, damn this mess
+		self.uvedges=list()
 		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
+		self.is_on_cycle=False
 	def process_faces(self):
 		"""Reorder faces (if more than two), calculate angle(s) and if normals are wrong, mark edge as cut"""
 		def niceness (angle):
@@ -661,16 +591,19 @@ class Edge:
 		else:
 			#hacks for edges with two or more faces connected
 			rot=z_up_matrix(self.vect) #Everything is easier in 2D
-			normal_directions={} #direction of each face's normal, rotated to 2D
-			face_directions={} #direction which each face is pointing in from this edge; rotated to 2D
-			is_normal_cw={}
+			normal_directions=dict() #direction of each face's normal, rotated to 2D
+			face_directions=dict() #direction which each face is pointing in from this edge; rotated to 2D
+			is_normal_cw=dict()
 			for face in self.faces:
 				#DEBUG
-				if (rot*face.normal).z > 10e-4:
+				if (rot*face.normal).z > 1e-4:
 					print ("papermodel ERROR in geometry, deformed face:", rot*face.normal)
-				normal_directions[face]=angle2d((rot*face.normal).xy)
-				face_directions[face]=angle2d((rot*(vectavg(face.verts)-self.va.co)).xy)
-				is_normal_cw[face]=(normal_directions[face]-face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
+				try:
+					normal_directions[face]=angle2d((rot*face.normal).xy)
+					face_directions[face] = angle2d((rot*(vectavg(face.verts)-self.va.co)).xy)
+				except ValueError:
+					raise UnfoldError("Fatal error: there is a face with two edges in the same direction.")
+				is_normal_cw[face] = (normal_directions[face] - face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
 			best_pair = 0, None, None #tuple: niceness, face #1, face #2
@@ -712,9 +645,14 @@ class Edge:
 				self.angles[face] = angle_faces
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
-		#print ("angle: ", self.angles[self.faces[0]])
-		self.priority = CutPriority(self.angles[self.faces[0]], self.length/average_length)
-		labels[self.priority] = [(self.va+self.vb)*0.5, strf(self.priority.value)]
+		angle = self.angles[self.faces[0]]
+		if angle > 0:
+			self.priority = (angle/pi)*priority_effect['convex']
+		else:
+			self.priority = -(angle/pi)*priority_effect['concave']
+		length_effect = (self.length/average_length) * priority_effect['length']
+		self.priority += length_effect
+		labels[self] = [(self.va+self.vb)*0.5, strf(self.priority)]
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
@@ -723,29 +661,21 @@ class Edge:
 		#All other faces (third and more) are automatically treated as cut
 		else:
 			return True
+	def label_update(self):
+		"""Debug tool"""
+		global labels
+		labels[self][1] = ("*{:.1f}" if self.is_on_cycle else "{:.1f}").format(self.priority)
+	def set_cycle(self, value=True):
+		"""Set this edge as being on a cycle of faces (and thus needed to be cut)"""
+		self.priority += priority_effect["on_cycle"] * (value - self.is_on_cycle)
+		self.is_on_cycle = value
+		self.label_update()
 	def cut(self):
 		"""Set this edge as cut."""
-		for edge_a in self.va.edges:
-			if edge_a.is_cut():
-				for edge_b in self.vb.edges:
-					if edge_b.is_cut(): #both vertices have cut edges
-						edge_b.cut_tree.join(edge_a.cut_tree)
-						edge_b.cut_tree.add(self)
-						break
-				else: #vertex B has no cut edge (but vertex A does have)
-					edge_a.cut_tree.add(self)
-					break
-				break
-		else: #vertex A has no cut edge
-			for edge_b in self.vb.edges:
-				if edge_b.is_cut():
-					edge_b.cut_tree.add(self)
-					break
-			else: #both vertices have no cut edges
-				self.cut_tree=CutTree(self)
-		self.data.use_seam=True #TODO: this should be optional NOTE:Here, the original BPy Edge data is used (fuck it.)
+		self.data.use_seam=True #TODO: this should be optional; NOTE: Here, the original BPy Edge data is used (fuck it.)
 		self.is_main_cut=True
-		labels[self.priority] = [(self.va+self.vb)*0.5, strf(self.priority.value)]
+		if self.priority:
+			self.label_update()
 
 	def __lt__(self, other):
 		"""Compare by priority."""
@@ -754,9 +684,9 @@ class Edge:
 		"""Compare by priority."""
 		return self.priority > other.priority
 	def __str__(self):
-		return "Edge id: "+str(self.data.index)
+		return "Edge id: {}".format(self.data.index)
 	def __repr__(self):
-		return "Edge(id="+str(self.data.index)+"...)"
+		return "Edge(id={}...)".format(self.data.index)
 	def other_vertex(self, this):
 		"""Get a vertex of this edge that is not the given one - or None if none of both vertices is the given one."""
 		if self.va is this:
@@ -790,7 +720,7 @@ class Face:
 		if len(self.verts) > 3:
 			global twisted_quads, lines
 			vert_a=self.verts[0]
-			normals=[]
+			normals=list()
 			for vert_b, vert_c in zip(self.verts[1:-1], self.verts[2: ]):
 				normal=(vert_b.co-vert_a.co).cross(vert_c.co-vert_b.co)
 				normal /= (vert_b.co-vert_a.co).length * (vert_c.co-vert_b.co).length #parallel edges have lesser weight, but lenght does not have an effect
@@ -813,10 +743,10 @@ class Island:
 		"""Find an island in the given set of Faces or UVFaces.
 		Note: initializing removes one island out of the given list of faces."""
 		#TODO: removing from the given list is a bit clumsy
-		self.faces=[]
-		self.edges=[]
+		self.faces=list()
+		self.edges=list()
 		self.verts=set()
-		self.stickers=[]
+		self.stickers=list()
 		self.pos=M.Vector((0,0))
 		self.offset=M.Vector((0,0))
 		self.angle=0
@@ -850,7 +780,7 @@ class Island:
 				self.add(UVFace(origin, self))
 			if faces:
 				faces.remove(origin)
-			flood_boundary=[]
+			flood_boundary=list()
 			#Create the initial wave
 			for edge in origin.edges:
 				if not edge.is_cut(origin):
@@ -870,7 +800,7 @@ class Island:
 			self.stickers.append(uvface)
 		else:
 			self.faces.append(uvface)
-	def generate_bounding_poly(self) -> list:
+	def generate_convex_hull(self) -> list:
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
 		def make_convex_curve(verts):
 			"""Remove vertices from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
@@ -905,7 +835,7 @@ class Island:
 		def bounding_box_score(size):
 			"""Calculate the score - the bigger result, the better box."""
 			return 1/(size.x*size.y)
-		verts_convex = self.generate_bounding_poly()
+		verts_convex = self.generate_convex_hull()
 		#DEBUG
 		if len(verts_convex)==0:
 			print ("papermodel ERROR: unable to calculate convex hull")
@@ -914,8 +844,8 @@ class Island:
 		best_box=(0, 0, M.Vector((0,0)), M.Vector((0,0))) #(score, angle, box) for the best score
 		vertex_a = verts_convex[len(verts_convex)-1]
 		for vertex_b in verts_convex:
-			angle=angle2d(vertex_b.co-vertex_a.co)
-			if angle is not None:
+			if vertex_b.co != vertex_a.co:
+				angle=angle2d(vertex_b.co-vertex_a.co)
 				rot=M.Matrix.Rotation(angle, 2)
 				#find the dimensions in both directions
 				bottom_left=M.Vector((0,0))
@@ -1005,7 +935,7 @@ class Island:
 class Page:
 	"""Container for several Islands"""
 	def __init__(self, num=1):
-		self.islands=[]
+		self.islands=list()
 		self.image=None
 		self.name="page"+str(num)
 	def add(self, island):
@@ -1069,7 +999,7 @@ class UVFace:
 		fixed_edge: Edge to connect to (that already has UV coordinates)"""
 		#print("Create id: "+str(face.data.index))
 		if type(face) is Face:
-			self.verts=[]
+			self.verts=list()
 			self.face=face
 			face.uvface=self
 			self.island=island
@@ -1089,8 +1019,8 @@ class UVFace:
 			self.verts=list(face.verts)
 			self.face=face.face
 			self.uvvertex_by_id=dict(face.uvvertex_by_id)
-		self.edges=[]
-		edge_by_verts={}
+		self.edges=list()
+		edge_by_verts=dict()
 		for edge in face.edges:
 			edge_by_verts[(edge.va.index, edge.vb.index)]=edge
 			edge_by_verts[(edge.vb.index, edge.va.index)]=edge
@@ -1193,22 +1123,12 @@ class UVFace:
 									return uvface
 							except ZeroDivisionError:
 								pass
-		#if len(self.verts)==3:
-			#for uvface in others:
-				#for uvvertex in uvface.verts:
-					#if uvvertex not in self.verts and G.PointInTriangle2D(uvvertex.co, self.verts[0].co, self.verts[1].co, self.verts[2].co):
-						#return uvface
-		#elif len(self.verts)==4:
-			#for uvface in others:
-				#for uvvertex in uvface.verts:
-					#if uvvertex not in self.verts and G.PointInQuad2D(uvvertex.co, self.verts[0].co, self.verts[1].co, self.verts[2].co, self.verts[3].co):
-						#return uvface
 		return None
 
 class Sticker(UVFace):
 	"""Sticker face"""
 	is_sticker=True
-	def __init__(self, uvedge, default_width=0.005, faces=[], other_face=None):
+	def __init__(self, uvedge, default_width=0.005, faces=list(), other_face=None):
 		"""Sticker is directly appended to the edge given by two UVVerts"""
 		#faces is a placeholder: it should contain all possibly overlaping faces
 		#other_face is a placeholder too: that should be the sticking target and this sticker must fit into it
@@ -1236,8 +1156,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3=uvedge.vb.co+len_b*edge*(M.Matrix(((cos_b, sin_b), (-sin_b, cos_b))))/edge.length
-		v4=uvedge.va.co+len_a*edge*(M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a))))/edge.length
+		v3 = uvedge.vb.co + M.Matrix(((cos_b, sin_b), (-sin_b, cos_b)))*edge * len_b/edge.length
+		v4 = uvedge.va.co + M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a)))*edge * len_a/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
@@ -1332,33 +1252,59 @@ class MakeUnfoldable(bpy.types.Operator):
 	bl_description = "Mark seams so that the mesh can be exported as a paper model"
 	bl_options = {'REGISTER', 'UNDO'}
 	edit = bpy.props.BoolProperty(name="", description="", default=False, options={'HIDDEN'})
-	priority_effect_convex = bpy.props.FloatProperty(name="Convex", description="Priority effect for convex edges", default=1, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_concave = bpy.props.FloatProperty(name="Concave", description="Priority effect for concave edges", default=1, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_last_uncut = bpy.props.FloatProperty(name="Last uncut", description="Priority effect for edges cutting of which would quicken the process", default=0.5, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_cut_end = bpy.props.FloatProperty(name="Cut End", description="Priority effect for edges on ends of a cut", default=0, soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_last_connecting = bpy.props.FloatProperty(name="Last connecting", description="Priority effect for edges whose cutting would produce a new island", default=-0.45, soft_min=-10, soft_max=1, subtype='FACTOR')
-	priority_effect_length = bpy.props.FloatProperty(name="Length", description="Priority effect of edge length (relative to object dimensions)", default=-0.2, soft_min=-10, soft_max=1, subtype='FACTOR')
+	priority_effect_convex = bpy.props.FloatProperty(name="Priority Convex", description="Priority effect for edges in convex angles", default=priority_effect["convex"], soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_concave = bpy.props.FloatProperty(name="Priority Concave", description="Priority effect for edges in concave angles", default=priority_effect["concave"], soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_on_cycle = bpy.props.FloatProperty(name="Priority On Cycle", description="Priority effect for edges on face cycles", default=priority_effect["on_cycle"], soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_length = bpy.props.FloatProperty(name="Priority Length", description="Priority effect of edge length", default=priority_effect["length"], soft_min=-10, soft_max=1, subtype='FACTOR')
 	
 	@classmethod
 	def poll(cls, context):
 		return context.active_object and context.active_object.type=="MESH"
+		
+	def draw(self, context):
+		layout = self.layout
+		layout.label(text="Edge Cutting Factors:")
+		col = layout.column(align=True)
+		col.label(text="Face Angle:")
+		col.prop(self.properties, "priority_effect_convex", text="Convex")
+		col.prop(self.properties, "priority_effect_concave", text="Concave")
+		layout.prop(self.properties, "priority_effect_on_cycle", text="Edges on Cycle")
+		layout.prop(self.properties, "priority_effect_length", text="Edge Length")
+	
 	def execute(self, context):
 		global priority_effect
 		props = self.properties
+		sce = bpy.context.scene
 		priority_effect['convex']=props.priority_effect_convex
 		priority_effect['concave']=props.priority_effect_concave
-		priority_effect['last_uncut']=props.priority_effect_last_uncut
-		priority_effect['cut_end']=props.priority_effect_cut_end
-		priority_effect['last_connecting']=props.priority_effect_last_connecting
+		priority_effect['on_cycle']=props.priority_effect_on_cycle
 		priority_effect['length']=props.priority_effect_length
 		orig_mode=context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
-		global area
-		area = context.area
-		unfolder=Unfolder(context.active_object)
+		display_islands = sce.io_paper_model_display_islands
+		sce.io_paper_model_display_islands = False
+
+		unfolder = Unfolder(context.active_object)
 		unfolder.prepare()
+
+		island_list = context.scene.island_list
+		while island_list:
+			#remove previously defined islands
+			island_list.remove(0)
+		for island in unfolder.mesh.islands:
+			#add islands to UI list and set default descriptions
+			list_item = island_list.add()
+			list_item.name = "Island ({} faces)".format(len(island.faces))
+			#add faces' IDs to the island
+			for uvface in island.faces:
+				face_list_item = list_item.faces.add()
+				face_list_item.id = uvface.face.index
+		sce.island_list_index = -1
+		list_selection_changed(sce, bpy.context)
+
 		unfolder.mesh.data.show_edge_seams=True
 		bpy.ops.object.mode_set(mode=orig_mode)
+		sce.io_paper_model_display_islands = display_islands
 		global twisted_quads
 		#if len(twisted_quads) > 0:
 		#	self.report(type="ERROR_INVALID_INPUT", message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
@@ -1378,7 +1324,7 @@ class ExportPaperModel(bpy.types.Operator):
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
-	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.001, soft_max=10, subtype="FACTOR")
+	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
 	unfolder=None
 	largest_island_ratio=0
 	
@@ -1395,13 +1341,17 @@ class ExportPaperModel(bpy.types.Operator):
 			return {"CANCELLED"}
 		except:
 			raise
-	
+	def get_scale_ratio(self):
+		return self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale
 	def invoke(self, context, event):
 		sce=context.scene
 		self.properties.bake_selected_to_active = sce.render.use_bake_selected_to_active
 		
 		self.unfolder=Unfolder(context.active_object)
 		self.unfolder.prepare(self.properties)
+		scale_ratio = self.get_scale_ratio()
+		if scale_ratio > 1:
+			self.properties.model_scale = 0.95/scale_ratio
 		wm = context.window_manager
 		wm.fileselect_add(self)
 		return {'RUNNING_MODAL'}
@@ -1415,7 +1365,7 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.prop(self.properties, "output_dpi")
 		layout.label(text="Model scale:")
 		layout.prop(self.properties, "model_scale")
-		scale_ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale
+		scale_ratio = self.get_scale_ratio()
 		if scale_ratio > 1:
 			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
 		elif scale_ratio > 0:
@@ -1465,94 +1415,140 @@ def menu_func(self, context):
 class VIEW3D_PT_paper_model(bpy.types.Panel):
 	bl_label = "Paper Model"
 	bl_space_type = "VIEW_3D"
-	bl_region_type = "UI"
-	handles = dict()
-	def display_quads(self, context):
-		import bgl, blf
-		perspMatrix = context.space_data.region_3d.perspective_matrix
-		perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [perspMatrix[i][j] for i in range(4) for j in range(4)])
-		bgl.glLoadIdentity()
-		bgl.glMatrixMode(bgl.GL_PROJECTION)
-		bgl.glLoadMatrixf(perspBuff)
-		
-		"""bgl.glColor4f(1,0.2,0,0.2)
-		blf.position(0, 1, 1, 1)
-		blf.aspect(0,0.005)
-		blf.size(0,12,150)
-		blf.draw(0, "Hello, world!")
-		blf.aspect(0, 1)"""
-		global lines, twisted_quads
-		for s, e in lines:
-			bgl.glBegin(bgl.GL_LINE_STRIP)
-			bgl.glColor4f(1,0.2,0,0.7)
-			bgl.glVertex3f(s[0], s[1], s[2])
-			bgl.glVertex3f(e[0], e[1], e[2])
-			
-			bgl.glEnd()
-		bgl.glEnable(bgl.GL_BLEND)
-		bgl.glBlendFunc (bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA);
-		bgl.glColor4f(1,0.4,0,0.3)
-		for quad in twisted_quads:
-			bgl.glBegin(bgl.GL_POLYGON)
-			for vertex in quad:
-				bgl.glVertex3f(vertex.co[0], vertex.co[1], vertex.co[2])
-			bgl.glEnd()
-
-	def display_labels(self, context):
-		import bgl, blf, mathutils
-		view_mat = context.space_data.region_3d.perspective_matrix
-		
-		global labels
-		mid_x = context.region.width/2.0
-		mid_y = context.region.height/2.0
-		width = context.region.width
-		height = context.region.height
-		bgl.glColor3f(1,1,0)
-		for position, label in labels.values():
-			position.resize_4d()
-			vec = view_mat * position
-			vec /= vec[3]
-			x = int(mid_x + vec[0]*width/2.0)
-			y = int(mid_y + vec[1]*height/2.0)
-			blf.position(0, x, y, 0)
-			blf.draw(0, label)
-	display_labels.handle = None
+	bl_region_type = "TOOLS"
 
 	def draw(self, context):
 		layout = self.layout
-		layout.prop(context.scene, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
-		"""global paper_model_handles
-		region=[region for region in context.area.regions if region.type=='WINDOW'][0]
-		for name in paper_model_handles:
-			value, mode = paper_model_handles[name]
-			property_name = "io_paper_model_"+name
-			layout.prop(context.scene, property_name, icon='RESTRICT_VIEW_OFF')
-			if value is None and getattr(context.scene, property_name):
-				paper_model_handles[name]=region.callback_add(getattr(self, name), (context,), mode), mode
-				context.area.tag_redraw()
-			elif value is not None and not getattr(context.scene, property_name):
-				region.callback_remove(value)
-				paper_model_handles[name]=None, mode
-				context.area.tag_redraw()"""
+		sce = context.scene
+		layout.operator("mesh.make_unfoldable")
+		box = layout.box()
+		box.label(text="{} island(s):".format(len(sce.island_list)))
+		box.template_list(sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+		layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
+		box.prop(sce, "io_paper_model_display_islands")#, icon='RESTRICT_VIEW_OFF')
+		sub = box.row()
+		sub.active = sce.io_paper_model_display_islands
+		sub.prop(sce, "io_paper_model_islands_alpha")
+		
+		island_list = sce.island_list
+		if sce.island_list_index >= 0 and len(island_list) > 0:
+			list_item = island_list[sce.island_list_index]
+			box.prop(list_item, "label")
+		layout.operator("export_mesh.paper_model")
 	
-def prop_changed(self, context):
+def display_islands(self, context):
+	import bgl
+	#TODO: save the vertex positions and don't recalculate them always
+	#TODO: don't use active object, but rather save the object itself
+	perspMatrix = context.space_data.region_3d.perspective_matrix
+	perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [perspMatrix[i][j] for i in range(4) for j in range(4)])
+	bgl.glLoadIdentity()
+	bgl.glMatrixMode(bgl.GL_PROJECTION)
+	bgl.glLoadMatrixf(perspBuff)
+	bgl.glEnable(bgl.GL_BLEND)
+	bgl.glBlendFunc (bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA);
+	bgl.glEnable(bgl.GL_POLYGON_OFFSET_FILL)
+	bgl.glPolygonOffset(0.0, -2.0) #offset in Zbuffer to remove flicker
+	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
+	bgl.glColor4f(1.0, 0.4, 0.0, self.io_paper_model_islands_alpha)
+	ob = bpy.context.active_object
+	mesh = ob.data
+	global highlight_faces
+	for face_id in highlight_faces:
+		face = mesh.faces[face_id]
+		bgl.glBegin(bgl.GL_POLYGON)
+		for vertex_id in face.vertices:
+			vertex = mesh.vertices[vertex_id]
+			co = vertex.co.copy()
+			co.resize_4d()
+			co = ob.matrix_world * co
+			co /= co[3]
+			bgl.glVertex3f(co[0], co[1], co[2])
+		bgl.glEnd()
+	bgl.glPolygonOffset(0.0, 0.0)
+	bgl.glDisable(bgl.GL_POLYGON_OFFSET_FILL)
+display_islands.handle = None
+
+def display_labels(self, context):
+	import bgl, blf, mathutils
+	view_mat = context.space_data.region_3d.perspective_matrix
+	
+	global labels
+	mid_x = context.region.width/2.0
+	mid_y = context.region.height/2.0
+	width = context.region.width
+	height = context.region.height
+	bgl.glColor3f(1,1,0)
+	for position, label in labels.values():
+		position.resize_4d()
+		vec = view_mat * position
+		vec /= vec[3]
+		x = int(mid_x + vec[0]*width/2.0)
+		y = int(mid_y + vec[1]*height/2.0)
+		blf.position(0, x, y, 0)
+		blf.draw(0, label)
+display_labels.handle = None
+
+def display_labels_changed(self, context):
+	"""Switch displaying labels on/off"""
 	region = [region for region in context.area.regions if region.type=='WINDOW'][0]
-	display_labels = VIEW3D_PT_paper_model.display_labels
 	if self.io_paper_model_display_labels:
-		display_labels.handle = region.callback_add(display_labels, (self, context), "POST_PIXEL")
+		if not display_labels.handle:
+			display_labels.handle = region.callback_add(display_labels, (self, context), "POST_PIXEL")
 	else:
-		region.callback_remove(display_labels.handle)
+		if display_labels.handle:
+			region.callback_remove(display_labels.handle)
+			display_labels.handle = None
+
+def display_islands_changed(self, context):
+	"""Switch highlighting islands on/off"""
+	region = [region for region in context.area.regions if region.type=='WINDOW'][0]
+	if self.io_paper_model_display_islands:
+		if not display_islands.handle:
+			display_islands.handle = region.callback_add(display_islands, (self, context), "POST_VIEW")
+	else:
+		if display_islands.handle:
+			region.callback_remove(display_islands.handle)
+			display_islands.handle = None
+
+def list_selection_changed(self, context):
+	"""Update the island highlighted in 3D View"""
+	global highlight_faces
+	if self.island_list_index >= 0:
+		list_item = self.island_list[self.island_list_index]
+		highlight_faces = [face.id for face in list_item.faces]
+	else:
+		highlight_faces = list()
+	"""
+	mesh = bpy.context.active_object.data
+	face_data = list()
+	for vertex_id in mesh.faces[face_id].vertices:
+		face_data.append(mesh.vertices[vertex_id].co)
+	highlight_faces.append(face_data)
+	"""
+def label_changed(self, context):
+	self.name = "{} ({} faces)".format(self.label, len(self.faces))
+
+class FaceList(bpy.types.PropertyGroup):
+	id = bpy.props.IntProperty(name="Face ID")
+class IslandList(bpy.types.PropertyGroup):
+	faces = bpy.props.CollectionProperty(type=FaceList, name="Faces", description="Faces belonging to this island")
+	label = bpy.props.StringProperty(name="Label", description="*out of order* Label on this island", default="No Label", update=label_changed)
+bpy.utils.register_class(FaceList)
+bpy.utils.register_class(IslandList)
 
 def register():
 	bpy.utils.register_module(__name__)
 
-	bpy.types.Scene.io_paper_model_display_labels = bpy.props.BoolProperty(attr="io_paper_model_display_labels", name="Display labels", update=prop_changed)
-	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="*not working* Highlight tilted quad faces that would be distorted by export")
+	bpy.types.Scene.io_paper_model_display_labels = bpy.props.BoolProperty(name="Display edge priority", description="*debug property*", update=display_labels_changed)
+	bpy.types.Scene.io_paper_model_display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
+	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
+	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="*out of order* Highlight tilted quad faces that would be distorted by export")
+	bpy.types.Scene.island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
+	bpy.types.Scene.island_list_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, update=list_selection_changed)
 	bpy.types.INFO_MT_file_export.append(menu_func)
-	#bpy.types.register(VIEW3D_PT_paper_model)
 
 def unregister():
-#	bpy.types.unregister(VIEW3D_PT_paper_model)
 	bpy.utils.unregister_module(__name__)
 	bpy.types.INFO_MT_file_export.remove(menu_func)
 
