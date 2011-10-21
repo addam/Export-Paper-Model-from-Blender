@@ -26,10 +26,10 @@
 bl_info = {
 	"name": "Convert Mesh to Armature",
 	"author": "Addam Dominec",
-	"version": (0,2),
-	"blender": (2, 5, 7),
-	"api": 36757,
-	"location": "Object > Convert > To Armature",
+	"version": (0,3),
+	"blender": (2, 6, 0),
+	"api": 41178,
+	"location": "Object > Convert to Armature",
 	"warning": "",
 	"description": "Generate an armature with a single bone controlling each face",
 	"category": "Mesh",
@@ -120,32 +120,42 @@ def main(context):
 	context.scene.objects.active = armature_object
 	bpy.ops.object.mode_set(mode='EDIT')
 	angles = dict() #bone -> folding angle
-	queue = [(None, mesh.faces[mesh.faces.active], None, None)] #Edge, face and a bone connecting these two
+	queue = [(None, mesh.faces[mesh.faces.active], None, None, None)] #Edge, face and a bone connecting these two, parent in the tree and (optionally) parent FGon's group
 	while queue:
-		edge, face, parent_bone, parent_face = queue.pop()
+		edge, face, parent_bone, parent_face, vgroup = queue.pop()
 		if face in visited_faces:
 			loops += 1 #We went to the same face from two different directions
 			continue
 		visited_faces.add(face)
-		group = mesh_object.vertex_groups.new("Face_%i" % face.index) #Create a vertex group for this face
-		group.add(face.vertices, 1, 'ADD')
-		if edge:
-			edge_vector = mesh.vertices[edge.vertices[0]].co - mesh.vertices[edge.vertices[1]].co
-			head = vertex_avg(mesh, edge.vertices)
-			tail = face.center
-			tail = tail - (tail-head).project(edge_vector)
-		else: #root bone
-			head = face.center.copy()
-			head.z -= 1
-			tail = face.center
-		bone = add_bone(group.name, armature, head, tail)
-		bone.align_roll(face.normal)
-		bone.parent = parent_bone
-		if edge: #all except the root bone
-			depth = bone.vector.dot(parent_face.normal)/parent_face.normal.length
-			angles[bone.name] = asin(depth/bone.vector.length)
+		if not vgroup:
+			vgroup = mesh_object.vertex_groups.new("Face_%i" % face.index) #Create a vertex group for this face
+			vgroup.add(face.vertices, 1, 'ADD')
+			if edge:
+				edge_vector = mesh.vertices[edge.vertices[0]].co - mesh.vertices[edge.vertices[1]].co
+				head = vertex_avg(mesh, edge.vertices)
+				tail = face.center
+				tail = tail - (tail-head).project(edge_vector)
+			else: #root bone
+				head = face.center.copy()
+				head.z -= 1
+				tail = face.center
+			bone = add_bone(vgroup.name, armature, head, tail)
+			bone.align_roll(face.normal)
+			bone.parent = parent_bone
+			if edge: #all except the root bone
+				depth = bone.vector.dot(parent_face.normal)/parent_face.normal.length
+				clamped = min(1, max(-1, depth/bone.vector.length))
+				try:
+					angles[bone.name] = asin(clamped)
+				except ValueError:
+					print("Depth: {}, |vector|: {}".format(depth, bone.vector.length))
+					angles[bone.name] = 0
+		else:
+			vgroup.add(face.vertices, 1, 'ADD')
+			bone = parent_bone
 		for next_edge in get_edges(face, exclude=edge):
-			queue += zip(repeat(next_edge), get_faces(next_edge, exclude=face), repeat(bone), repeat(face))
+			fgon_vgroup = vgroup if next_edge.is_fgon else None
+			queue += zip(repeat(next_edge), get_faces(next_edge, exclude=face), repeat(bone), repeat(face), repeat(fgon_vgroup))
 	bpy.ops.object.mode_set()
 	#Set transform locks (must be done in object mode)
 	pose_bone = armature_object.pose.bones[0]
@@ -165,6 +175,7 @@ class OBJECT_OT_convert_to_armature(bpy.types.Operator):
 	'''Generate an armature with a single bone controlling each face. The mesh must be a tree-like structure for this to make sense. Active face is used for main bone.'''
 	bl_idname = "object.convert_to_armature"
 	bl_label = "Convert to Armature"
+	bl_description = "Generate an armature from the active mesh"
 
 	@classmethod
 	def poll(cls, context):
