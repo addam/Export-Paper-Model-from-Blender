@@ -26,8 +26,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0,7),
-	"blender": (2, 5, 6),
-	"api": 35302,
+	"blender": (2, 5, 9),
+	"api": 39781,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the selected mesh",
@@ -58,7 +58,7 @@ twisted_quads = list()
 labels = dict()
 highlight_faces = list()
 
-strf="{:.1f}".format
+strf="{:.12f}".format
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
 	if a == 0:
@@ -102,6 +102,11 @@ def pairs(sequence):
 		yield previous, this
 		previous=this
 	yield this, first
+def fitting_matrix(v1, v2):
+	"""Matrix that rotates v1 to the same direction as v2"""
+	return (1/pow(v1.length,2))*M.Matrix((
+		(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
+		(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
 def z_up_matrix(n):
 	"""Get a rotation matrix that aligns given vector upwards."""
 	b=n.xy.length
@@ -128,10 +133,10 @@ class Unfolder:
 	def prepare(self, properties=None):
 		"""Something that should be part of the constructor - TODO """
 		self.mesh.cut_obvious()
-		if not self.mesh.is_cut_enough():
-			self.mesh.generate_cuts()
-		self.mesh.generate_islands()
-		self.mesh.fix_overlaps()
+		#if not self.mesh.is_cut_enough():
+		self.mesh.generate_cuts()
+		#self.mesh.generate_islands()
+		#self.mesh.fix_overlaps()
 		self.mesh.finalize_islands(False)
 		self.mesh.save_uv()
 
@@ -245,21 +250,52 @@ class Mesh:
 		#Silently check that all quads are flat
 		for index in self.faces:
 			self.faces[index].check_twisted()
-		edges_connecting = [self.edges[edge_id] for edge_id in self.edges if not self.edges[edge_id].is_cut()]
-		if not edges_connecting:
+		# check for edges that are cut permanently
+		edges = list()
+		edges = [self.edges[edge_id] for edge_id in self.edges if not self.edges[edge_id].is_main_cut]
+		if not edges:
 			return True
-		average_length = sum(edge.length for edge in edges_connecting) / len(edges_connecting)
-		for edge in edges_connecting:
+		for edge in edges:
+			edge.is_main_cut = True
+		
+		global differences
+		differences = list()
+
+		average_length = sum(edge.length for edge in edges) / len(edges)
+		for edge in edges:
 			edge.generate_priority(average_length)
+		edges.sort(key = lambda edge:edge.priority, reverse=False)
+		self.islands = set(map(Island, self.faces.values()))
+		for edge in edges:
+			face_a, face_b = edge.faces[:2]
+			island_a, island_b = (face_a.uvface.island, face_b.uvface.island) if (len(face_a.uvface.island.faces) > len(face_b.uvface.island.faces)) \
+					else (face_b.uvface.island, face_a.uvface.island)
+			if island_a is not island_b:
+				if island_a.join(island_b, edge):
+					self.islands.remove(island_b)
+		differences.sort(reverse=True)
+		if differences[0][0]>1+1e-5:
+			print ("""Papermodel warning: there are non-flat faces, which will be deformed in the output image.
+			Showing first five values (normally they should be very close to 1.0):""")
+			for diff in differences[0:5]:
+				print ("{:.5f}".format(diff[0]))
+		"""
 		#Iteratively cut one edge after another until it is enough
 		while edges_connecting and not self.is_cut_enough(do_update_priority=True):
 			edges_connecting.sort(key = lambda edge: edge.priority)
 			edge_cut = edges_connecting.pop()
 			edge_cut.cut()
+		"""
 		return True
-	
+	#DEBUG
+	def dump(self):
+		for island in self.islands:
+			print("Island:")
+			for uvvertex in island.verts:
+				print(uvvertex)
+		
 	def generate_islands(self):
-		"""Divide faces into several Islands."""
+		"""DELETE ME Divide faces into several Islands."""
 		def connected_faces(border_edges, inner_faces):
 			outer_faces=list()
 			for edge in border_edges:
@@ -542,18 +578,6 @@ class Vertex:
 	def __repr__(self):
 		return "Vertex(id={}...)".format(self.index)
 		
-	def is_in_cut(self, needle):
-		"""Test if both vertices are parts of the same cut tree"""
-		tree_self=None
-		for edge_self in self.edges:
-			if edge_self.is_cut():
-				for edge_needle in needle.edges:
-					if edge_needle.is_cut():
-						return edge_self.cut_tree is edge_needle.cut_tree
-				else:
-					return False
-				break
-		return False #just in case
 class Edge:
 	"""Wrapper for BPy Edge"""
 	def __init__(self, edge, mesh, matrix=1):
@@ -566,6 +590,7 @@ class Edge:
 		self.angles=dict()
 		self.other_face=dict() #FIXME: this should be rather a function, damn this mess
 		self.uvedges=list()
+
 		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
 		self.va.edges.append(self)
@@ -739,10 +764,8 @@ class Face:
 	def __repr__(self):
 		return "Face(id="+str(self.index)+"...)"
 class Island:
-	def __init__(self, faces=None, origin=None, uvfaces=None):
-		"""Find an island in the given set of Faces or UVFaces.
-		Note: initializing removes one island out of the given list of faces."""
-		#TODO: removing from the given list is a bit clumsy
+	def __init__(self, face=None):
+		"""Create an Island from a single Face"""
 		self.faces=list()
 		self.edges=list()
 		self.verts=set()
@@ -753,49 +776,258 @@ class Island:
 		self.is_placed=False
 		self.bounding_box=M.Vector((0,0))
 		
-		if uvfaces: #Construct from given UVFaces (typically when splitting an island into two)
-			self.faces = list(uvfaces)
-			for uvface in self.faces:
-				self.verts.update(set(uvface.verts))
-				self.edges += uvface.edges
-				for uvedge in uvface.edges:
-					uvedge.island = self
-				uvface.island = self
-		else: #Take one island from given list of Faces
-			if not origin:
-				#first, find where to begin
-				for face in faces:
-					uncut_edge_count=sum(not edge.is_cut(face) for edge in face.edges)
-					if uncut_edge_count==1:
-						origin=face
-						break
-					if uncut_edge_count==0: #single-face island
-						faces.remove(face)
-						self.add(UVFace(face, self))
-						return
-			if type(origin) is UVFace:
-				self.add(origin)
-				origin=origin.face
+		if face:
+			self.add(UVFace(face, self))
+		
+		self.boundary_sorted = list(self.edges)
+		self.boundary_sorted.sort()		
+
+		"""DELETE ME
+		self.faces = list(uvfaces)
+		for uvface in self.faces:
+			self.verts.update(set(uvface.verts))
+			self.edges += uvface.edges
+			for uvedge in uvface.edges:
+				uvedge.island = self
+			uvface.island = self"""
+	def join(self, other, edge:Edge) -> bool:
+		"""
+		Try to join other island on given edge
+		Returns False if they would overlap
+		"""
+		
+		class Intersection(Exception):
+			pass
+			
+		def is_below(self: UVEdge, other: UVEdge, verbose=False, epsilon=1e-15):
+			#FIXME: estimate the epsilon based on input vectors
+			if self is other: #or (self.va.co==other.vb.co and self.vb.co == other.va.co):
+				return False
+			if self.max <= other.min or self.min >= other.max:
+				#DEBUG
+				if verbose:
+					print("compare {}, {}: Whatever.".format(self, other))
+				return other.min < self.min
+			cross_b1 = (self.max - self.min).cross(other.min - self.min).z
+			cross_b2 = (self.max - self.min).cross(other.max - self.min).z
+			if abs(cross_b1) < epsilon:
+				cross_b1 = 0.0
+			if abs(cross_b2) < epsilon:
+				cross_b2 = 0.0
+			if cross_b1 >= 0 and cross_b2 >= 0:
+				#DEBUG
+				if verbose:
+					print("{} is 1 above {} ({}, {})".format(other, self, cross_b1, cross_b2))
+				return True
+			if cross_b1 <= 0 and cross_b2 <= 0:
+				if verbose:
+					print("{} is 2 above {} ({}, {}; {}, {})".format(self, other, cross_b1, cross_b2, self.min is other.max, self.max is other.min))
+				return False
+			cross_a1 = (other.max - other.min).cross(self.min - other.min).z
+			cross_a2 = (other.max - other.min).cross(self.max - other.min).z
+			if abs(cross_a1) < epsilon:
+				cross_a1 = 0.0
+			if abs(cross_a2) < epsilon:
+				cross_a2 = 0.0
+			if cross_a1 <= 0 and cross_a2 <= 0:
+				if verbose:
+					print("{} is 4 above {} ({}, {})".format(other, self, cross_a1, cross_a2))
+				return True
+			if cross_a1 >= 0 and cross_a2 >= 0:
+				if verbose:
+					print("{} is 3 above {} ({}, {})".format(self, other, cross_a1, cross_a2))
+				return False
+			if verbose:
+				print ("{} intersects {}".format(self, other))
+			raise Intersection()
+
+		# DEBUG
+		def is_below_lagrange(self: UVEdge, other:UVEdge, verbose = False):
+			if self is other:
+				return False
+			if self.max <= other.min or self.min >= other.max:
+				if self.min == other.min:
+					print ("=====================================================", end="")
+				print(".", end="")
+				return other.min < self.min
+			if self.min > other.min or other.max.co.x - other.min.co.x == 0:
+				is_inverse = True
+				self, other = other, self
 			else:
-				self.add(UVFace(origin, self))
-			if faces:
-				faces.remove(origin)
-			flood_boundary=list()
-			#Create the initial wave
-			for edge in origin.edges:
-				if not edge.is_cut(origin):
-					flood_boundary.append((origin, edge.other_face[origin], edge))
-			#Spread the flood
-			while len(flood_boundary)>0:
-				previous_face, current_face, previous_edge=flood_boundary.pop()
-				self.add(UVFace(current_face, self, previous_edge))
-				if faces:
-					faces.remove(current_face)
-				for edge in current_face.edges:
-					if edge is not previous_edge and not edge.is_cut(current_face):
-						flood_boundary.append((current_face, edge.other_face[current_face], edge))
+				is_inverse = False
+			if other.max.co.x - other.min.co.x == 0:
+				return is_inverse if other.min < self.min else not is_inverse
+			x, y = self.min.co[0:2] if self.min != other.min else self.max.co[0:2]
+			value = (other.min.co.y * (other.max.co.x-x) + other.max.co.y * (x-other.min.co.x)) / (other.max.co.x - other.min.co.x)
+			return is_inverse if value < y else not is_inverse
+		
+		class Sweepline:
+			def __init__(self):
+				self.root = TreeNode(list())
+				self.count = 0
+		
+			def add(self, item, cmp = is_below):
+				node = self.root
+				while node.split_value:
+					node = node.children[0 if cmp(item, node.split_value) else 1]
+				node.children.insert(node.index(item), item)
+				
+				#DEBUG
+				if len(node.children) > TreeNode.max_children:
+					print("Added", item)
+					for a, edge_a in enumerate(node.children):
+						print ("{}: {} min: {}".format(a, edge_a, edge_a.min))
+					for a in range(len(node.children)):
+						print (a, end="  ")
+					print()
+					for a, edge_a in enumerate(node.children):
+						for b, edge_b in enumerate(node.children):
+							if a<b:
+								c1 = is_below_lagrange(edge_a, edge_b)
+								c2 = is_below_lagrange(edge_b, edge_a)
+								print ("!" if c1 and c2 else "+" if c1 else "-" if c2 else "0", end="")
+								print ("1" if edge_a.va is edge_b.va else "2" if edge_a.va is edge_b.vb else "3" if edge_a.vb is edge_b.va else "4" if edge_a.vb is edge_b.vb else " ", end=" ")
+							else:
+								print ("   ", end="")
+						print(a)
+				
+				if len(node.children) > TreeNode.max_children:
+					split_index = TreeNode.max_children//2
+					left = TreeNode(node.children[:split_index])
+					right = TreeNode(node.children[split_index:])
+					node.split_value = node.children[split_index]
+					node.children = [left, right]
+		
+			def remove(self, item, cmp = is_below):
+				parent = None
+				node = self.root
+				while node.split_value:
+					parent = node
+					node = node.children[0 if cmp(item, node.split_value) else 1]
+				node.children.remove(item)
+				if parent and not node.children:
+					parent.children.remove(node)
+					parent.split_value = parent.children[0].split_value
+					parent.children = parent.children[0].children
+				elif parent and not parent.children[0].split_value and not parent.children[1].split_value and \
+						len(parent.children[0].children) + len(parent.children[1].children) < TreeNode.max_children:
+					parent.split_value = None
+					parent.children = parent.children[0].children + parent.children[1].children
+		
+			def neighbor_check(self, item, cmp = is_below):
+				left = self.root
+				right = None
+				while left.split_value:
+					if cmp(item, left.split_value):
+						right = left
+						left = left.children[0]
+					else:
+						left = left.children[1]
+				index = left.index(item)
+				if index == len(left.children):
+					if right:
+						right = right.children[1]
+						while type(right) is TreeNode:
+							right = right.children[0]
+				else:
+					right = left.children[index]
+				left = left.children[index-1] if index > 0 else None
+				#DEBUG
+				if left and (not cmp(left, item) or not is_below_lagrange(left, item)):
+					print (left.va, left.vb, item.va, item.vb, cmp(left, item, True), cmp(item, left), is_below_lagrange(left, item), is_below_lagrange(item, left))
+				#assert not left or cmp(left, item)
+				if right and (not cmp(item, right) or not is_below_lagrange(item, right)):
+					print (item.va, item.vb, right.va, right.vb, cmp(item, right, True), cmp(right, item), is_below_lagrange(item, right), is_below_lagrange(right, item))
+				#assert not right or cmp(item, right)
+		
+		class TreeNode:
+			max_children = 8
+			def __init__(self, seq):
+				self.children = seq
+				self.split_value = None
+			def index(self, item, i = 0, cmp=is_below):
+				while i < len(self.children) and cmp(self.children[i], item):
+					i += 1
+				return i
+
+		#find edge in other and in self
+		for uvedge in edge.uvedges:
+			if uvedge in self.edges:
+				uvedge_a = uvedge
+			elif uvedge in other.edges:
+				uvedge_b = uvedge
+		assert uvedge_a is not uvedge_b
+		
+		#determine rotation
+		rot = fitting_matrix(uvedge_b.va - uvedge_b.vb, uvedge_a.vb - uvedge_a.va)
+		trans = uvedge_a.vb.co - rot*uvedge_b.va.co
+		#extract and transform island_b's boundary
+		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
+		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
+		phantoms[uvedge_b.va] = uvedge_a.vb
+		phantoms[uvedge_b.vb] = uvedge_a.va
+		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted]
+		#create event list
+		sweepline = Sweepline()
+		events_add = boundary_other
+		events_add.sort(reverse = True)
+		events_remove = list(boundary_other)
+		events_remove.sort(key = lambda uvedge: uvedge.max, reverse = True)
+		try:
+			for uvedge in self.boundary_sorted:
+				while events_remove and events_remove[-1].max < uvedge.min:
+					while events_add and events_add[-1].min <= events_remove[-1].max:
+						sweepline.add(events_add.pop())
+					sweepline.remove(events_remove.pop())
+				while events_add and events_add[-1].min <= uvedge.min:
+					sweepline.add(events_add.pop())
+				sweepline.neighbor_check(uvedge)
+		except Intersection:
+			return False
+		
+		#remove edge from boundary
+		self.boundary_sorted.remove(uvedge_a)
+		other.boundary_sorted.remove(uvedge_b)
+		edge.is_main_cut = False
+		# apply transformation to the vertices
+
+		# join other's data on self
+		self.verts.update(phantoms.values())
+		for uvedge in other.edges:
+			uvedge.island = self
+			uvedge.va = phantoms[uvedge.va]
+			uvedge.vb = phantoms[uvedge.vb]
+			uvedge.min, uvedge.max = (uvedge.va, uvedge.vb) if (uvedge.va < uvedge.vb) else (uvedge.vb, uvedge.va)
+		self.edges.extend(other.edges)
+
+		# DEBUG:
+		for uvedge in other.boundary_sorted:
+			assert uvedge in other.edges
+		verts_from_edges = set()
+		for uvedge in self.edges:
+			verts_from_edges.add(uvedge.va)
+			verts_from_edges.add(uvedge.vb)
+		for va in verts_from_edges:
+			for vb in verts_from_edges:
+				if va.vertex.index == vb.vertex.index and (va.co-vb.co).length < 1e-3 and va is not vb:
+					print ("-----------------------------------------------Not equal:", va, vb)
+		if verts_from_edges != self.verts:
+			print ("Verts:", self.verts)
+			print ("Difference:", verts_from_edges - self.verts)
+			print ("UVEdge A: {}, UVEdge B: {}".format(uvedge_a, uvedge_b))
+			print ("Edges ({}):".format(len(self.edges)), self.edges)
+
+		for uvface in other.faces:
+			uvface.island = self
+			uvface.verts = [phantoms[uvvertex] for uvvertex in uvface.verts]
+			uvface.uvvertex_by_id = {index: phantoms[uvvertex] for index, uvvertex in uvface.uvvertex_by_id.items()}
+		self.faces.extend(other.faces)
+		self.boundary_sorted.extend(other.boundary_sorted)
+		self.boundary_sorted.sort()
+		return True
+
 	def add(self, uvface):
-		self.verts.update(set(uvface.verts))
+		self.verts.update(uvface.verts) #FIXME: why isn't uvface.verts a set directly?
 		if uvface.is_sticker:
 			self.stickers.append(uvface)
 		else:
@@ -950,44 +1182,54 @@ class UVVertex:
 			self.co=(M.Vector(vector)).xy
 			self.vertex=vertex
 	def __hash__(self):
-		#quick and dirty hack for usage in sets
 		if self.vertex:
 			return self.vertex.index
 		else:
-			#DEBUG
-			return 1#int(hash(self.co.x)+hash(self.co.y))
-	def __eq__(self, other):
-		#DEBUG
-		#self.vertex==other.vertex and (self.co-other.co).length<1
-		return self is other
-	def __ne__(self, other):
-		return not self == other
+			return int(hash(self.co.x)+hash(self.co.y))
+	def __sub__(self, other):
+		return self.co - other.co
 	def __str__(self):
-		return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
+		if self.vertex:
+			return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
+		else:
+			return "UV * ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
 	def __repr__(self):
 		return str(self)
+	def __eq__(self, other):
+		#return self.vertex==other.vertex and self.co == other.co #(self.co-other.co).length<1
+		return (self is other) or (self.co.x == other.co.x and self.co.y == other.co.y)
+	def __ne__(self, other):
+		return not self == other
+	def __lt__(self, other):
+		return self.co.x < other.co.x or (self.co.x == other.co.x and self.co.y < other.co.y)
+	def __le__(self, other):
+		return (self is other) or (self.co.x < other.co.x) or (self.co.x == other.co.x and self.co.y <= other.co.y)
+	def __ge__(self, other):
+		return (self is other) or (self.co.x > other.co.x) or (self.co.x == other.co.x and self.co.y >= other.co.y)
+
 class UVEdge:
 	"""Edge in 2D"""
-	def __init__(self, vertex1:UVVertex, vertex2:UVVertex, island:Island, uvface, edge:Edge=None):
-		self.va=vertex1
-		self.vb=vertex2
-		self.island=island
-		island.edges.append(self)
+	def __init__(self, vertex1:UVVertex, vertex2:UVVertex, island:Island, uvface=None, edge:Edge=None):
+		self.va = vertex1
+		self.vb = vertex2
+		self.min, self.max = (vertex1, vertex2) if (vertex1 < vertex2) else (vertex2, vertex1)
+		self.island = island
 		if edge:
-			self.edge=edge
+			self.edge = edge
 			edge.uvedges.append(self)
-		#Every UVEdge is attached to only one UVFace. They are doubled, if needed, because they both have to point clockwise around their faces
-		self.uvface=uvface
+		#Every UVEdge is attached to only one UVFace. UVEdges are doubled as needed, because they both have to point clockwise around their faces
+		self.uvface = uvface
 	def __lt__(self, other):
-		if type(other) is UVEdge:
-			return self.edge.index < other.edge.index
-		else:
-			return False
-	def __gt__(self, other):
-		if type(other) is UVEdge:
-			return self.edge.index > other.edge.index
-		else:
-			return True
+		return self.min < other.min
+	def __le__(self, other):
+		return self.min <= other.min
+	def __str__(self):
+		#return "({} - {})".format(self.min, self.max)
+		return "({} - {})".format(self.va, self.vb)
+	def __repr__(self):
+		#return "({} - {})".format(self.min, self.max)
+		return str(self)
+		
 
 class UVFace:
 	"""Face in 2D"""
@@ -1025,7 +1267,9 @@ class UVFace:
 			edge_by_verts[(edge.va.index, edge.vb.index)]=edge
 			edge_by_verts[(edge.vb.index, edge.va.index)]=edge
 		for va, vb in pairs(self.verts):
-			self.edges.append(UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.index, vb.vertex.index)]))
+			uvedge = UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.index, vb.vertex.index)])
+			self.edges.append(uvedge)
+			island.edges.append(uvedge)
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
 		#DEBUG:
 		self.check("construct")
@@ -1070,11 +1314,6 @@ class UVFace:
 		"""Attach this face so that it sticks onto its neighbour by the given edge (thus forgetting two verts)."""
 		if not edge.va.index in self.uvvertex_by_id or not edge.vb.index in self.uvvertex_by_id:
 			raise ValueError("Self.verts: "+str([index for index in self.uvvertex_by_id])+" Edge.verts: "+str([edge.va.index, edge.vb.index]))
-		def fitting_matrix(v1, v2):
-			"""Matrix that rotates v1 to the same direction as v2"""
-			return (1/pow(v1.length,2))*M.Matrix((
-				(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
-				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
 		other_uvface = edge.other_face[self.face].uvface
 		this_edge_vector = self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
 		other_edge_vector = other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
@@ -1211,11 +1450,13 @@ class SVG:
 					rot = M.Matrix.Rotation(island.angle, 2)
 					#debug: bounding box
 					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
+					#FIXME: join a list of strings instead. This sucks.
 					data_outer = data_convex = data_concave = data_stickers = ""
 					for uvedge in island.edges:
 						data_uvedge = "\nM " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in [uvedge.va, uvedge.vb]])
 						#FIXME: The following clause won't return correct results for uncut edges with more than two faces connected
 						if uvedge.edge.is_cut(uvedge.uvface.face):
+							assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer += data_uvedge
 						else:
 							if uvedge.va.vertex.index > uvedge.vb.vertex.index: #each edge is in two opposite-oriented variants; we want to add each only once
@@ -1227,7 +1468,7 @@ class SVG:
 					#for sticker in island.stickers: #Stickers would be all in one path
 					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
 					#if data_stickers: f.write("<path class='sticker' d='"+data_stickers+"'/>")
-					if len(island.stickers) > 0:
+					if island.stickers:
 						f.write("<g>")
 						for sticker in island.stickers: #Stickers are separate paths in one group
 							f.write("<path class='sticker' d='M " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts]) + " Z'/>")
@@ -1335,10 +1576,10 @@ class ExportPaperModel(bpy.types.Operator):
 	def execute(self, context):
 		try:
 			self.unfolder.save(self.properties)
-			return {"FINISHED"}
+			return {'FINISHED'}
 		except UnfoldError as error:
-			self.report(type="ERROR_INVALID_INPUT", message=error.args[0])
-			return {"CANCELLED"}
+			self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+			return {'CANCELLED'}
 		except:
 			raise
 	def get_scale_ratio(self):
