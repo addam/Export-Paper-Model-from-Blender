@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# mesh_unfold.py Copyright (C) 2010, Addam Dominec
+# io_export_paper_model.py
 #
 # Unfolds the given mesh into a flat net and creates a print-ready document with it
 #
@@ -26,8 +26,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0,7),
-	"blender": (2, 5, 9),
-	"api": 39781,
+	"blender": (2, 6, 0),
+	"api": 41178,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the selected mesh",
@@ -51,14 +51,14 @@ pi=3.141592653589783
 priority_effect={
 	'convex':0.5,
 	'concave':1,
-	'on_cycle':1,
 	'length':-0.05}
 lines = list()
 twisted_quads = list()
 labels = dict()
 highlight_faces = list()
 
-strf="{:.12f}".format
+strf="{:.3f}".format
+
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
 	if a == 0:
@@ -67,6 +67,7 @@ def sign(a):
 		return -1
 	else:
 		return 1
+
 def vectavg(vectlist):
 	"""Vector average of given list."""
 	if len(vectlist)==0:
@@ -83,6 +84,7 @@ def vectavg(vectlist):
 		for vect in vectlist:
 			vect_sum+=vect
 	return vect_sum/vectlist.__len__()
+
 def angle2d(direction, unit_vector=M.Vector((1,0))):
 	"""Get the view angle of point from origin."""
 	if direction.length == 0.0:
@@ -94,6 +96,7 @@ def angle2d(direction, unit_vector=M.Vector((1,0))):
 	if direction[1]<0:
 		angle=2*pi-angle #hack for angles greater than pi
 	return angle
+
 def pairs(sequence):
 	"""Generate consequent pairs throughout the given sequence; at last, it gives elements last, first."""
 	i=iter(sequence)
@@ -102,11 +105,13 @@ def pairs(sequence):
 		yield previous, this
 		previous=this
 	yield this, first
+
 def fitting_matrix(v1, v2):
 	"""Matrix that rotates v1 to the same direction as v2"""
 	return (1/pow(v1.length,2))*M.Matrix((
 		(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
 		(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
+
 def z_up_matrix(n):
 	"""Get a rotation matrix that aligns given vector upwards."""
 	b=n.xy.length
@@ -133,11 +138,8 @@ class Unfolder:
 	def prepare(self, properties=None):
 		"""Something that should be part of the constructor - TODO """
 		self.mesh.cut_obvious()
-		#if not self.mesh.is_cut_enough():
 		self.mesh.generate_cuts()
-		#self.mesh.generate_islands()
-		#self.mesh.fix_overlaps()
-		self.mesh.finalize_islands(False)
+		self.mesh.finalize_islands()
 		self.mesh.save_uv()
 
 	def save(self, properties):
@@ -165,6 +167,7 @@ class Unfolder:
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
+	
 	def __init__(self, mesh, matrix):
 		global lines, twisted_quads
 		self.verts=dict()
@@ -192,55 +195,9 @@ class Mesh:
 		count=0
 		for i in self.edges:
 			edge = self.edges[i]
-			if not edge.is_cut() and (edge.data.use_seam or len(edge.faces)<2): #NOTE: Here is one of the rare cases when using the original BPy data (fuck this.)
+			if not edge.is_cut() and (edge.data.use_seam or len(edge.faces)<2): #NOTE: Here is one of the rare cases when using the original BPy data
 				edge.cut()
 				count += 1
-	
-	def is_cut_enough(self, do_update_priority=False):
-		"""Check for loops in the net of connected faces (that indicates the net is not unfoldable)."""
-		cut_enough = True
-		remaining_faces = set(self.faces.values())
-		while remaining_faces:
-			#traverse this wanna-be island depth-first, marking all cycles of faces still connected
-			first_face = remaining_faces.pop() #a seed to start from
-			stack = [(first_face, None)]
-			remaining_faces.add(first_face)
-			parents = dict()
-			path = dict() #loop counts for each node (i.e. face)
-			while stack:
-				face, back_edge = stack.pop()
-				if face not in path:
-					#diving deeper into the tree
-					path[face] = 0
-					stack.append((face, back_edge)) #mark a return path
-					for edge in face.edges:
-						if edge is not back_edge and not edge.is_cut(face):
-							neighbour = edge.other_face[face]
-							if neighbour not in remaining_faces:
-								pass
-							elif neighbour in path:
-								if parents.get(face) is not neighbour:
-									#We've just found a cycle
-									if not do_update_priority:
-										return False
-									edge.set_cycle(True)
-									cut_enough = False
-									path[face] += 1
-									path[neighbour] -= 1
-							else:
-								parents[neighbour] = face
-								stack.append((neighbour, edge))
-				elif face in remaining_faces:
-					#returning upwards
-					parent = parents.get(face)
-					if parent and do_update_priority:
-						path[parent] += path[face]
-						if path[face] > 0:
-							back_edge.set_cycle(True)
-						else:
-							back_edge.set_cycle(False)
-					remaining_faces.remove(face)
-		return cut_enough
 	
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
@@ -279,20 +236,7 @@ class Mesh:
 			Showing first five values (normally they should be very close to 1.0):""")
 			for diff in differences[0:5]:
 				print ("{:.5f}".format(diff[0]))
-		"""
-		#Iteratively cut one edge after another until it is enough
-		while edges_connecting and not self.is_cut_enough(do_update_priority=True):
-			edges_connecting.sort(key = lambda edge: edge.priority)
-			edge_cut = edges_connecting.pop()
-			edge_cut.cut()
-		"""
 		return True
-	#DEBUG
-	def dump(self):
-		for island in self.islands:
-			print("Island:")
-			for uvvertex in island.verts:
-				print(uvvertex)
 		
 	def generate_islands(self):
 		"""DELETE ME Divide faces into several Islands."""
@@ -327,18 +271,6 @@ class Mesh:
 		for edge in self.edges.values():
 			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
 	
-	def fix_overlaps(self):
-		"""Split all self-overlapping Islands as needed"""
-		remaining_islands = list(self.islands)
-		while len(remaining_islands) > 0:
-			island = remaining_islands.pop()
-			uvfaces = island.get_overlap()
-			if uvfaces:
-				island_parts = island.split(*uvfaces)
-				self.islands.remove(island)
-				self.islands += island_parts
-				remaining_islands += island_parts #check the new ones too
-	
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
@@ -356,7 +288,7 @@ class Mesh:
 				for additional_uvedge in edge.uvedges[2:]:
 					additional_uvedge.island.add(Sticker(additional_uvedge, default_width))
 	
-	def finalize_islands(self, do_split_islands=True, scale_factor=1):
+	def finalize_islands(self, scale_factor=1):
 		for island in self.islands:
 			island.apply_scale(scale_factor)
 			island.generate_bounding_box()
@@ -551,12 +483,14 @@ class Mesh:
    
 class Vertex:
 	"""BPy Vertex wrapper"""
+	
 	def __init__(self, bpy_vertex, mesh=None, matrix=1):
 		self.data=bpy_vertex
 		self.index=bpy_vertex.index
 		self.co=matrix*bpy_vertex.co
 		self.edges=list()
 		self.uvs=list()
+	
 	def __hash__(self):
 		return hash(self.index)
 	def __eq__(self, other):
@@ -580,6 +514,7 @@ class Vertex:
 		
 class Edge:
 	"""Wrapper for BPy Edge"""
+	
 	def __init__(self, edge, mesh, matrix=1):
 		self.data=edge
 		self.va=mesh.verts[edge.vertices[0]]	
@@ -595,7 +530,7 @@ class Edge:
 		self.priority=None
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
-		self.is_on_cycle=False
+	
 	def process_faces(self):
 		"""Reorder faces (if more than two), calculate angle(s) and if normals are wrong, mark edge as cut"""
 		def niceness (angle):
@@ -668,6 +603,7 @@ class Edge:
 				if is_normal_cw[face]:
 					angle_faces = -angle_faces
 				self.angles[face] = angle_faces
+	
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
 		angle = self.angles[self.faces[0]]
@@ -678,6 +614,7 @@ class Edge:
 		length_effect = (self.length/average_length) * priority_effect['length']
 		self.priority += length_effect
 		labels[self] = [(self.va+self.vb)*0.5, strf(self.priority)]
+	
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
@@ -686,18 +623,15 @@ class Edge:
 		#All other faces (third and more) are automatically treated as cut
 		else:
 			return True
+	
 	def label_update(self):
 		"""Debug tool"""
 		global labels
-		labels[self][1] = ("*{:.1f}" if self.is_on_cycle else "{:.1f}").format(self.priority)
-	def set_cycle(self, value=True):
-		"""Set this edge as being on a cycle of faces (and thus needed to be cut)"""
-		self.priority += priority_effect["on_cycle"] * (value - self.is_on_cycle)
-		self.is_on_cycle = value
-		self.label_update()
+		labels[self][1] = strf(self.priority)
+	
 	def cut(self):
 		"""Set this edge as cut."""
-		self.data.use_seam=True #TODO: this should be optional; NOTE: Here, the original BPy Edge data is used (fuck it.)
+		self.data.use_seam=True #TODO: this should be optional; NOTE: Here, the original BPy Edge data is used
 		self.is_main_cut=True
 		if self.priority:
 			self.label_update()
@@ -730,13 +664,12 @@ class Edge:
 class Face:
 	"""Wrapper for BPy Face"""
 	def __init__(self, bpy_face, mesh, matrix=1):
-		#TODO: would be nice to reuse the existing normal if possible; but recalculation seems to be more stable
 		self.data = bpy_face
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
+		#TODO: would be nice to reuse the existing normal if possible
 		self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalized()
-		#(bpy_face.normal*matrix).normalized()
 		for verts_indices in bpy_face.edge_keys:
 			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
@@ -748,7 +681,7 @@ class Face:
 			normals=list()
 			for vert_b, vert_c in zip(self.verts[1:-1], self.verts[2: ]):
 				normal=(vert_b.co-vert_a.co).cross(vert_c.co-vert_b.co)
-				normal /= (vert_b.co-vert_a.co).length * (vert_c.co-vert_b.co).length #parallel edges have lesser weight, but lenght does not have an effect
+				normal /= (vert_b.co-vert_a.co).length * (vert_c.co-vert_b.co).length #parallel edges have lesser weight, but length does not have an effect
 				normals.append(normal)
 				lines.append(((vert_b.co+vert_c.co)/2, (vert_b.co+vert_c.co)/2+normal.copy().normalized()))
 			average_normal=vectavg(normals)
@@ -763,6 +696,7 @@ class Face:
 		return "Face id: "+str(self.index)
 	def __repr__(self):
 		return "Face(id="+str(self.index)+"...)"
+
 class Island:
 	def __init__(self, face=None):
 		"""Create an Island from a single Face"""
@@ -782,14 +716,6 @@ class Island:
 		self.boundary_sorted = list(self.edges)
 		self.boundary_sorted.sort()		
 
-		"""DELETE ME
-		self.faces = list(uvfaces)
-		for uvface in self.faces:
-			self.verts.update(set(uvface.verts))
-			self.edges += uvface.edges
-			for uvedge in uvface.edges:
-				uvedge.island = self
-			uvface.island = self"""
 	def join(self, other, edge:Edge) -> bool:
 		"""
 		Try to join other island on given edge
@@ -1032,6 +958,7 @@ class Island:
 			self.stickers.append(uvface)
 		else:
 			self.faces.append(uvface)
+	
 	def generate_convex_hull(self) -> list:
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
 		def make_convex_curve(verts):
@@ -1062,6 +989,7 @@ class Island:
 		verts_top.pop()
 		verts_bottom.pop()
 		return verts_top + verts_bottom
+	
 	def generate_bounding_box(self):
 		"""Find the rotation for the optimal bounding box and calculate its dimensions."""
 		def bounding_box_score(size):
@@ -1097,60 +1025,12 @@ class Island:
 		self.angle=best_box[1]
 		self.bounding_box=best_box[2]
 		self.offset=-best_box[3]
-	def get_overlap(self) -> "(UVFace, UVFace)":
-		"""Get two overlapping UVFaces of this Island"""
-		#TODO: Quadratic complexity is dreadful
-		for uvface in self.faces:
-			overlap_uvface = uvface.get_overlap(self.faces)
-			if overlap_uvface:
-				return uvface, overlap_uvface
-	def split(self, uvface_a, uvface_b) -> "(Island, Island)":
-		"""Split this Island in half between two given UVFaces"""
-		#DEBUG
-		if uvface_a.is_sticker or uvface_b.is_sticker:
-			raise Exception("There are stickers already")
-		if uvface_a.island is not self or uvface_b.island is not self:
-			raise Exception ("The faces are not mine")
-		def distance(uvedge_a, uvedge_b) -> float:
-			"""Distance between centers of two edges"""
-			center_to_center = (uvedge_b.va.co + uvedge_b.vb.co - uvedge_a.va.co - uvedge_a.vb.co)/2
-			return center_to_center.length
-		island_faces = {True: set((uvface_a,)), #Faces visited from face A
-			False: set((uvface_b,))} #  or we can easily get ... from face B
-		flood = [ #Faces to visit next: distance, face, edge, is_from_a
-			(0, uvface_a, None, True),
-			(0, uvface_b, None, False)]
-		while len(flood) > 0:
-			prev_distance, prev_uvface, prev_uvedge, is_from_a = heappop(flood)
-			for next_uvedge in prev_uvface.edges:
-				if not next_uvedge.edge.is_cut(prev_uvface.face):
-					next_uvface = next_uvedge.edge.other_face[prev_uvface.face].uvface
-					if next_uvface in island_faces[is_from_a]:
-						pass
-					elif next_uvface in island_faces[not is_from_a]:
-						#This edge will divide the two resulting Islands
-						next_uvedge.edge.cut()
-						#Just remember, return to it later
-						old_va = next_uvedge.va; old_vb = next_uvedge.vb
-					else:
-						island_faces[is_from_a].add(next_uvface)
-						if prev_uvedge:
-							heappush(flood, (prev_distance + distance(prev_uvedge, next_uvedge), next_uvface, next_uvedge, is_from_a))
-						else:
-							heappush(flood, (prev_distance, next_uvface, next_uvedge, is_from_a))
-		#Double the vertices
-		va = UVVertex(old_va); vb = UVVertex(old_vb)
-		for uvface in island_faces[True]:
-			uvface.replace_uvvertex(old_va, va)
-			uvface.replace_uvvertex(old_vb, vb)
-		island_a = Island(uvfaces = island_faces[True])
-		island_b = Island(uvfaces = island_faces[False])
-		return island_a, island_b 
 	
 	def apply_scale(self, scale=1):
 		if scale != 1:
 			for vertex in self.verts:
 				vertex.co *= scale
+	
 	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
 		tex: UV Texture layer to use (BPy MeshTextureFaceLayer struct)
@@ -1196,8 +1076,7 @@ class UVVertex:
 	def __repr__(self):
 		return str(self)
 	def __eq__(self, other):
-		#return self.vertex==other.vertex and self.co == other.co #(self.co-other.co).length<1
-		return (self is other) or (self.co.x == other.co.x and self.co.y == other.co.y)
+		return (self is other) or (self.co.x == other.co.x and self.co.y == other.co.y) # and self.vertex == other.vertex
 	def __ne__(self, other):
 		return not self == other
 	def __lt__(self, other):
@@ -1227,19 +1106,17 @@ class UVEdge:
 		#return "({} - {})".format(self.min, self.max)
 		return "({} - {})".format(self.va, self.vb)
 	def __repr__(self):
-		#return "({} - {})".format(self.min, self.max)
 		return str(self)
 		
 
 class UVFace:
 	"""Face in 2D"""
 	is_sticker=False
-	def __init__(self, face:Face, island:Island, fixed_edge:Edge=None):
+	def __init__(self, face:Face, island:Island):
 		"""Creace an UVFace from a Face and a fixed edge.
 		face: Face to take coordinates from
 		island: Island to register itself in
 		fixed_edge: Edge to connect to (that already has UV coordinates)"""
-		#print("Create id: "+str(face.data.index))
 		if type(face) is Face:
 			self.verts=list()
 			self.face=face
@@ -1273,8 +1150,6 @@ class UVFace:
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
 		#DEBUG:
 		self.check("construct")
-		if fixed_edge:
-			self.attach(fixed_edge)
 	
 	def __lt__(self, other):
 		"""Hack for usage in heaps"""
@@ -1283,21 +1158,8 @@ class UVFace:
 	def __repr__(self):
 		return "UVFace("+str(self.face.index)+")"
 	
-	def replace_uvvertex(self, current, new):
-		if current in self.verts:
-			self.verts[self.verts.index(current)] = new
-			if current.vertex is not new.vertex:
-				self.uvvertex_by_id.pop(current.vertex.index)
-			self.uvvertex_by_id[new.vertex.index] = new
-			for uvedge in self.edges:
-				if uvedge.va == current:
-					uvedge.va = new
-				if uvedge.vb == current:
-					uvedge.vb = new
-	
 	#DEBUG:
 	def check(self, message=""):
-		return False #UNDEBUG :)
 		for this_uvedge in self.edges:
 			if this_uvedge.va not in self.verts:
 				print("papermodel ERROR: My UVEdge doesn't belong to myself",this_uvedge.va.vertex.index, object.__repr__(this_uvedge), message)
@@ -1310,60 +1172,6 @@ class UVFace:
 			if (self.verts[0].co-self.verts[2].co).angle(self.verts[1].co-self.verts[3].co)<pi/10:
 				print("papermodel NOTICE: This face is weirdly twisted",self.face.index, message)
 		
-	def attach(self, edge):
-		"""Attach this face so that it sticks onto its neighbour by the given edge (thus forgetting two verts)."""
-		if not edge.va.index in self.uvvertex_by_id or not edge.vb.index in self.uvvertex_by_id:
-			raise ValueError("Self.verts: "+str([index for index in self.uvvertex_by_id])+" Edge.verts: "+str([edge.va.index, edge.vb.index]))
-		other_uvface = edge.other_face[self.face].uvface
-		this_edge_vector = self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
-		other_edge_vector = other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
-		rot = fitting_matrix(this_edge_vector, other_edge_vector)
-		offset = other_uvface.uvvertex_by_id[edge.va.index].co - rot*self.uvvertex_by_id[edge.va.index].co
-		for vertex_id, uvvertex in self.uvvertex_by_id.items():
-			#If this vertex is shared between both faces
-			if vertex_id in other_uvface.uvvertex_by_id:
-				#it's doubled, we shall share vertex data with the second face
-				new_uvvertex = other_uvface.uvvertex_by_id[vertex_id]
-				self.verts[self.verts.index(uvvertex)]=new_uvvertex
-				self.uvvertex_by_id[vertex_id] = new_uvvertex
-				for uvedge in self.edges:
-					if uvedge.va is uvvertex:
-						uvedge.va = new_uvvertex
-					if uvedge.vb is uvvertex:
-						uvedge.vb = new_uvvertex
-			else: #if the vertex isn't shared, we must calculate its position
-				uvvertex.co = rot*uvvertex.co + offset
-		self.check("after")
-	
-	def get_overlap(self, others) -> "UVFace":
-		"""Get a face from the given list that overlaps with this - or None if none of them overlaps."""
-		#FIXME: this is bloody slow
-		#FIXME: and still, it doesn't work for overlapping neighbours!
-		rot = M.Matrix(((0, 1), (-1, 0)))
-		for uvface in others:
-			if uvface is not self:
-				for this_uvedge in self.edges:
-					A = this_uvedge.va.co
-					B = this_uvedge.vb.co
-					E = rot * (B-A)
-					for other_uvedge in uvface.edges:
-						if (this_uvedge.va is not other_uvedge.va and this_uvedge.vb is not other_uvedge.va and
-								this_uvedge.vb is not other_uvedge.va and this_uvedge.vb is not other_uvedge.vb):
-							#Check if the edges overlap
-							#DEBUG:
-							C = other_uvedge.va.co
-							D = other_uvedge.vb.co
-							F = rot * (D-C)
-							try:
-								a = ((A-C) * E) / ((D-C) * E)
-								b = ((C-A) * F) / ((B-A) * F)
-								#FIXME: when these were _ge_ and _le_, it returned more than needed - why?
-								if a > 0 and a < 1 and b > 0 and b < 1:
-									return uvface
-							except ZeroDivisionError:
-								pass
-		return None
-
 class Sticker(UVFace):
 	"""Sticker face"""
 	is_sticker=True
@@ -1407,6 +1215,7 @@ class Sticker(UVFace):
 			dupli=UVFace(other_face, edge=edge)"""
 	def cut(self, face):
 		"""Cut the given UVFace's area from this sticker (if they overlap) - placeholder."""
+		#TODO
 		pass
 
 class SVG:
@@ -1448,8 +1257,6 @@ class SVG:
 				for island in page.islands:
 					f.write("<g>")
 					rot = M.Matrix.Rotation(island.angle, 2)
-					#debug: bounding box
-					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
 					#FIXME: join a list of strings instead. This sucks.
 					data_outer = data_convex = data_concave = data_stickers = ""
 					for uvedge in island.edges:
@@ -1465,9 +1272,6 @@ class SVG:
 									data_convex += data_uvedge
 								elif angle < -0.01:
 									data_concave += data_uvedge
-					#for sticker in island.stickers: #Stickers would be all in one path
-					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
-					#if data_stickers: f.write("<path class='sticker' d='"+data_stickers+"'/>")
 					if island.stickers:
 						f.write("<g>")
 						for sticker in island.stickers: #Stickers are separate paths in one group
@@ -1495,7 +1299,6 @@ class MakeUnfoldable(bpy.types.Operator):
 	edit = bpy.props.BoolProperty(name="", description="", default=False, options={'HIDDEN'})
 	priority_effect_convex = bpy.props.FloatProperty(name="Priority Convex", description="Priority effect for edges in convex angles", default=priority_effect["convex"], soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_concave = bpy.props.FloatProperty(name="Priority Concave", description="Priority effect for edges in concave angles", default=priority_effect["concave"], soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_on_cycle = bpy.props.FloatProperty(name="Priority On Cycle", description="Priority effect for edges on face cycles", default=priority_effect["on_cycle"], soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_length = bpy.props.FloatProperty(name="Priority Length", description="Priority effect of edge length", default=priority_effect["length"], soft_min=-10, soft_max=1, subtype='FACTOR')
 	
 	@classmethod
@@ -1509,7 +1312,6 @@ class MakeUnfoldable(bpy.types.Operator):
 		col.label(text="Face Angle:")
 		col.prop(self.properties, "priority_effect_convex", text="Convex")
 		col.prop(self.properties, "priority_effect_concave", text="Concave")
-		layout.prop(self.properties, "priority_effect_on_cycle", text="Edges on Cycle")
 		layout.prop(self.properties, "priority_effect_length", text="Edge Length")
 	
 	def execute(self, context):
@@ -1518,7 +1320,6 @@ class MakeUnfoldable(bpy.types.Operator):
 		sce = bpy.context.scene
 		priority_effect['convex']=props.priority_effect_convex
 		priority_effect['concave']=props.priority_effect_concave
-		priority_effect['on_cycle']=props.priority_effect_on_cycle
 		priority_effect['length']=props.priority_effect_length
 		orig_mode=context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
@@ -1546,7 +1347,7 @@ class MakeUnfoldable(bpy.types.Operator):
 		unfolder.mesh.data.show_edge_seams=True
 		bpy.ops.object.mode_set(mode=orig_mode)
 		sce.io_paper_model_display_islands = display_islands
-		global twisted_quads
+		#global twisted_quads
 		#if len(twisted_quads) > 0:
 		#	self.report(type="ERROR_INVALID_INPUT", message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
 		return {'FINISHED'}
