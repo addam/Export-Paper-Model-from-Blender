@@ -32,7 +32,7 @@ bl_info = {
 	"location": "Object > Convert to Armature",
 	"warning": "",
 	"description": "Generate an armature with a single bone controlling each face",
-	"category": "Mesh",
+	"category": "Object",
 	"wiki_url": "",
 	"tracker_url": ""}
 
