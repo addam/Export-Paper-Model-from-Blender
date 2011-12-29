@@ -488,7 +488,7 @@ class Vertex:
 	def __init__(self, bpy_vertex, mesh=None, matrix=1):
 		self.data=bpy_vertex
 		self.index=bpy_vertex.index
-		self.co=matrix*bpy_vertex.co
+		self.co=bpy_vertex.co*matrix
 		self.edges=list()
 		self.uvs=list()
 	
@@ -557,11 +557,11 @@ class Edge:
 			is_normal_cw=dict()
 			for face in self.faces:
 				#DEBUG
-				if (rot*face.normal).z > 1e-4:
-					print ("papermodel ERROR in geometry, deformed face:", rot*face.normal)
+				if (face.normal*rot).z > 1e-4:
+					print ("papermodel ERROR in geometry, deformed face:", face.normal*rot)
 				try:
-					normal_directions[face]=angle2d((rot*face.normal).xy)
-					face_directions[face] = angle2d((rot*(vectavg(face.verts)-self.va.co)).xy)
+					normal_directions[face]=angle2d((face.normal*rot).xy)
+					face_directions[face] = angle2d(((vectavg(face.verts)-self.va.co)*rot).xy)
 				except ValueError:
 					raise UnfoldError("Fatal error: there is a face with two edges in the same direction.")
 				is_normal_cw[face] = (normal_directions[face] - face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
@@ -985,9 +985,9 @@ class Island:
 		
 		#determine rotation
 		rot = fitting_matrix(uvedge_b.va - uvedge_b.vb, uvedge_a.vb - uvedge_a.va)
-		trans = uvedge_a.vb.co - rot*uvedge_b.va.co
+		trans = uvedge_a.vb.co - uvedge_b.va.co*rot
 		#extract and transform island_b's boundary
-		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
+		phantoms = {uvvertex: UVVertex(uvvertex.co*rot+trans, uvvertex.vertex) for uvvertex in other.verts}
 		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
 		phantoms[uvedge_b.va] = uvedge_a.vb
 		phantoms[uvedge_b.vb] = uvedge_a.va
@@ -1146,7 +1146,7 @@ class Island:
 				#find the dimensions in both directions
 				bottom_left=M.Vector((0,0))
 				top_right=M.Vector((0,0))
-				verts_rotated=list(map(lambda vertex: rot*vertex.co, verts_convex))
+				verts_rotated=list(map(lambda vertex: vertex.co*rot, verts_convex))
 				bottom_left.x=min(map(lambda vertex: vertex.x, verts_rotated))
 				bottom_left.y=min(map(lambda vertex: vertex.y, verts_rotated))
 				top_right.x=max(map(lambda vertex: vertex.x, verts_rotated))
@@ -1176,7 +1176,7 @@ class Island:
 				texface = tex.data[uvface.face.index]
 				rot = M.Matrix.Rotation(self.angle, 2)
 				for i, uvvertex in enumerate(uvface.verts):
-					uv = rot * uvvertex.co + self.pos + self.offset
+					uv = uvvertex.co * rot + self.pos + self.offset
 					texface.uv_raw[2*i] = uv.x / aspect_ratio
 					texface.uv_raw[2*i+1] = uv.y
 
@@ -1262,7 +1262,7 @@ class UVFace:
 			rot=z_up_matrix(face.normal)
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
-				uvvertex=UVVertex(rot*vertex.co, vertex)
+				uvvertex=UVVertex(vertex.co*rot, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
 			#DEBUG: check lengths
@@ -1340,8 +1340,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3 = uvedge.vb.co + M.Matrix(((cos_b, sin_b), (-sin_b, cos_b)))*edge * len_b/edge.length
-		v4 = uvedge.va.co + M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a)))*edge * len_a/edge.length
+		v3 = uvedge.vb.co + edge * M.Matrix(((cos_b, sin_b), (-sin_b, cos_b)))*len_b/edge.length
+		v4 = uvedge.va.co + edge * M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a)))*len_a/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
@@ -1369,7 +1369,7 @@ class SVG:
 		self.mesh=mesh
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
-		vector = rot*vector + pos
+		vector = vector*rot + pos
 		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
 	def write(self, filename):
 		"""Write data to a file given by its name."""
@@ -1640,7 +1640,7 @@ def display_islands(self, context):
 			vertex = mesh.vertices[vertex_id]
 			co = vertex.co.copy()
 			co.resize_4d()
-			co = ob.matrix_world * co
+			co = co * ob.matrix_world
 			co /= co[3]
 			bgl.glVertex3f(co[0], co[1], co[2])
 		bgl.glEnd()
@@ -1660,7 +1660,7 @@ def display_labels(self, context):
 	bgl.glColor3f(1,1,0)
 	for position, label in labels.values():
 		position.resize_4d()
-		vec = view_mat * position
+		vec = position * view_mat
 		vec /= vec[3]
 		x = int(mid_x + vec[0]*width/2.0)
 		y = int(mid_y + vec[1]*height/2.0)
