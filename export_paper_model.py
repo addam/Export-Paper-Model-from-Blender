@@ -108,14 +108,14 @@ def z_up_matrix(n):
 	l=n.length
 	if b>0:
 		return M.Matrix((
-			(n.x*n.z/(b*l),	-n.y/b,	0),
-			(n.y*n.z/(b*l),	n.x/b,	0),
-			(-b/l,0,0)))
+			(n.x*n.z/(b*l),	n.y*n.z/(b*l), -b/l),
+			(       -n.y/b,         n.x/b,    0),
+			(            0,             0,    0)))
 	else: #no need for rotation
 		return M.Matrix((
-			(1,	0,	0),
-			(0,	sign(n.z),	0),
-			(0,0,0)))
+			(1,         0, 0),
+			(0, sign(n.z), 0),
+			(0,         0, 0)))
 
 class UnfoldError(ValueError):
 	pass
@@ -1073,8 +1073,8 @@ class UVFace:
 		def fitting_matrix(v1, v2):
 			"""Matrix that rotates v1 to the same direction as v2"""
 			return (1/pow(v1.length,2))*M.Matrix((
-				(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
-				(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
+				(+v1.x*v2.x+v1.y*v2.y, +v1.y*v2.x-v1.x*v2.y),
+				(+v1.x*v2.y-v1.y*v2.x, +v1.x*v2.x+v1.y*v2.y)))
 		other_uvface = edge.other_face[self.face].uvface
 		this_edge_vector = self.uvvertex_by_id[edge.vb.index].co-self.uvvertex_by_id[edge.va.index].co
 		other_edge_vector = other_uvface.uvvertex_by_id[edge.vb.index].co-other_uvface.uvvertex_by_id[edge.va.index].co
@@ -1100,7 +1100,7 @@ class UVFace:
 		"""Get a face from the given list that overlaps with this - or None if none of them overlaps."""
 		#FIXME: this is bloody slow
 		#FIXME: and still, it doesn't work for overlapping neighbours!
-		rot = M.Matrix(((0, 1), (-1, 0)))
+		rot = M.Matrix(((0, -1), (1, 0)))
 		for uvface in others:
 			if uvface is not self:
 				for this_uvedge in self.edges:
@@ -1156,8 +1156,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3 = uvedge.vb.co + M.Matrix(((cos_b, sin_b), (-sin_b, cos_b)))*edge * len_b/edge.length
-		v4 = uvedge.va.co + M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a)))*edge * len_a/edge.length
+		v3 = uvedge.vb.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b)))*edge * len_b/edge.length
+		v4 = uvedge.va.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a)))*edge * len_a/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
