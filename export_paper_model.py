@@ -108,9 +108,9 @@ def pairs(sequence):
 
 def fitting_matrix(v1, v2):
 	"""Matrix that rotates v1 to the same direction as v2"""
-	return (1/pow(v1.length,2))*M.Matrix((
-		(+v1.x*v2.x+v1.y*v2.y,	+v1.x*v2.y-v1.y*v2.x),
-		(+v1.y*v2.x-v1.x*v2.y,	+v1.x*v2.x+v1.y*v2.y)))
+	return (1/v1.length_squared)*M.Matrix((
+		(+v1.x*v2.x +v1.y*v2.y, +v1.x*v2.y -v1.y*v2.x),
+		(+v1.y*v2.x -v1.x*v2.y, +v1.x*v2.x +v1.y*v2.y)))
 
 def z_up_matrix(n):
 	"""Get a rotation matrix that aligns given vector upwards."""
@@ -118,14 +118,14 @@ def z_up_matrix(n):
 	l=n.length
 	if b>0:
 		return M.Matrix((
-			(n.x*n.z/(b*l),	-n.y/b,	0),
-			(n.y*n.z/(b*l),	n.x/b,	0),
-			(-b/l,0,0)))
+			(n.x*n.z/(b*l),	-n.y/b, 0),
+			(n.y*n.z/(b*l),  n.x/b, 0),
+			(         -b/l,      0, 0)))
 	else: #no need for rotation
 		return M.Matrix((
-			(1,	0,	0),
-			(0,	sign(n.z),	0),
-			(0,0,0)))
+			(1,	        0, 0),
+			(0,	sign(n.z), 0),
+			(0,         0, 0)))
 
 class UnfoldError(ValueError):
 	pass
@@ -1204,7 +1204,7 @@ class UVVertex:
 		else:
 			return int(hash(self.co.x)+hash(self.co.y))
 	def __sub__(self, other):
-		return self.co - other.co
+		return (self.co - other.co).to_3d()
 	def __str__(self):
 		if self.vertex:
 			return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
