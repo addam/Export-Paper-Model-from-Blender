@@ -26,14 +26,14 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0,7),
-	"blender": (2, 5, 6),
-	"api": 35302,
+	"blender": (2, 6, 1),
+	"api": 43880,
 	"location": "File > Export > Paper Model",
 	"warning": "",
-	"description": "Export printable net of the selected mesh",
+	"description": "Export printable net of the active mesh",
 	"category": "Import-Export",
-	"wiki_url": "http://wiki.blender.org/index.php/Extensions:2.5/Py/" \
-		"Scripts/File_I-O/Paper_Model",
+	"wiki_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/" \
+		"Scripts/Import-Export/Paper_Model",
 	"tracker_url": "https://projects.blender.org/tracker/index.php?" \
 		"func=detail&aid=22417&group_id=153&atid=467"}
 
