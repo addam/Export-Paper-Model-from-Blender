@@ -1307,7 +1307,7 @@ class MakeUnfoldable(bpy.types.Operator):
 		sce.io_paper_model_display_islands = display_islands
 		global twisted_quads
 		#if len(twisted_quads) > 0:
-		#	self.report(type="ERROR_INVALID_INPUT", message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
+		#	self.report(type={'ERROR_INVALID_INPUT'}, message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
 		return {'FINISHED'}
 
 class ExportPaperModel(bpy.types.Operator):
@@ -1330,15 +1330,15 @@ class ExportPaperModel(bpy.types.Operator):
 	
 	@classmethod
 	def poll(cls, context):
-		return context.active_object and context.active_object.type=="MESH"
+		return context.active_object and context.active_object.type=='MESH'
 	
 	def execute(self, context):
 		try:
 			self.unfolder.save(self.properties)
-			return {"FINISHED"}
+			return {'FINISHED'}
 		except UnfoldError as error:
-			self.report(type="ERROR_INVALID_INPUT", message=error.args[0])
-			return {"CANCELLED"}
+			self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+			return {'CANCELLED'}
 		except:
 			raise
 	def get_scale_ratio(self):
