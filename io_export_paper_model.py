@@ -59,6 +59,12 @@ labels = dict()
 highlight_faces = list()
 
 strf="{:.1f}".format
+def MMatrix(*data, is_old = (int(bpy.app.build_revision) < 42816)):
+	"""Temporary wrapper for backwards compatibility with blender 2.61.0"""
+	if is_old:
+		return M.Matrix(*data).transposed()
+	else:
+		return M.Matrix(*data)
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
 	if a == 0:
@@ -107,12 +113,12 @@ def z_up_matrix(n):
 	b=n.xy.length
 	l=n.length
 	if b>0:
-		return M.Matrix((
+		return MMatrix((
 			(n.x*n.z/(b*l),	n.y*n.z/(b*l), -b/l),
 			(       -n.y/b,         n.x/b,    0),
 			(            0,             0,    0)))
 	else: #no need for rotation
-		return M.Matrix((
+		return MMatrix((
 			(1,         0, 0),
 			(0, sign(n.z), 0),
 			(0,         0, 0)))
@@ -1072,7 +1078,7 @@ class UVFace:
 			raise ValueError("Self.verts: "+str([index for index in self.uvvertex_by_id])+" Edge.verts: "+str([edge.va.index, edge.vb.index]))
 		def fitting_matrix(v1, v2):
 			"""Matrix that rotates v1 to the same direction as v2"""
-			return (1/pow(v1.length,2))*M.Matrix((
+			return (1/pow(v1.length,2))*MMatrix((
 				(+v1.x*v2.x+v1.y*v2.y, +v1.y*v2.x-v1.x*v2.y),
 				(+v1.x*v2.y-v1.y*v2.x, +v1.x*v2.x+v1.y*v2.y)))
 		other_uvface = edge.other_face[self.face].uvface
@@ -1100,7 +1106,7 @@ class UVFace:
 		"""Get a face from the given list that overlaps with this - or None if none of them overlaps."""
 		#FIXME: this is bloody slow
 		#FIXME: and still, it doesn't work for overlapping neighbours!
-		rot = M.Matrix(((0, -1), (1, 0)))
+		rot = MMatrix(((0, -1), (1, 0)))
 		for uvface in others:
 			if uvface is not self:
 				for this_uvedge in self.edges:
@@ -1156,8 +1162,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3 = uvedge.vb.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b)))*edge * len_b/edge.length
-		v4 = uvedge.va.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a)))*edge * len_a/edge.length
+		v3 = uvedge.vb.co + MMatrix(((cos_b, -sin_b), (sin_b, cos_b)))*edge * len_b/edge.length
+		v4 = uvedge.va.co + MMatrix(((-cos_a, -sin_a), (sin_a, -cos_a)))*edge * len_a/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
