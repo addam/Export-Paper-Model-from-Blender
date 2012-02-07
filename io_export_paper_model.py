@@ -26,8 +26,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0,7),
-	"blender": (2, 6, 1),
-	"api": 43880,
+	"blender": (2, 6, 4),
+	"api": 43932,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -407,7 +407,7 @@ class Mesh:
 				self.niceness=self.area.x*self.area.y
 			def add_island(self, island):
 				"""Attach an island to this point and update all affected neighbourhood."""
-				island.pos=M.Vector((self.boundary.x, self.boundary.y))
+				island.pos = M.Vector((self.boundary.x, self.boundary.y))
 				#you have to draw this if you want to get it
 				a=Boundary(island.pos.x, island.pos.y+island.bounding_box.y)
 				b=Boundary(island.pos.x+island.bounding_box.x, island.pos.y+island.bounding_box.y)
@@ -469,9 +469,9 @@ class Mesh:
 				if not island.is_placed:
 					for point in points:
 						#test if it would fit to this point
-						if island.bounding_box.x<=point.area.x and island.bounding_box.y<=point.area.y:
+						if island.bounding_box.x <= point.area.x and island.bounding_box.y <= point.area.y:
 							point.add_island(island)
-							island.is_placed=True
+							island.is_placed = True
 							page.add(island)
 							remaining_count -= 1
 							break
@@ -810,28 +810,19 @@ class Island:
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
 		def make_convex_curve(verts):
 			"""Remove vertices from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
-			i=1 #we can skip the first vertex as it is always convex
-			while i<len(verts)-1:
-				left_edge=verts[i].co-verts[i-1].co #edge from the current vertex to the left
-				right_edge=verts[i+1].co-verts[i].co #edge -||- to the right
-				# if slope to the left is not bigger than one to the right, the angle is concave
-				if (left_edge.x==0 and right_edge.x==0) or \
-						(not (left_edge.x==0 or right_edge.x==0) and #division by zero
-						left_edge.y/left_edge.x <= right_edge.y/right_edge.x):
-					verts.pop(i) #so let us omit this vertex
-					i = max(1, i-1) #step back to check, but do not go below 1
-				else:
-					i += 1 #if the angle is convex, go ahead
-			return verts
+			result = list()
+			for vertex in verts:
+				while len(result) >= 2 and \
+				(vertex.co-result[-1].co).to_3d().cross((result[-1].co-result[-2].co).to_3d()).z >= 0:
+					result.pop()
+				result.append(vertex)
+			return result
 		self.verts=set()
 		for face in self.faces + self.stickers:
 			self.verts.update(face.verts)
-		verts_top=list(self.verts)
-		verts_top.sort(key=lambda vertex: vertex.co.x) #sorted left to right
-		make_convex_curve(verts_top)
-		verts_bottom=list(self.verts)
-		verts_bottom.sort(key=lambda vertex: -vertex.co.x) #sorted right to left
-		make_convex_curve(verts_bottom)
+		verts_list = sorted(self.verts, key=lambda vertex: vertex.co.x)
+		verts_top = make_convex_curve(verts_list)
+		verts_bottom = make_convex_curve(reversed(verts_list))
 		#remove left and right ends and concatenate the lists to form a polygon in the right order
 		verts_top.pop()
 		verts_bottom.pop()
@@ -847,30 +838,33 @@ class Island:
 			print ("papermodel ERROR: unable to calculate convex hull")
 			return M.Vector((0,0))
 		#go through all edges and search for the best solution
-		best_box=(0, 0, M.Vector((0,0)), M.Vector((0,0))) #(score, angle, box) for the best score
-		vertex_a = verts_convex[len(verts_convex)-1]
+		best_score = 0
+		best_box = (0, M.Vector((0,0)), M.Vector((0,0))) #(angle, box, offset) for the best score
+		vertex_a = verts_convex[-1]
 		for vertex_b in verts_convex:
-			if vertex_b.co != vertex_a.co:
-				angle=angle2d(vertex_b.co-vertex_a.co)
-				rot=M.Matrix.Rotation(angle, 2)
-				#find the dimensions in both directions
-				bottom_left=M.Vector((0,0))
-				top_right=M.Vector((0,0))
-				verts_rotated=list(map(lambda vertex: rot*vertex.co, verts_convex))
-				bottom_left.x=min(map(lambda vertex: vertex.x, verts_rotated))
-				bottom_left.y=min(map(lambda vertex: vertex.y, verts_rotated))
-				top_right.x=max(map(lambda vertex: vertex.x, verts_rotated))
-				top_right.y=max(map(lambda vertex: vertex.y, verts_rotated))
-				score = bounding_box_score(top_right-bottom_left)
-				if score > best_box[0]:
-					best_box = score, angle, top_right-bottom_left, bottom_left
-			vertex_a=vertex_b
+			if vertex_b.co == vertex_a.co:
+				continue
+			angle = angle2d(vertex_b.co - vertex_a.co)
+			rot = M.Matrix.Rotation(angle, 2)
+			#find the dimensions in both directions
+			rotated = [rot*vertex.co for vertex in verts_convex]
+			bottom_left = M.Vector((min(v.x for v in rotated), min(v.y for v in rotated)))
+			top_right = M.Vector((max(v.x for v in rotated), max(v.y for v in rotated)))
+			box = top_right - bottom_left
+			score = bounding_box_score(box)
+			if score > best_score:
+				best_box = angle, box, bottom_left
+				best_score = score
+			vertex_a = vertex_b
+		angle, box, offset = best_box
 		#switch the box so that it is taller than wider
-		if best_box[2].x>best_box[2].y:
-			best_box=best_box[0], best_box[1]+pi/2, best_box[2].yx, M.Vector((-best_box[3].y-best_box[2].y, best_box[3].x))
-		self.angle=best_box[1]
-		self.bounding_box=best_box[2]
-		self.offset=-best_box[3]
+		if box.x > box.y:
+			angle += pi/2
+			offset = M.Vector((-offset.y-box.y, offset.x))
+			box = box.yx
+		self.angle = angle
+		self.bounding_box = box
+		self.offset = -offset
 	def get_overlap(self) -> "(UVFace, UVFace)":
 		"""Get two overlapping UVFaces of this Island"""
 		#TODO: Quadratic complexity is dreadful
@@ -1195,6 +1189,7 @@ class SVG:
 	def write(self, filename):
 		"""Write data to a file given by its name."""
 		line_through = " L ".join #utility function
+		rows = "\n".join
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
@@ -1211,43 +1206,42 @@ class SVG:
 				</style>""")
 				if not self.pure_net:
 					f.write("<image x='0' y='0' width='" + str(self.page_size.x) + "' height='" + str(self.page_size.y) + "' xlink:href='file://" + filename + "_" + page.name + ".png'/>")
-				f.write("<g>")
+				if len(page.islands) > 1:
+					f.write("<g>")
 				for island in page.islands:
 					f.write("<g>")
 					rot = M.Matrix.Rotation(island.angle, 2)
 					#debug: bounding box
 					#f.write("<rect x='"+str(island.pos.x*self.size)+"' y='"+str(self.page_size.y-island.pos.y*self.size-island.bounding_box.y*self.size)+"' width='"+str(island.bounding_box.x*self.size)+"' height='"+str(island.bounding_box.y*self.size)+"' />")
-					data_outer = data_convex = data_concave = data_stickers = ""
+					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
-						data_uvedge = "\nM " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in [uvedge.va, uvedge.vb]])
+						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in (uvedge.va, uvedge.vb)))
 						#FIXME: The following clause won't return correct results for uncut edges with more than two faces connected
 						if uvedge.edge.is_cut(uvedge.uvface.face):
-							data_outer += data_uvedge
+							data_outer.append(data_uvedge)
 						else:
 							if uvedge.va.vertex.index > uvedge.vb.vertex.index: #each edge is in two opposite-oriented variants; we want to add each only once
 								angle = uvedge.edge.angles[uvedge.uvface.face]
 								if angle > 0.01:
-									data_convex += data_uvedge
+									data_convex.append(data_uvedge)
 								elif angle < -0.01:
-									data_concave += data_uvedge
-					#for sticker in island.stickers: #Stickers would be all in one path
-					#	data_stickers+="\nM "+" L ".join([self.format_vertex(vertex.co, rot, island.pos+island.offset) for vertex in sticker.verts])
-					#if data_stickers: f.write("<path class='sticker' d='"+data_stickers+"'/>")
+									data_concave.append(data_uvedge)
 					if len(island.stickers) > 0:
 						f.write("<g>")
 						for sticker in island.stickers: #Stickers are separate paths in one group
-							f.write("<path class='sticker' d='M " + line_through([self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts]) + " Z'/>")
+							f.write("<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>")
 						f.write("</g>")
 					if data_outer: 
 						if not self.pure_net:
-							f.write("<path class='outer_background' d='" + data_outer + "'/>")
-						f.write("<path class='outer' d='" + data_outer + "'/>")
+							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
+						f.write("<path class='outer' d='" + rows(data_outer) + "'/>")
 					if not self.pure_net and (data_convex or data_concave):
-						f.write("<path class='background' d='" + data_convex + data_concave + "'/>")
-					if data_convex: f.write("<path class='convex' d='" + data_convex+"'/>")
-					if data_concave: f.write("<path class='concave' d='" + data_concave+"'/>")
+						f.write("<path class='background' d='" + rows(data_convex + data_concave) + "'/>")
+					if data_convex: f.write("<path class='convex' d='" + rows(data_convex) + "'/>")
+					if data_concave: f.write("<path class='concave' d='" + rows(data_concave) + "'/>")
 					f.write("</g>")
-				f.write("</g>")
+				if len(page.islands) > 1:
+					f.write("</g>")
 				f.write("</svg>")
 				f.close()
 
