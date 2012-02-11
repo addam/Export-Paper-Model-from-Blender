@@ -65,31 +65,30 @@ def sign(a):
 
 def vectavg(vectlist):
 	"""Vector average of given list."""
-	if len(vectlist)==0:
+	if not vectlist:
 		return M.Vector((0,0))
-	last=vectlist[0]
+	last = vectlist[0]
 	if type(last) is Vertex:
-		vect_sum=last.co.copy() #keep the dimensions
+		vect_sum = last.co.copy() #keep the dimensions
 		vect_sum.zero()
 		for vect in vectlist:
-			vect_sum+=vect.co
+			vect_sum += vect.co
 	else:
-		vect_sum=last.copy() #keep the dimensions
+		vect_sum = last.copy() #keep the dimensions
 		vect_sum.zero()
 		for vect in vectlist:
-			vect_sum+=vect
-	return vect_sum/vectlist.__len__()
+			vect_sum += vect
+	return vect_sum / len(vectlist)
 
-def angle2d(direction, unit_vector=M.Vector((1,0))):
+def angle2d(direction, unit_vector = M.Vector((1,0))):
 	"""Get the view angle of point from origin."""
 	if direction.length == 0.0:
 		raise ValueError("Zero vector does not define an angle")
 	if len(direction) >= 3: #for 3d vectors
-		direction=direction.copy()
-		direction.resize_2d()
-	angle=direction.angle(unit_vector)
-	if direction[1]<0:
-		angle=2*pi-angle #hack for angles greater than pi
+		direction = direction.to_2d()
+	angle = unit_vector.angle(direction)
+	if direction.y < 0:
+		angle = 2*pi - angle
 	return angle
 
 def pairs(sequence):
@@ -825,7 +824,7 @@ class Island:
 								print("!" if c1 and c2 else "+" if c1 else "-" if c2 else "0", end=" ")
 							except Intersection:
 								print ("#", end="!")
-								raise RuntimeError()
+								#raise UnfoldError("Error: the unfolding algorithm produced invalid output - try stable release.")
 						else:
 							print (" ", end=" ")
 					print(a)
@@ -1123,8 +1122,7 @@ class Island:
 		#go through all edges and search for the best solution
 		best_score = 0
 		best_box = (0, M.Vector((0,0)), M.Vector((0,0))) #(angle, box, offset) for the best score
-		vertex_a = verts_convex[-1]
-		for vertex_b in verts_convex:
+		for vertex_a, vertex_b in pairs(verts_convex):
 			if vertex_b.co == vertex_a.co:
 				continue
 			angle = angle2d(vertex_b.co - vertex_a.co)
@@ -1138,7 +1136,6 @@ class Island:
 			if score > best_score:
 				best_box = angle, box, bottom_left
 				best_score = score
-			vertex_a = vertex_b
 		angle, box, offset = best_box
 		#switch the box so that it is taller than wider
 		if box.x > box.y:
