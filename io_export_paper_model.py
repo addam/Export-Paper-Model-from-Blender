@@ -1,8 +1,4 @@
 # -*- coding: utf-8 -*-
-# mesh_unfold.py Copyright (C) 2010, Addam Dominec
-#
-# Unfolds the given mesh into a flat net and creates a print-ready document with it
-#
 # ***** BEGIN GPL LICENSE BLOCK *****
 #
 #
@@ -27,7 +23,7 @@ bl_info = {
 	"author": "Addam Dominec",
 	"version": (0,7),
 	"blender": (2, 6, 4),
-	"api": 43932,
+	"api": 44028,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -446,7 +442,7 @@ class Mesh:
 			raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+strf(largest_island_ratio)+" times.")
 		islands=list(self.islands)
 		#sort islands by their ugliness (we need an ugly expression to treat ugliness correctly)
-		islands.sort(key=lambda island: (lambda vector:-pow(vector.x, 2)-pow(vector.y, 2)-pow(vector.x-vector.y, 2))(island.bounding_box))
+		islands.sort(reverse = True, key = lambda island: island.bounding_box.x**2 + island.bounding_box.y**2 + (island.bounding_box.x-island.bounding_box.y)**2)
 		remaining_count=len(islands)
 		page_num=1
 		while remaining_count > 0:
@@ -548,18 +544,6 @@ class Vertex:
 	def __repr__(self):
 		return "Vertex(id={}...)".format(self.index)
 		
-	def is_in_cut(self, needle):
-		"""Test if both vertices are parts of the same cut tree"""
-		tree_self=None
-		for edge_self in self.edges:
-			if edge_self.is_cut():
-				for edge_needle in needle.edges:
-					if edge_needle.is_cut():
-						return edge_self.cut_tree is edge_needle.cut_tree
-				else:
-					return False
-				break
-		return False #just in case
 class Edge:
 	"""Wrapper for BPy Edge"""
 	def __init__(self, edge, mesh, matrix=1):
