@@ -1,39 +1,34 @@
 # -*- coding: utf-8 -*-
-# io_export_paper_model.py
+# ##### BEGIN GPL LICENSE BLOCK #####
 #
-# Unfolds the given mesh into a flat net and creates a print-ready document with it
+#  This program is free software; you can redistribute it and/or
+#  modify it under the terms of the GNU General Public License
+#  as published by the Free Software Foundation; either version 2
+#  of the License, or (at your option) any later version.
 #
-# ***** BEGIN GPL LICENSE BLOCK *****
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
 #
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software Foundation,
+#  Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 #
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-#
-# ***** END GPL LICENCE BLOCK *****
+# ##### END GPL LICENSE BLOCK #####
 
 bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
-	"version": (0,7),
-	"blender": (2, 6, 0),
-	"api": 41178,
+	"version": (0, 8),
+	"blender": (2, 6, 4),
+	"api": 44028,
 	"location": "File > Export > Paper Model",
 	"warning": "",
-	"description": "Export printable net of the selected mesh",
+	"description": "Export printable net of the active mesh",
 	"category": "Import-Export",
-	"wiki_url": "http://wiki.blender.org/index.php/Extensions:2.5/Py/" \
-		"Scripts/File_I-O/Paper_Model",
+	"wiki_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/" \
+		"Scripts/Import-Export/Paper_Model",
 	"tracker_url": "https://projects.blender.org/tracker/index.php?" \
 		"func=detail&aid=22417&group_id=153&atid=467"}
 
@@ -47,7 +42,7 @@ import bpy
 import mathutils as M
 import mathutils.geometry as G
 from heapq import heappush, heappop
-pi=3.141592653589783
+from math import pi
 priority_effect={
 	'convex':0.5,
 	'concave':1,
