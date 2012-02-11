@@ -104,8 +104,8 @@ def pairs(sequence):
 def fitting_matrix(v1, v2):
 	"""Matrix that rotates v1 to the same direction as v2"""
 	return (1/v1.length_squared)*M.Matrix((
-		(+v1.x*v2.x +v1.y*v2.y, +v1.x*v2.y -v1.y*v2.x),
-		(+v1.y*v2.x -v1.x*v2.y, +v1.x*v2.x +v1.y*v2.y)))
+		(+v1.x*v2.x +v1.y*v2.y, +v1.y*v2.x -v1.x*v2.y),
+		(+v1.x*v2.y -v1.y*v2.x, +v1.x*v2.x +v1.y*v2.y)))
 
 def z_up_matrix(n):
 	"""Get a rotation matrix that aligns given vector upwards."""
@@ -113,9 +113,9 @@ def z_up_matrix(n):
 	l=n.length
 	if b>0:
 		return M.Matrix((
-			(n.x*n.z/(b*l),	-n.y/b, 0),
-			(n.y*n.z/(b*l),  n.x/b, 0),
-			(         -b/l,      0, 0)))
+			(n.x*n.z/(b*l),	n.y*n.z/(b*l), -b/l),
+			(       -n.y/b,         n.x/b,    0),
+			(            0,             0,    0)))
 	else: #no need for rotation
 		return M.Matrix((
 			(1,	        0, 0),
@@ -552,11 +552,11 @@ class Edge:
 			is_normal_cw=dict()
 			for face in self.faces:
 				#DEBUG
-				if (face.normal*rot).z > 1e-4:
-					print ("papermodel ERROR in geometry, deformed face:", face.normal*rot)
+				if (rot*face.normal).z > 1e-4:
+					print ("papermodel ERROR in geometry, deformed face:", rot*face.normal)
 				try:
-					normal_directions[face]=angle2d((face.normal*rot).xy)
-					face_directions[face] = angle2d(((vectavg(face.verts)-self.va.co)*rot).xy)
+					normal_directions[face]=angle2d((rot*face.normal).xy)
+					face_directions[face] = angle2d((rot*(vectavg(face.verts)-self.va.co)).xy)
 				except ValueError:
 					raise UnfoldError("Fatal error: there is a face with two edges in the same direction.")
 				is_normal_cw[face] = (normal_directions[face] - face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
@@ -980,9 +980,9 @@ class Island:
 		
 		#determine rotation
 		rot = fitting_matrix(uvedge_b.va - uvedge_b.vb, uvedge_a.vb - uvedge_a.va)
-		trans = uvedge_a.vb.co - uvedge_b.va.co*rot
+		trans = uvedge_a.vb.co - rot * uvedge_b.va.co
 		#extract and transform island_b's boundary
-		phantoms = {uvvertex: UVVertex(uvvertex.co*rot+trans, uvvertex.vertex) for uvvertex in other.verts}
+		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
 		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
 		phantoms[uvedge_b.va] = uvedge_a.vb
 		phantoms[uvedge_b.vb] = uvedge_a.va
@@ -1118,10 +1118,8 @@ class Island:
 			"""Calculate the score - the bigger result, the better box."""
 			return 1/(size.x*size.y)
 		verts_convex = self.generate_convex_hull()
-		#DEBUG
-		if len(verts_convex)==0:
-			print ("papermodel ERROR: unable to calculate convex hull")
-			return M.Vector((0,0))
+		if not verts_convex:
+			raise UnfoldError("Error, check topology of the mesh object (failed to calculate convex hull)")
 		#go through all edges and search for the best solution
 		best_score = 0
 		best_box = (0, M.Vector((0,0)), M.Vector((0,0))) #(angle, box, offset) for the best score
@@ -1165,7 +1163,7 @@ class Island:
 				texface = tex.data[uvface.face.index]
 				rot = M.Matrix.Rotation(self.angle, 2)
 				for i, uvvertex in enumerate(uvface.verts):
-					uv = uvvertex.co * rot + self.pos + self.offset
+					uv = rot * uvvertex.co + self.pos + self.offset
 					texface.uv_raw[2*i] = uv.x / aspect_ratio
 					texface.uv_raw[2*i+1] = uv.y
 
@@ -1251,7 +1249,7 @@ class UVFace:
 			rot=z_up_matrix(face.normal)
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
-				uvvertex=UVVertex(vertex.co*rot, vertex)
+				uvvertex=UVVertex(rot * vertex.co, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
 			#DEBUG: check lengths
@@ -1329,8 +1327,8 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3 = uvedge.vb.co + edge * M.Matrix(((cos_b, sin_b), (-sin_b, cos_b)))*len_b/edge.length
-		v4 = uvedge.va.co + edge * M.Matrix(((-cos_a, sin_a), (-sin_a, -cos_a)))*len_a/edge.length
+		v3 = uvedge.vb.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b/edge.length
+		v4 = uvedge.va.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a/edge.length
 		if v3!=v4:
 			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
 		else:
@@ -1358,7 +1356,7 @@ class SVG:
 		self.mesh=mesh
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
-		vector = vector*rot + pos
+		vector = rot*vector + pos
 		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
 	def write(self, filename):
 		"""Write data to a file given by its name."""
@@ -1398,12 +1396,10 @@ class SVG:
 								if angle > 0.01:
 									data_convex.append(data_uvedge)
 								elif angle < -0.01:
-									data_concave += data_uvedge
+									data_concave.append(data_uvedge)
 					if island.stickers:
-						f.write("<g>")
-						for sticker in island.stickers: #Stickers are separate paths in one group
-							f.write("<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>")
-						f.write("</g>")
+						data_stickers = ["<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>" for sticker in island.stickers]
+						f.write("<g>" + rows(data_stickers) + "</g>") #Stickers are separate paths in one group
 					if data_outer: 
 						if not self.pure_net:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
