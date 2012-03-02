@@ -21,8 +21,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 4),
-	"api": 44028,
+	"blender": (2, 6, 2),
+	"api": 44490,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -178,7 +178,7 @@ class Mesh:
 			self.edges[bpy_edge.index] = edge
 			self.edges_by_verts_indices[(edge.va.index, edge.vb.index)] = edge
 			self.edges_by_verts_indices[(edge.vb.index, edge.va.index)] = edge
-		for bpy_face in mesh.faces:
+		for bpy_face in mesh.polygons:
 			face = Face(bpy_face, self)
 			self.faces[bpy_face.index] = face
 		for index in self.edges:
@@ -441,8 +441,9 @@ class Mesh:
 		#note: expecting that the active object's data is self.mesh
 		tex=self.data.uv_textures.active
 		tex.name="Unfolded"
+		loop = self.data.uv_loop_layers.active
 		for island in self.islands:
-			island.save_uv(tex, aspect_ratio)
+			island.save_uv(loop, aspect_ratio)
 	
 	def save_image(self, filename, page_size_pixels:M.Vector):
 		rd=bpy.context.scene.render
@@ -663,6 +664,7 @@ class Face:
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
+		self.loop_start = bpy_face.loop_start
 		#TODO: would be nice to reuse the existing normal if possible
 		self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalized()
 		for verts_indices in bpy_face.edge_keys:
@@ -1153,16 +1155,16 @@ class Island:
 	
 	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
-		tex: UV Texture layer to use (BPy MeshTextureFaceLayer struct)
+		tex: UV Texture layer to use (BPy MeshUVLoopLayer struct)
 		page_size: size of the page in pixels (vector)"""
+		texface = tex.data
 		for uvface in self.faces:
 			if not uvface.is_sticker:
-				texface = tex.data[uvface.face.index]
 				rot = M.Matrix.Rotation(self.angle, 2)
 				for i, uvvertex in enumerate(uvface.verts):
 					uv = rot * uvvertex.co + self.pos + self.offset
-					texface.uv_raw[2*i] = uv.x / aspect_ratio
-					texface.uv_raw[2*i+1] = uv.y
+					texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
+					texface[uvface.face.loop_start + i].uv[0] = uv.y
 
 class Page:
 	"""Container for several Islands"""
