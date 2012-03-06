@@ -43,6 +43,11 @@ import mathutils as M
 import mathutils.geometry as G
 from heapq import heappush, heappop
 from math import pi
+try:
+	from blist import blist
+except ImportError:
+	blist = list
+
 priority_effect={
 	'convex':0.5,
 	'concave':1,
@@ -90,6 +95,9 @@ def angle2d(direction, unit_vector = M.Vector((1,0))):
 	if direction.y < 0:
 		angle = 2*pi - angle
 	return angle
+
+def cross_product(v1, v2):
+	return v1.x*v2.y - v1.y*v2.x
 
 def pairs(sequence):
 	"""Generate consequent pairs throughout the given sequence; at last, it gives elements last, first."""
@@ -722,255 +730,64 @@ class Island:
 		class Intersection(Exception):
 			pass
 			
-		def is_below(self: UVEdge, other: UVEdge, verbose=False, epsilon=1e-20):
+		def is_below(self: UVEdge, other: UVEdge, cross=cross_product):
 			#FIXME: estimate the epsilon based on input vectors
 			if self is other: #or (self.va.co==other.vb.co and self.vb.co == other.va.co):
 				return False
 			if self.max <= other.min or self.min >= other.max:
-				#DEBUG
-				if verbose:
-					print("compare {}, {}: Whatever.".format(self, other))
+				if self.max == other.min:
+					return other.max.co.y > self.min.co.y or (other.max.co.y == self.min.co.y and other.max.co.x > self.min.co.x)
+				if self.min == other.max:
+					return other.min.co.y > self.max.co.y or (other.min.co.y == self.max.co.y and other.min.co.x > self.max.co.x)
 				return other.min < self.min
-			cross_b1 = (self.max - self.min).cross(other.min - self.min).z
-			cross_b2 = (self.max - self.min).cross(other.max - self.min).z
-			if abs(cross_b1) < epsilon:
-				cross_b1 = 0.0
-			if abs(cross_b2) < epsilon:
-				cross_b2 = 0.0
+			self_vector = self.max - self.min
+			min_to_min = other.min - self.min
+			cross_b1 = cross(self_vector, min_to_min)
+			cross_b2 = cross(self_vector, (other.max - self.min))
 			if cross_b1 >= 0 and cross_b2 >= 0:
-				#DEBUG
-				if verbose:
-					print("{} is 1 above {} ({}, {})".format(other, self, cross_b1, cross_b2))
 				return True
 			if cross_b1 <= 0 and cross_b2 <= 0:
-				if verbose:
-					print("{} is 2 above {} ({}, {}; {}, {})".format(self, other, cross_b1, cross_b2, self.min is other.max, self.max is other.min))
 				return False
-			cross_a1 = (other.max - other.min).cross(self.min - other.min).z
-			cross_a2 = (other.max - other.min).cross(self.max - other.min).z
-			if abs(cross_a1) < epsilon:
-				cross_a1 = 0.0
-			if abs(cross_a2) < epsilon:
-				cross_a2 = 0.0
+			other_vector = other.max - other.min
+			cross_a1 = cross(other_vector, -min_to_min)
+			cross_a2 = cross(other_vector, (self.max - other.min))
 			if cross_a1 <= 0 and cross_a2 <= 0:
-				if verbose:
-					print("{} is 4 above {} ({}, {})".format(other, self, cross_a1, cross_a2))
 				return True
 			if cross_a1 >= 0 and cross_a2 >= 0:
-				if verbose:
-					print("{} is 3 above {} ({}, {})".format(self, other, cross_a1, cross_a2))
 				return False
-			if verbose:
-				print ("{} intersects {}".format(self, other))
 			raise Intersection()
 
-		# DEBUG
-		def is_below_lagrange(self: UVEdge, other:UVEdge, verbose = False):
-			if self is other:
-				return False
-			if self.max <= other.min or self.min >= other.max:
-				if self.min == other.min:
-					print ("=====================================================", end="")
-				print(".", end="")
-				return other.min < self.min
-			if self.min > other.min or other.max.co.x - other.min.co.x == 0:
-				is_inverse = True
-				self, other = other, self
-			else:
-				is_inverse = False
-			if other.max.co.x - other.min.co.x == 0:
-				return is_inverse if other.min < self.min else not is_inverse
-			x, y = self.min.co[0:2] if self.min != other.min else self.max.co[0:2]
-			value = (other.min.co.y * (other.max.co.x-x) + other.max.co.y * (x-other.min.co.x)) / (other.max.co.x - other.min.co.x)
-			return is_inverse if value < y else not is_inverse
-		
 		class Sweepline:
 			def __init__(self):
-				self.root = TreeNode(list())
-				self.count = 0
-				#DEBUG
-				self.history = list()
-		
-			def dump(self, force = False):
-				children = list()
-				stack = [self.root]
-				while stack:
-					node = stack.pop()
-					if node.split_value:
-						stack += node.children
-					else:
-						children = node.children + children
-				if force:
-					print("Forcing dump... {} children".format(len(children)))
-				problems = 0
-				for a, edge_a in enumerate(children[:-1]):
-					for edge_b in children[a+1:]:
-						try:
-							if is_below(edge_b, edge_a) or not is_below(edge_a, edge_b):
-								problems += 1
-						except Intersection:
-							problems += 1
-				if not problems and not force:
-					return
-				for a, edge_a in enumerate(children):
-					print ("{}: {}".format(a, edge_a))
-				for a in range(len(children)):
-					print(a, end=" ")
-				print()
-				for a, edge_a in enumerate(children):
-					for b, edge_b in enumerate(children):
-						if a < b:
-							try:
-								c1 = is_below(edge_a, edge_b)
-								c2 = is_below(edge_b, edge_a)
-								print("!" if c1 and c2 else "+" if c1 else "-" if c2 else "0", end=" ")
-							except Intersection:
-								print ("#", end="!")
-								#raise UnfoldError("Error: the unfolding algorithm produced invalid output - try stable release.")
-						else:
-							print (" ", end=" ")
-					print(a)
+				self.children = blist()
 			
 			def add(self, item, cmp = is_below):
-				#DEBUG
-				self.neighbor_check(item)
-				
-				node = self.root
-				while node.split_value:
-					node = node.children[0 if cmp(item, node.split_value) else 1]
-				index = node.index(item)
-				node.children.insert(index, item)
-				
-				"""
-				if len(node.children) > TreeNode.max_children:
-					print("Added", item)
-					for a, edge_a in enumerate(node.children):
-						print ("{}: {} min: {}".format(a, edge_a, edge_a.min))
-					for a in range(len(node.children)):
-						print (a, end="  ")
-					print()
-					for a, edge_a in enumerate(node.children):
-						for b, edge_b in enumerate(node.children):
-							if a<b:
-								c1 = is_below_lagrange(edge_a, edge_b)
-								c2 = is_below_lagrange(edge_b, edge_a)
-								print ("!" if c1 and c2 else "+" if c1 else "-" if c2 else "0", end="")
-								print ("1" if edge_a.va is edge_b.va else "2" if edge_a.va is edge_b.vb else "3" if edge_a.vb is edge_b.va else "4" if edge_a.vb is edge_b.vb else " ", end=" ")
-							else:
-								print ("   ", end="")
-						print(a)
-				"""
-				if len(node.children) > TreeNode.max_children:
-					split_index = TreeNode.max_children//2
-					left = TreeNode(node.children[:split_index])
-					right = TreeNode(node.children[split_index:])
-					node.split_value = node.children[split_index]
-					node.children = [left, right]
-			
+				low = 0; high = len(self.children)
+				while low < high:
+					mid = (low + high) // 2
+					if cmp(self.children[mid], item):
+						low = mid + 1
+					else:
+						high = mid
+				if low > 0:
+					assert cmp(self.children[low-1], item)
+				if low < len(self.children):
+					assert cmp(item, self.children[low])
+				self.children.insert(low, item)
+					
 			def remove(self, item, cmp = is_below):
-				#print("Remove {}".format(item))
-				parent = None
-				splitting_nodes = list()
-				node = self.root
-				while node.split_value:
-					parent = node
-					if item is node.split_value:
-						splitting_nodes.append(node) # must replace with something else
-						node = node.children[1]
+				low = 0; high = len(self.children)
+				while low < high:
+					mid = (low + high) // 2
+					if cmp(self.children[mid], item):
+						low = mid + 1
 					else:
-						node = node.children[0 if cmp(item, node.split_value) else 1]
-				#DEBUG
-				index = node.children.index(item)
-				if index > 0 and index < len(node.children)-1:
-					if not cmp(node.children[index-1], node.children[index+1]):
-						self.dump()
-						raise RuntimeError()
-				node.children.remove(item)
-				if splitting_nodes:
-					if node.children:
-						# use the closest neighbour as a replacement
-						split_value = node.children[0]
-					else:
-						# find a replacement elsewhere in the tree
-						if node is parent.children[0]:
-							split_value = parent.children[1]
-							while type(split_value) is TreeNode:
-								split_value = split_value.children[0]
-						else:
-							split_value = parent.children[0]
-							while type(split_value) is TreeNode:
-								split_value = split_value.children[-1]
-					for splitting_node in splitting_nodes:
-						splitting_node.split_value = split_value
-				
-				if parent and not node.children:
-					print("(remove node l{}, r{})".format(len(parent.children[0].children), len(parent.children[1].children)), end=" ")
-					parent.children.remove(node)
-					parent.split_value = parent.children[0].split_value
-					parent.children = parent.children[0].children
-				elif parent and not parent.children[0].split_value and not parent.children[1].split_value and \
-						len(parent.children[0].children) + len(parent.children[1].children) < TreeNode.max_children:
-					parent.split_value = None
-					print("(join nodes)", end=" ")
-					parent.children = parent.children[0].children + parent.children[1].children
-		
-			def neighbor_check(self, item, cmp = is_below):
-				left = self.root
-				right = None
-				while left.split_value:
-					if cmp(item, left.split_value):
-						right = left
-						left = left.children[0]
-					else:
-						left = left.children[1]
-				index = left.index(item)
-				if index == len(left.children):
-					debug = "Next node"
-					parents = list()
-					if right:
-						parents.append(right.split_value)
-						right = right.children[1]
-						while type(right) is TreeNode:
-							if right.split_value:
-								debug += "+"
-								parents.append(right.split_value)
-							else:
-								debug += "."
-							right = right.children[0]
-						for parent in parents:
-							if not cmp(parent, right):
-								debug += "!"
-							else:
-								debug += "~"
-				else:
-					debug = "This node @{}".format(index)
-					right = left.children[index]
-				left = left.children[index-1] if index > 0 else None
-				#DEBUG
-				if left and not cmp(left, item):
-					print ("LEFT", left.va, left.vb, item.va, item.vb, cmp(left, item, True), cmp(item, left), is_below_lagrange(left, item), is_below_lagrange(item, left))
-					self.dump(True)
-					raise RuntimeError()
-				#assert not left or cmp(left, item)
-				if right and not cmp(item, right):
-					print ("LEFT", left.va, left.vb, item.va, item.vb, cmp(left, item, True), cmp(item, left), is_below_lagrange(left, item), is_below_lagrange(item, left))
-					print ("RIGHT", item.va, item.vb, right.va, right.vb, cmp(item, right, True), cmp(right, item), is_below_lagrange(item, right), is_below_lagrange(right, item))
-					print(debug)
-					self.dump(True)
-					raise RuntimeError()
-				#assert not right or cmp(item, right)
-		
-		class TreeNode:
-			max_children = 8
-			def __init__(self, seq):
-				self.children = seq
-				self.split_value = None
-			def index(self, item, i = 0, cmp=is_below):
-				#FIXME: bisect
-				while i < len(self.children) and cmp(self.children[i], item):
-					i += 1
-				return i
-
+						high = mid
+				assert self.children[low] is item
+				self.children.pop(low)
+				if low > 0 and low < len(self.children):
+					assert cmp(self.children[low-1], self.children[low])
+			
 		#find edge in other and in self
 		for uvedge in edge.uvedges:
 			if uvedge in self.edges:
@@ -1001,26 +818,8 @@ class Island:
 					sweepline.add(events_add.pop())
 				sweepline.remove(events_remove.pop())
 		except Intersection:
-			print(":(", end=" ")
 			return False
-		except (RuntimeError, ValueError):
-			s = 100
-			print ("<path class='outer' d='")
-			for edge in self.boundary_sorted:
-				print("M {:.3f} {:.3f} L {:.3f} {:.3f}".format(edge.min.co.x*s, edge.min.co.y*s, edge.max.co.x*s, edge.max.co.y*s), end=" ")
-			print("'/>")
-			print ("<path d='")
-			for edge in boundary_other:
-				print("M {:.3f} {:.3f} L {:.3f} {:.3f}".format(edge.min.co.x*s, edge.min.co.y*s, edge.max.co.x*s, edge.max.co.y*s), end=" ")
-			print("'/>")
-			print ("<path d='")
-			for edge in other.boundary_sorted:
-				print("M {:.3f} {:.3f} L {:.3f} {:.3f}".format(edge.min.co.x*s, edge.min.co.y*s, edge.max.co.x*s, edge.max.co.y*s), end=" ")
-			print("'/>")
-			print ("Runtime error before {}".format(uvedge))
-			raise
 		
-		print("Join!", end=" ")
 		#remove edge from boundary
 		self.boundary_sorted.remove(uvedge_a)
 		other.boundary_sorted.remove(uvedge_b)
@@ -1036,23 +835,6 @@ class Island:
 			uvedge.min, uvedge.max = (uvedge.va, uvedge.vb) if (uvedge.va < uvedge.vb) else (uvedge.vb, uvedge.va)
 		self.edges.extend(other.edges)
 
-		# DEBUG:
-		for uvedge in other.boundary_sorted:
-			assert uvedge in other.edges
-		verts_from_edges = set()
-		for uvedge in self.edges:
-			verts_from_edges.add(uvedge.va)
-			verts_from_edges.add(uvedge.vb)
-		for va in verts_from_edges:
-			for vb in verts_from_edges:
-				if va.vertex.index == vb.vertex.index and (va.co-vb.co).length < 1e-5 and va is not vb:
-					print ("-----------------------------------------------Not equal:", va, vb)
-		if verts_from_edges != self.verts:
-			print ("Verts:", self.verts)
-			print ("Difference:", verts_from_edges - self.verts)
-			print ("UVEdge A: {}, UVEdge B: {}".format(uvedge_a, uvedge_b))
-			print ("Edges ({}):".format(len(self.edges)), self.edges)
-
 		for uvface in other.faces:
 			uvface.island = self
 			uvface.verts = [phantoms[uvvertex] for uvvertex in uvface.verts]
@@ -1061,27 +843,6 @@ class Island:
 		self.boundary_sorted.extend(other.boundary_sorted)
 		self.boundary_sorted.sort()
 		
-		#DEBUG
-		sweepline = Sweepline()
-		events_add = list(self.boundary_sorted)
-		events_add.sort(reverse = True)
-		events_remove = list(self.boundary_sorted)
-		events_remove.sort(key = lambda uvedge: uvedge.max, reverse = True)
-		try:
-			while events_remove:
-				while events_add and events_add[-1].min <= events_remove[-1].max:
-					sweepline.add(events_add.pop())
-				sweepline.remove(events_remove.pop())
-				sweepline.dump()
-		except (Intersection, RuntimeError):
-			print("Problém, Houstone.")
-			s = 100
-			print ("<path class='outer' d='")
-			for edge in self.boundary_sorted:
-				print("M {:.3f} {:.3f} L {:.3f} {:.3f}".format(edge.min.co.x*s, edge.min.co.y*s, edge.max.co.x*s, edge.max.co.y*s), end=" ")
-			print("'/>")
-			raise RuntimeError()
-
 		return True
 
 	def add(self, uvface):
@@ -1190,7 +951,7 @@ class UVVertex:
 		else:
 			return int(hash(self.co.x)+hash(self.co.y))
 	def __sub__(self, other):
-		return (self.co - other.co).to_3d()
+		return self.co - other.co
 	def __str__(self):
 		if self.vertex:
 			return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
