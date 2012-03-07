@@ -734,12 +734,17 @@ class Island:
 			#FIXME: estimate the epsilon based on input vectors
 			if self is other: #or (self.va.co==other.vb.co and self.vb.co == other.va.co):
 				return False
-			if self.max <= other.min or self.min >= other.max:
-				if self.max == other.min:
+			if self.top < other.bottom:
+				return True
+			if other.top <= self.bottom:
+				return False
+			if self.max.tup <= other.min.tup or self.min.tup >= other.max.tup:
+				# special cases
+				if self.max.tup == other.min.tup:
 					return other.max.co.y > self.min.co.y or (other.max.co.y == self.min.co.y and other.max.co.x > self.min.co.x)
-				if self.min == other.max:
+				if self.min.tup == other.max.tup:
 					return other.min.co.y > self.max.co.y or (other.min.co.y == self.max.co.y and other.min.co.x > self.max.co.x)
-				return other.min < self.min
+				return other.min.tup < self.min.tup
 			self_vector = self.max - self.min
 			min_to_min = other.min - self.min
 			cross_b1 = cross(self_vector, min_to_min)
@@ -769,26 +774,21 @@ class Island:
 						low = mid + 1
 					else:
 						high = mid
+				# check for intersections
 				if low > 0:
 					assert cmp(self.children[low-1], item)
 				if low < len(self.children):
-					assert cmp(item, self.children[low])
+					assert not cmp(self.children[low], item)
 				self.children.insert(low, item)
 					
 			def remove(self, item, cmp = is_below):
-				low = 0; high = len(self.children)
-				while low < high:
-					mid = (low + high) // 2
-					if cmp(self.children[mid], item):
-						low = mid + 1
-					else:
-						high = mid
-				assert self.children[low] is item
-				self.children.pop(low)
-				if low > 0 and low < len(self.children):
-					assert cmp(self.children[low-1], self.children[low])
+				index = self.children.index(item)
+				self.children.pop(index)
+				if index > 0 and index < len(self.children):
+					# check for intersection
+					assert not cmp(self.children[index], self.children[index-1])
 			
-		#find edge in other and in self
+		# find edge in other and in self
 		for uvedge in edge.uvedges:
 			if uvedge in self.edges:
 				uvedge_a = uvedge
@@ -796,31 +796,31 @@ class Island:
 				uvedge_b = uvedge
 		assert uvedge_a is not uvedge_b
 		
-		#determine rotation
+		# determine rotation
 		rot = fitting_matrix(uvedge_b.va - uvedge_b.vb, uvedge_a.vb - uvedge_a.va)
 		trans = uvedge_a.vb.co - rot * uvedge_b.va.co
-		#extract and transform island_b's boundary
+		# extract and transform island_b's boundary
 		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
 		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
 		phantoms[uvedge_b.va] = uvedge_a.vb
 		phantoms[uvedge_b.vb] = uvedge_a.va
 		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge is not uvedge_b]
-		#create event list
+		# create event list
 		sweepline = Sweepline()
 		events_add = boundary_other + self.boundary_sorted
 		events_add.remove(uvedge_a)
 		events_remove = list(events_add)
-		events_add.sort(reverse = True)
-		events_remove.sort(key = lambda uvedge: uvedge.max, reverse = True)
+		events_add.sort(key = lambda uvedge: uvedge.min.tup, reverse = True)
+		events_remove.sort(key = lambda uvedge: uvedge.max.tup, reverse = True)
 		try:
 			while events_remove:
-				while events_add and events_add[-1].min <= events_remove[-1].max:
+				while events_add and events_add[-1].min.tup <= events_remove[-1].max.tup:
 					sweepline.add(events_add.pop())
 				sweepline.remove(events_remove.pop())
 		except Intersection:
 			return False
 		
-		#remove edge from boundary
+		# remove edge from boundary
 		self.boundary_sorted.remove(uvedge_a)
 		other.boundary_sorted.remove(uvedge_b)
 		edge.is_main_cut = False
@@ -832,7 +832,7 @@ class Island:
 			uvedge.island = self
 			uvedge.va = phantoms[uvedge.va]
 			uvedge.vb = phantoms[uvedge.vb]
-			uvedge.min, uvedge.max = (uvedge.va, uvedge.vb) if (uvedge.va < uvedge.vb) else (uvedge.vb, uvedge.va)
+			uvedge.update()
 		self.edges.extend(other.edges)
 
 		for uvface in other.faces:
@@ -841,8 +841,9 @@ class Island:
 			uvface.uvvertex_by_id = {index: phantoms[uvvertex] for index, uvvertex in uvface.uvvertex_by_id.items()}
 		self.faces.extend(other.faces)
 		self.boundary_sorted.extend(other.boundary_sorted)
-		self.boundary_sorted.sort()
+		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup)
 		
+		# everything seems to be OK
 		return True
 
 	def add(self, uvface):
@@ -945,6 +946,7 @@ class UVVertex:
 		else:
 			self.co=(M.Vector(vector)).xy
 			self.vertex=vertex
+		self.tup = tuple(self.co)
 	def __hash__(self):
 		if self.vertex:
 			return self.vertex.index
@@ -960,30 +962,38 @@ class UVVertex:
 	def __repr__(self):
 		return str(self)
 	def __eq__(self, other):
-		return (self is other) or (self.vertex == other.vertex and self.co.x == other.co.x and self.co.y == other.co.y)
+		return (self is other) or (self.vertex == other.vertex and self.co == other.co)#self.co.x == other.co.x and self.co.y == other.co.y)
 	def __ne__(self, other):
 		return not self == other
 	def __lt__(self, other):
-		return self.co.x < other.co.x or (self.co.x == other.co.x and self.co.y < other.co.y)
+		return self.tup < other.tup
+		#return self.co.x < other.co.x or (self.co.x == other.co.x and self.co.y < other.co.y)
 	def __le__(self, other):
-		return (self is other) or (self.co.x < other.co.x) or (self.co.x == other.co.x and self.co.y <= other.co.y)
+		return self.tup <= other.tup
+		#return (self is other) or (self.co.x < other.co.x) or (self.co.x == other.co.x and self.co.y <= other.co.y)
 	def __ge__(self, other):
-		return (self is other) or (self.co.x > other.co.x) or (self.co.x == other.co.x and self.co.y >= other.co.y)
+		return self.tup >= other.tup
+		#return (self is other) or (self.co.x > other.co.x) or (self.co.x == other.co.x and self.co.y >= other.co.y)
 
 class UVEdge:
 	"""Edge in 2D"""
 	def __init__(self, vertex1:UVVertex, vertex2:UVVertex, island:Island, uvface=None, edge:Edge=None):
 		self.va = vertex1
 		self.vb = vertex2
-		self.min, self.max = (vertex1, vertex2) if (vertex1 < vertex2) else (vertex2, vertex1)
+		self.update()
 		self.island = island
 		if edge:
 			self.edge = edge
 			edge.uvedges.append(self)
 		#Every UVEdge is attached to only one UVFace. UVEdges are doubled as needed, because they both have to point clockwise around their faces
 		self.uvface = uvface
+	def update(self):
+		"""Update data if UVVertices have moved"""
+		self.min, self.max = (self.va, self.vb) if (self.va < self.vb) else (self.vb, self.va)
+		y1, y2 = self.va.co.y, self.vb.co.y
+		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
 	def __lt__(self, other):
-		return self.min < other.min
+		return self.min.tup < other.min.tup
 	def __le__(self, other):
 		return self.min <= other.min
 	def __str__(self):
