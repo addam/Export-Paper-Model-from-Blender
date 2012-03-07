@@ -207,8 +207,13 @@ class Mesh:
 		twisted_quads = list()
 		labels = dict()
 		#Silently check that all quads are flat
+		global differences
+		differences = list()
+
 		for index in self.faces:
 			self.faces[index].check_twisted()
+
+		self.islands = {Island(face) for face in self.faces.values()}
 		# check for edges that are cut permanently
 		edges = list()
 		edges = [self.edges[edge_id] for edge_id in self.edges if not self.edges[edge_id].is_main_cut]
@@ -217,14 +222,10 @@ class Mesh:
 		for edge in edges:
 			edge.is_main_cut = True
 		
-		global differences
-		differences = list()
-
 		average_length = sum(edge.length for edge in edges) / len(edges)
 		for edge in edges:
 			edge.generate_priority(average_length)
 		edges.sort(key = lambda edge:edge.priority, reverse=False)
-		self.islands = set(map(Island, self.faces.values()))
 		for edge in edges:
 			face_a, face_b = edge.faces[:2]
 			island_a, island_b = face_a.uvface.island, face_b.uvface.island
@@ -235,45 +236,12 @@ class Mesh:
 					self.islands.remove(island_b)
 		differences.sort(reverse=True)
 		if differences[0][0]>1+1e-5:
-			print ("""Papermodel warning: there are non-flat faces, which will be deformed in the output image.
+			print ("""Papermodel warning: there are non-flat faces, which will be deformed in the output image. You should consider converting the mesh to triangle faces.
 			Showing first five values (normally they should be very close to 1.0):""")
 			for diff in differences[0:5]:
 				print ("{:.5f}".format(diff[0]))
 		return True
 		
-	def generate_islands(self):
-		"""DELETE ME Divide faces into several Islands."""
-		def connected_faces(border_edges, inner_faces):
-			outer_faces=list()
-			for edge in border_edges:
-				for face in edge.faces:
-					if face not in inner_faces and face not in outer_faces:
-						outer_faces.append(face)
-			next_border=list()
-			for face in outer_faces:
-				for edge in face.edges:
-					if not edge in border_edges:
-						next_border.append(edge)
-			if len(next_border)>0:
-				outer_faces.extend(connected_faces(next_border, outer_faces))
-			return outer_faces
-		self.islands=list()
-		remaining_faces=list(self.faces.values())
-		#DEBUG: checking the transformation went ok
-		global differences
-		differences = list()
-		while len(remaining_faces) > 0:
-			self.islands.append(Island(remaining_faces))
-		differences.sort(reverse=True)
-		if differences[0][0]>1+1e-5:
-			print ("""Papermodel warning: there are non-flat faces, which will be deformed in the output image.
-			Showing first five values (normally they should be very close to 1.0):""")
-			for diff in differences[0:5]:
-				print ("{:.5f}".format(diff[0]))
-		#FIXME: Why this?
-		for edge in self.edges.values():
-			edge.uvedges.sort(key=lambda uvedge: edge.faces.index(uvedge.uvface.face))
-	
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
@@ -732,7 +700,7 @@ class Island:
 			
 		def is_below(self: UVEdge, other: UVEdge, cross=cross_product):
 			#FIXME: estimate the epsilon based on input vectors
-			if self is other: #or (self.va.co==other.vb.co and self.vb.co == other.va.co):
+			if self is other:
 				return False
 			if self.top < other.bottom:
 				return True
@@ -962,18 +930,15 @@ class UVVertex:
 	def __repr__(self):
 		return str(self)
 	def __eq__(self, other):
-		return (self is other) or (self.vertex == other.vertex and self.co == other.co)#self.co.x == other.co.x and self.co.y == other.co.y)
+		return (self is other) or (self.vertex == other.vertex and self.tup == other.tup)
 	def __ne__(self, other):
 		return not self == other
 	def __lt__(self, other):
 		return self.tup < other.tup
-		#return self.co.x < other.co.x or (self.co.x == other.co.x and self.co.y < other.co.y)
 	def __le__(self, other):
 		return self.tup <= other.tup
-		#return (self is other) or (self.co.x < other.co.x) or (self.co.x == other.co.x and self.co.y <= other.co.y)
 	def __ge__(self, other):
 		return self.tup >= other.tup
-		#return (self is other) or (self.co.x > other.co.x) or (self.co.x == other.co.x and self.co.y >= other.co.y)
 
 class UVEdge:
 	"""Edge in 2D"""
