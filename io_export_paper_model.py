@@ -22,7 +22,7 @@ bl_info = {
 	"author": "Addam Dominec",
 	"version": (0, 8),
 	"blender": (2, 6, 2),
-	"api": 44490,
+	"api": 44610,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -1325,11 +1325,11 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		box = layout.box()
 		box.label(text="{} island(s):".format(len(sce.island_list)))
 		box.template_list(sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
-		layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
-		box.prop(sce, "io_paper_model_display_islands")#, icon='RESTRICT_VIEW_OFF')
+		#layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
+		box.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
 		sub = box.row()
 		sub.active = sce.io_paper_model_display_islands
-		sub.prop(sce, "io_paper_model_islands_alpha")
+		sub.prop(sce, "io_paper_model_islands_alpha", slider=True)
 		
 		island_list = sce.island_list
 		if sce.island_list_index >= 0 and len(island_list) > 0:
@@ -1342,27 +1342,26 @@ def display_islands(self, context):
 	#TODO: save the vertex positions and don't recalculate them always
 	#TODO: don't use active object, but rather save the object itself
 	perspMatrix = context.space_data.region_3d.perspective_matrix
-	perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [perspMatrix[i][j] for i in range(4) for j in range(4)])
+	perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [(perspMatrix[i][j]) for j in range(4) for i in range(4)])
 	bgl.glLoadIdentity()
 	bgl.glMatrixMode(bgl.GL_PROJECTION)
 	bgl.glLoadMatrixf(perspBuff)
 	bgl.glEnable(bgl.GL_BLEND)
 	bgl.glBlendFunc (bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA);
 	bgl.glEnable(bgl.GL_POLYGON_OFFSET_FILL)
-	bgl.glPolygonOffset(0.0, -2.0) #offset in Zbuffer to remove flicker
+	bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
 	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
 	bgl.glColor4f(1.0, 0.4, 0.0, self.io_paper_model_islands_alpha)
-	ob = bpy.context.active_object
+	ob = context.active_object
 	mesh = ob.data
 	global highlight_faces
 	for face_id in highlight_faces:
-		face = mesh.faces[face_id]
+		face = mesh.polygons[face_id]
 		bgl.glBegin(bgl.GL_POLYGON)
 		for vertex_id in face.vertices:
 			vertex = mesh.vertices[vertex_id]
-			co = vertex.co.copy()
-			co.resize_4d()
-			co = co * ob.matrix_world
+			co = vertex.co.to_4d()
+			co = ob.matrix_world * co
 			co /= co[3]
 			bgl.glVertex3f(co[0], co[1], co[2])
 		bgl.glEnd()
@@ -1434,7 +1433,7 @@ class FaceList(bpy.types.PropertyGroup):
 	id = bpy.props.IntProperty(name="Face ID")
 class IslandList(bpy.types.PropertyGroup):
 	faces = bpy.props.CollectionProperty(type=FaceList, name="Faces", description="Faces belonging to this island")
-	label = bpy.props.StringProperty(name="Label", description="*out of order* Label on this island", default="No Label", update=label_changed)
+	label = bpy.props.StringProperty(name="Label", description="Label on this island", default="No Label", update=label_changed)
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
@@ -1444,7 +1443,7 @@ def register():
 	bpy.types.Scene.io_paper_model_display_labels = bpy.props.BoolProperty(name="Display edge priority", description="*debug property*", update=display_labels_changed)
 	bpy.types.Scene.io_paper_model_display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
 	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
-	bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="*out of order* Highlight tilted quad faces that would be distorted by export")
+	#bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="Highlight tilted quad faces that would be distorted by export")
 	bpy.types.Scene.island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
 	bpy.types.Scene.island_list_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, update=list_selection_changed)
 	bpy.types.INFO_MT_file_export.append(menu_func)
