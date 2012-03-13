@@ -22,7 +22,7 @@ bl_info = {
 	"author": "Addam Dominec",
 	"version": (0, 8),
 	"blender": (2, 6, 2),
-	"api": 44610,
+	"api": 44837,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -157,10 +157,12 @@ class Unfolder:
 		self.mesh.finalize_islands(scale_factor = scale / page_size.y)
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
-			self.mesh.save_uv(aspect_ratio = page_size.x / page_size.y)
+			tex = self.mesh.save_uv(aspect_ratio = page_size.x / page_size.y)
+			if not tex:
+				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
 			#TODO: do we really need a switch of our own?
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
-			self.mesh.save_image(filepath, page_size * ppm)
+			self.mesh.save_image(tex, filepath, page_size * ppm)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
 		svg=SVG(page_size * ppm, properties.output_pure)
@@ -413,18 +415,25 @@ class Mesh:
 	
 	def save_uv(self, aspect_ratio=1): #page_size is in pixels
 		bpy.ops.object.mode_set()
-		bpy.ops.mesh.uv_texture_add()
 		#note: expecting that the active object's data is self.mesh
-		tex=self.data.uv_textures.active
-		tex.name="Unfolded"
-		loop = self.data.uv_loop_layers.active
+		tex = self.data.uv_textures.new()
+		if not tex:
+			return None
+		tex.name = "Unfolded"
+		tex.active = True
+		loop = self.data.uv_loop_layers[self.data.uv_loop_layers.active_index]
 		for island in self.islands:
 			island.save_uv(loop, aspect_ratio)
+		return tex
 	
-	def save_image(self, filename, page_size_pixels:M.Vector):
+	def save_image(self, tex, filename, page_size_pixels:M.Vector):
 		rd=bpy.context.scene.render
 		recall_margin=rd.bake_margin; rd.bake_margin=0
 		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
+
+		tex.active = True
+		loop = self.data.uv_loop_layers[self.data.uv_loop_layers.active_index]
+		aspect_ratio = page_size_pixels.x / page_size_pixels.y
 		for page in self.pages:
 			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
 			image_name=(self.data.name[:16]+" "+page.name+" Unfolded")[:20]
@@ -437,11 +446,12 @@ class Mesh:
 				print ("papermodel ERROR: could not get image", image_name)
 			image.filepath_raw=filename+"_"+page.name+".png"
 			image.file_format='PNG'
-			texfaces=self.data.uv_textures.active.data
+			texfaces=tex.data
 			for island in page.islands:
 				for uvface in island.faces:
 					if not uvface.is_sticker:
 						texfaces[uvface.face.index].image=image
+				#island.save_uv(loop, aspect_ratio)
 			bpy.ops.object.bake_image()
 			image.save()
 			for island in page.islands:
@@ -894,7 +904,7 @@ class Island:
 				for i, uvvertex in enumerate(uvface.verts):
 					uv = rot * uvvertex.co + self.pos + self.offset
 					texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
-					texface[uvface.face.loop_start + i].uv[0] = uv.y
+					texface[uvface.face.loop_start + i].uv[1] = uv.y
 
 class Page:
 	"""Container for several Islands"""
