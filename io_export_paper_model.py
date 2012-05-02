@@ -17,12 +17,17 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
+
+#### TODO:
+# split islands bigger than selected page size
+# UI elements to set line thickness and page size conveniently
+
 bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 2),
-	"api": 44837,
+	"blender": (2, 6, 3),
+	"api": 46209,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -421,7 +426,7 @@ class Mesh:
 			return None
 		tex.name = "Unfolded"
 		tex.active = True
-		loop = self.data.uv_loop_layers[self.data.uv_loop_layers.active_index]
+		loop = self.data.uv_layers[self.data.uv_layers.active_index]
 		for island in self.islands:
 			island.save_uv(loop, aspect_ratio)
 		return tex
@@ -432,7 +437,7 @@ class Mesh:
 		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
 
 		tex.active = True
-		loop = self.data.uv_loop_layers[self.data.uv_loop_layers.active_index]
+		loop = self.data.uv_layers[self.data.uv_layers.active_index]
 		aspect_ratio = page_size_pixels.x / page_size_pixels.y
 		for page in self.pages:
 			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
@@ -1284,7 +1289,7 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.prop(self.properties, "output_pure")
 		col = layout.column()
 		col.active = not self.properties.output_pure
-		col.prop(self.properties, "bake_selected_to_active")
+		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
 		layout.label(text="Document settings:")
 		layout.prop(self.properties, "sticker_width")
 
