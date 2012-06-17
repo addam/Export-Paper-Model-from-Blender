@@ -21,6 +21,8 @@
 #### TODO:
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
+# convert island.edges -> set
+# make use of mathutils' Vector.angle_signed()
 
 bl_info = {
 	"name": "Export Paper Model",
@@ -57,7 +59,7 @@ priority_effect={
 	'convex':0.5,
 	'concave':1,
 	'length':-0.05}
-lines = list()
+lines = list() #TODO: currently lines are not used
 twisted_quads = list()
 labels = dict()
 highlight_faces = list()
@@ -657,7 +659,16 @@ class Face:
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
 		self.loop_start = bpy_face.loop_start
 		#TODO: would be nice to reuse the existing normal if possible
-		self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalized()
+		if len(self.verts) == 3:
+			# normal of a triangle can be calculated directly
+			self.normal = (self.verts[1]-self.verts[0]).cross(self.verts[2]-self.verts[0]).normalized()
+		else:
+			# Newell's method
+			nor = M.Vector((0,0,0))
+			for a, b in pairs(self.verts):
+				p, m = a+b, a-b
+				nor.x, nor.y, nor.z = nor.x+m.y*p.z, nor.y+m.z*p.x, nor.z+m.x*p.y
+			self.normal = nor.normalized()
 		for verts_indices in bpy_face.edge_keys:
 			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
@@ -665,16 +676,12 @@ class Face:
 	def check_twisted(self):
 		if len(self.verts) > 3:
 			global twisted_quads, lines
-			vert_a=self.verts[0]
-			normals=list()
-			for vert_b, vert_c in zip(self.verts[1:-1], self.verts[2: ]):
-				normal=(vert_b.co-vert_a.co).cross(vert_c.co-vert_b.co)
-				normal /= (vert_b.co-vert_a.co).length * (vert_c.co-vert_b.co).length #parallel edges have lesser weight, but length does not have an effect
-				normals.append(normal)
-				lines.append(((vert_b.co+vert_c.co)/2, (vert_b.co+vert_c.co)/2+normal.copy().normalized()))
-			average_normal=vectavg(normals)
-			for normal in normals:
-				if normal.angle(average_normal) > 0.01: #TODO: this threshold should be editable or well chosen at least
+			center = vectavg(self.verts)
+			plane_d = center.dot(self.normal)
+			diameter = max((center-vertex.co).length for vertex in self.verts)
+			for vertex in self.verts:
+				# check coplanarity
+				if abs(vertex.co.dot(self.normal) - plane_d) > diameter*0.01: #TODO: this threshold should be editable or well chosen at least
 					twisted_quads.append(self.verts)
 					return True
 		return False
@@ -714,35 +721,37 @@ class Island:
 			pass
 			
 		def is_below(self: UVEdge, other: UVEdge, cross=cross_product):
-			#FIXME: estimate the epsilon based on input vectors
+			#TODO? estimate the epsilon based on input vectors
 			if self is other:
 				return False
 			if self.top < other.bottom:
 				return True
-			if other.top <= self.bottom:
+			if other.top < self.bottom:
 				return False
-			if self.max.tup <= other.min.tup or self.min.tup >= other.max.tup:
-				# special cases
-				if self.max.tup == other.min.tup:
-					return other.max.co.y > self.min.co.y or (other.max.co.y == self.min.co.y and other.max.co.x > self.min.co.x)
-				if self.min.tup == other.max.tup:
-					return other.min.co.y > self.max.co.y or (other.min.co.y == self.max.co.y and other.min.co.x > self.max.co.x)
-				return other.min.tup < self.min.tup
+			if self.max.tup <= other.min.tup:
+				return True
+			if other.max.tup <= self.min.tup:
+				return False
 			self_vector = self.max - self.min
 			min_to_min = other.min - self.min
 			cross_b1 = cross(self_vector, min_to_min)
 			cross_b2 = cross(self_vector, (other.max - self.min))
-			if cross_b1 >= 0 and cross_b2 >= 0:
-				return True
-			if cross_b1 <= 0 and cross_b2 <= 0:
-				return False
+			if cross_b1 != 0 or cross_b2 != 0:
+				if cross_b1 >= 0 and cross_b2 >= 0:
+					return True
+				if cross_b1 <= 0 and cross_b2 <= 0:
+					return False
 			other_vector = other.max - other.min
 			cross_a1 = cross(other_vector, -min_to_min)
 			cross_a2 = cross(other_vector, (self.max - other.min))
-			if cross_a1 <= 0 and cross_a2 <= 0:
-				return True
-			if cross_a1 >= 0 and cross_a2 >= 0:
-				return False
+			if cross_a1 != 0 or cross_a2 != 0:
+				if cross_a1 <= 0 and cross_a2 <= 0:
+					return True
+				if cross_a1 >= 0 and cross_a2 >= 0:
+					return False
+			if cross_a1 == cross_b1 == cross_a2 == cross_b2 == 0:
+				# an especially ugly special case -- lines lying on top of each other. Try to resolve instead of throwing an intersection:
+				return self.min.tup < other.min.tup or (self.min.co+self.max.co).to_tuple() < (other.min.co+other.max.co).to_tuple()
 			raise Intersection()
 
 		class Sweepline:
@@ -763,14 +772,14 @@ class Island:
 				if low < len(self.children):
 					assert not cmp(self.children[low], item)
 				self.children.insert(low, item)
-					
+			
 			def remove(self, item, cmp = is_below):
 				index = self.children.index(item)
 				self.children.pop(index)
 				if index > 0 and index < len(self.children):
 					# check for intersection
 					assert not cmp(self.children[index], self.children[index-1])
-			
+		
 		# find edge in other and in self
 		for uvedge in edge.uvedges:
 			if uvedge in self.edges:
@@ -817,7 +826,7 @@ class Island:
 			uvedge.vb = phantoms[uvedge.vb]
 			uvedge.update()
 		self.edges.extend(other.edges)
-
+		
 		for uvface in other.faces:
 			uvface.island = self
 			uvface.verts = [phantoms[uvvertex] for uvvertex in uvface.verts]
@@ -934,7 +943,7 @@ class UVVertex:
 		if self.vertex:
 			return self.vertex.index
 		else:
-			return int(hash(self.co.x)+hash(self.co.y))
+			return hash(self.co.x) ^ hash(self.co.y)
 	def __sub__(self, other):
 		return self.co - other.co
 	def __str__(self):
@@ -945,7 +954,9 @@ class UVVertex:
 	def __repr__(self):
 		return str(self)
 	def __eq__(self, other):
-		return (self is other) or (self.vertex == other.vertex and self.tup == other.tup)
+		return self is other
+		# originally it was: (self is other) or (self.vertex == other.vertex and self.tup == other.tup)
+		# but that excludes vertices from sets in several very special cases (doubled verts that occur by coincidence)
 	def __ne__(self, other):
 		return not self == other
 	def __lt__(self, other):
@@ -1023,7 +1034,7 @@ class UVFace:
 			island.edges.append(uvedge)
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
 		#DEBUG:
-		self.check("construct")
+		#self.check("construct")
 	
 	def __lt__(self, other):
 		"""Hack for usage in heaps"""
@@ -1042,7 +1053,7 @@ class UVFace:
 		for vertex_id, vertex in self.uvvertex_by_id.items():
 			if vertex not in self.verts:
 				print("papermodel ERROR: UVVertex found by ID does not exist")
-		if len(self.verts) > 3:
+		if len(self.verts) == 4:
 			if (self.verts[0].co-self.verts[2].co).angle(self.verts[1].co-self.verts[3].co)<pi/10:
 				print("papermodel NOTICE: This face is weirdly twisted",self.face.index, message)
 		
