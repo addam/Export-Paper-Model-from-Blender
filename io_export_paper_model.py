@@ -21,15 +21,13 @@
 #### TODO:
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
-# convert island.edges -> set
-# make use of mathutils' Vector.angle_signed()
 
 bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
 	"blender": (2, 6, 3),
-	"api": 46209,
+	"api": 48011,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -94,13 +92,11 @@ def vectavg(vectlist):
 
 def angle2d(direction, unit_vector = M.Vector((1,0))):
 	"""Get the view angle of point from origin."""
-	if direction.length == 0.0:
+	if direction.length_squared == 0:
 		raise ValueError("Zero vector does not define an angle")
 	if len(direction) >= 3: #for 3d vectors
 		direction = direction.to_2d()
-	angle = unit_vector.angle(direction)
-	if direction.y < 0:
-		angle = 2*pi - angle
+	angle = unit_vector.angle_signed(direction)
 	return angle
 
 def cross_product(v1, v2):
@@ -544,14 +540,11 @@ class Edge:
 			face_directions=dict() #direction which each face is pointing in from this edge; rotated to 2D
 			is_normal_cw=dict()
 			for face in self.faces:
-				#DEBUG
-				if (rot*face.normal).z > 1e-4:
-					print ("papermodel ERROR in geometry, deformed face:", rot*face.normal)
 				try:
-					normal_directions[face]=angle2d((rot*face.normal).xy)
-					face_directions[face] = angle2d((rot*(vectavg(face.verts)-self.va.co)).xy)
+					normal_directions[face] = angle2d(rot*face.normal)
+					face_directions[face] = angle2d(rot*(vectavg(face.verts)-self.va.co))
 				except ValueError:
-					raise UnfoldError("Fatal error: there is a face with two edges in the same direction.")
+					raise UnfoldError("Fatal error: there is a face with all vertices in line")
 				is_normal_cw[face] = (normal_directions[face] - face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
 			#Firstly, find which two faces will be the 'main' ones
 			self.faces.sort(key=lambda face: normal_directions[face])
@@ -568,7 +561,8 @@ class Edge:
 					if niceness(angle_normals) > best_pair[0]:
 						best_pair=niceness(angle_normals), first_face, second_face
 			#For each face, find the nearest neighbour from its backside
-			for index, face in enumerate(sorted(self.faces, key=lambda face: face_directions[face])):
+			self.faces.sort(key=lambda face: face_directions[face])
+			for index, face in enumerate(self.faces):
 				if is_normal_cw[face]:
 					adjacent_face=self.faces[(index-1) % len(self.faces)]
 				else:
@@ -696,7 +690,7 @@ class Island:
 	def __init__(self, face=None):
 		"""Create an Island from a single Face"""
 		self.faces=list()
-		self.edges=list()
+		self.edges=set()
 		self.verts=set()
 		self.stickers=list()
 		self.pos=M.Vector((0,0))
@@ -825,7 +819,7 @@ class Island:
 			uvedge.va = phantoms[uvedge.va]
 			uvedge.vb = phantoms[uvedge.vb]
 			uvedge.update()
-		self.edges.extend(other.edges)
+		self.edges.update(other.edges)
 		
 		for uvface in other.faces:
 			uvface.island = self
@@ -1031,7 +1025,7 @@ class UVFace:
 		for va, vb in pairs(self.verts):
 			uvedge = UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.index, vb.vertex.index)])
 			self.edges.append(uvedge)
-			island.edges.append(uvedge)
+			island.edges.add(uvedge)
 		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
 		#DEBUG:
 		#self.check("construct")
