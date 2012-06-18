@@ -1209,9 +1209,7 @@ class MakeUnfoldable(bpy.types.Operator):
 		unfolder.prepare()
 
 		island_list = context.scene.island_list
-		while island_list:
-			#remove previously defined islands
-			island_list.remove(0)
+		island_list.clear() #remove previously defined islands
 		for island in unfolder.mesh.islands:
 			#add islands to UI list and set default descriptions
 			list_item = island_list.add()
@@ -1343,12 +1341,18 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		sce = context.scene
 		layout.operator("mesh.make_unfoldable")
 		box = layout.box()
-		box.label(text="{} island(s):".format(len(sce.island_list)))
-		box.template_list(sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
-		#layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
-		box.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
+		if sce.island_list:
+			box.label(text="{} island(s):".format(len(sce.island_list)))
+			box.template_list(sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+			#layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
+			box.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
+		else:
+			box.label(text="Not unfolded")
+			sub = box.row()
+			sub.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
+			sub.active = False
 		sub = box.row()
-		sub.active = sce.io_paper_model_display_islands
+		sub.active = sce.io_paper_model_display_islands and bool(sce.island_list)
 		sub.prop(sce, "io_paper_model_islands_alpha", slider=True)
 		
 		island_list = sce.island_list
@@ -1361,6 +1365,8 @@ def display_islands(self, context):
 	import bgl
 	#TODO: save the vertex positions and don't recalculate them always
 	#TODO: don't use active object, but rather save the object itself
+	if context.active_object != display_islands.object:
+		return
 	perspMatrix = context.space_data.region_3d.perspective_matrix
 	perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [(perspMatrix[i][j]) for j in range(4) for i in range(4)])
 	bgl.glLoadIdentity()
@@ -1388,6 +1394,7 @@ def display_islands(self, context):
 	bgl.glPolygonOffset(0.0, 0.0)
 	bgl.glDisable(bgl.GL_POLYGON_OFFSET_FILL)
 display_islands.handle = None
+display_islands.object = None
 
 def display_labels(self, context):
 	import bgl, blf, mathutils
@@ -1431,14 +1438,22 @@ def display_islands_changed(self, context):
 			region.callback_remove(display_islands.handle)
 			display_islands.handle = None
 
+def display_islands_check(scene):
+	global highlight_faces
+	#highlight_faces = list()
+	bpy.app.handlers.scene_update_pre.remove(display_islands_check)
+
 def list_selection_changed(self, context):
 	"""Update the island highlighted in 3D View"""
 	global highlight_faces
 	if self.island_list_index >= 0:
 		list_item = self.island_list[self.island_list_index]
 		highlight_faces = [face.id for face in list_item.faces]
+		display_islands.object = context.active_object
+		bpy.app.handlers.scene_update_pre.append(display_islands_check)
 	else:
 		highlight_faces = list()
+		display_islands.object = None
 	"""
 	mesh = bpy.context.active_object.data
 	face_data = list()
