@@ -17,8 +17,11 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
+#### FIXME:
+# there is something wrong with edge angle calculation, at least when normals are flipped
 
 #### TODO:
+# choose edge's main pair of faces intelligently
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
 
@@ -377,8 +380,8 @@ class Mesh:
 						self.points.remove(self)
 			def __str__(self):
 				return "Point at "+str(self.boundary.x)+" "+str(self.boundary.y)+" of available area "+str(self.area)
-		#fixme: at first, it should cut all islands that are too big to fit the page
-		#todo: there should be a list of points off the boundary that are created from pairs of open edges
+		#TODO: at first, it should cut all islands that are too big to fit the page
+		#TODO: there should be a list of points off the boundary that are created from pairs of open edges
 		largest_island_ratio = self.largest_island_ratio(page_size) 
 		if largest_island_ratio > 1:
 			raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+strf(largest_island_ratio)+" times.")
@@ -507,89 +510,34 @@ class Edge:
 		self.vect=self.vb.co-self.va.co
 		self.length=self.vect.length
 		self.faces=list()
-		self.angles=dict()
-		self.other_face=dict() #FIXME: this should be rather a function, damn this mess
 		self.uvedges=list()
 
 		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
+		self.angle = None
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
 	
 	def process_faces(self):
-		"""Reorder faces (if more than two), calculate angle(s) and if normals are wrong, mark edge as cut"""
-		def niceness (angle):
-			"""Return how good idea it would be to leave the given angle uncut"""
-			if angle<0:
-				if priority_effect['concave']!=0:
-					return -1/(angle*priority_effect['concave'])
-			elif angle>0:
-				if priority_effect['convex']!=0:
-					return 1/(angle*priority_effect['convex'])
-			#if angle == 0:
-			return 1000000
+		"""Choose two main faces and calculate the angle between them"""
 		if len(self.faces)==0:
 			return
 		elif len(self.faces)==1:
-			self.angles[self.faces[0]]=pi
+			self.angle = pi
 			return
 		else:
-			#hacks for edges with two or more faces connected
-			rot=z_up_matrix(self.vect) #Everything is easier in 2D
-			normal_directions=dict() #direction of each face's normal, rotated to 2D
-			face_directions=dict() #direction which each face is pointing in from this edge; rotated to 2D
-			is_normal_cw=dict()
-			for face in self.faces:
-				try:
-					normal_directions[face] = angle2d(rot*face.normal)
-					face_directions[face] = angle2d(rot*(vectavg(face.verts)-self.va.co))
-				except ValueError:
-					raise UnfoldError("Fatal error: there is a face with all vertices in line")
-				is_normal_cw[face] = (normal_directions[face] - face_directions[face]) % (2*pi) < pi #True for clockwise normal around this edge, False for ccw
-			#Firstly, find which two faces will be the 'main' ones
-			self.faces.sort(key=lambda face: normal_directions[face])
-			best_pair = 0, None, None #tuple: niceness, face #1, face #2
-			for first_face, second_face in pairs(self.faces):
-				if is_normal_cw[first_face] != is_normal_cw[second_face]:
-					used = True
-					#Always calculate the inner angle (between faces' backsides)
-					if not is_normal_cw[first_face]:
-						first_face, second_face = second_face, first_face
-					#Get the angle difference
-					angle_normals=(normal_directions[second_face]-normal_directions[face]) % (2*pi)
-					#Check whether it is better than the current best one
-					if niceness(angle_normals) > best_pair[0]:
-						best_pair=niceness(angle_normals), first_face, second_face
-			#For each face, find the nearest neighbour from its backside
-			self.faces.sort(key=lambda face: face_directions[face])
-			for index, face in enumerate(self.faces):
-				if is_normal_cw[face]:
-					adjacent_face=self.faces[(index-1) % len(self.faces)]
-				else:
-					adjacent_face=self.faces[(index+1) % len(self.faces)]
-				self.other_face[face]=adjacent_face
-			#Overwrite the calculated neighbours for the two 'main' ones
-			if best_pair[0] > 0:
-				#If we found two nice faces, create a connection between them
-				for first_face, second_face in pairs ([best_pair[1], best_pair[2]]):
-					self.other_face[first_face]=second_face
-				#Reorder the list of faces so that the main ones come first
-				index_first=self.faces.index(best_pair[1])
-				self.faces=self.faces[index_first:] + self.faces[:index_first]
+			face_a, face_b = self.faces[:2]
+			# correction if normals are flipped
+			a_is_clockwise = ((face_a.verts.index(self.va) - face_a.verts.index(self.vb)) % len(face_a.verts) == 1)
+			b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) != 1)
+			if a_is_clockwise == b_is_clockwise:
+				self.angle = face_a.normal.angle(face_b.normal)
 			else:
-				#If none of the faces is nice, go cut yourself
-				self.cut() 
-			#Calculate angles for each face to the 'other face' (self.other_face[face])
-			for face in self.faces:
-				angle_faces = pi - ((face_directions[self.other_face[face]] - face_directions[face]) % (2*pi))
-				#Always calculate the inner angle (between faces' backsides)
-				if is_normal_cw[face]:
-					angle_faces = -angle_faces
-				self.angles[face] = angle_faces
-	
+				self.angle = face_a.normal.angle(-face_b.normal)
+
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
-		angle = self.angles[self.faces[0]]
+		angle = self.angle
 		if angle > 0:
 			self.priority = (angle/pi)*priority_effect['convex']
 		else:
@@ -601,7 +549,7 @@ class Edge:
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
-		if face is None or self.faces.index(face) <= 1:
+		if face is None or self.faces.index(face) < 2:
 			return self.is_main_cut
 		#All other faces (third and more) are automatically treated as cut
 		else:
@@ -619,23 +567,10 @@ class Edge:
 		if self.priority:
 			self.label_update()
 
-	def __lt__(self, other):
-		"""Compare by priority."""
-		return self.priority < other.priority
-	def __gt__(self, other):
-		"""Compare by priority."""
-		return self.priority > other.priority
 	def __str__(self):
 		return "Edge id: {}".format(self.data.index)
 	def __repr__(self):
 		return "Edge(id={}...)".format(self.data.index)
-	def other_vertex(self, this):
-		"""Get a vertex of this edge that is not the given one - or None if none of both vertices is the given one."""
-		if self.va is this:
-			return self.vb
-		elif self.vb is this:
-			return self.va
-		return None
 	def other_uvedge(self, this):
 		"""Get an uvedge of this edge that is not the given one - or None if no other uvedge was found."""
 		for uvedge in self.uvedges:
@@ -647,11 +582,12 @@ class Edge:
 class Face:
 	"""Wrapper for BPy Face"""
 	def __init__(self, bpy_face, mesh, matrix=1):
-		self.data = bpy_face
+		self.data = bpy_face 
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
 		self.loop_start = bpy_face.loop_start
+		
 		#TODO: would be nice to reuse the existing normal if possible
 		if len(self.verts) == 3:
 			# normal of a triangle can be calculated directly
@@ -780,16 +716,24 @@ class Island:
 				uvedge_a = uvedge
 			elif uvedge in other.edges:
 				uvedge_b = uvedge
+		#DEBUG
 		assert uvedge_a is not uvedge_b
 		
+		# check if vertices and normals are aligned correctly
+		verts_flipped = uvedge_b.va.vertex is uvedge_a.va.vertex
+		flipped = verts_flipped ^ uvedge_a.uvface.flipped ^ uvedge_b.uvface.flipped
 		# determine rotation
-		rot = fitting_matrix(uvedge_b.va - uvedge_b.vb, uvedge_a.vb - uvedge_a.va)
-		trans = uvedge_a.vb.co - rot * uvedge_b.va.co
+		first_b, second_b = (uvedge_b.va, uvedge_b.vb) if not verts_flipped else (uvedge_b.vb, uvedge_b.va)
+		if not flipped:
+			rot = fitting_matrix(first_b - second_b, uvedge_a.vb - uvedge_a.va)
+		else:
+			flip = M.Matrix(((-1,0),(0,1)))
+			rot = fitting_matrix(flip * (first_b - second_b), uvedge_a.vb - uvedge_a.va) * flip
+		trans = uvedge_a.vb.co - rot * first_b.co
 		# extract and transform island_b's boundary
 		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
 		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
-		phantoms[uvedge_b.va] = uvedge_a.vb
-		phantoms[uvedge_b.vb] = uvedge_a.va
+		phantoms[first_b], phantoms[second_b] = uvedge_a.vb, uvedge_a.va
 		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge is not uvedge_b]
 		# create event list
 		sweepline = Sweepline()
@@ -825,6 +769,7 @@ class Island:
 			uvface.island = self
 			uvface.verts = [phantoms[uvvertex] for uvvertex in uvface.verts]
 			uvface.uvvertex_by_id = {index: phantoms[uvvertex] for index, uvvertex in uvface.uvvertex_by_id.items()}
+			uvface.flipped ^= flipped
 		self.faces.extend(other.faces)
 		self.boundary_sorted.extend(other.boundary_sorted)
 		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup)
@@ -1001,6 +946,8 @@ class UVFace:
 			self.face=face
 			face.uvface=self
 			self.island=island
+			self.flipped = False # a flipped UVFace has edges clockwise
+			
 			rot=z_up_matrix(face.normal)
 			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
 			for vertex in face.verts:
@@ -1058,15 +1005,17 @@ class Sticker(UVFace):
 		"""Sticker is directly appended to the edge given by two UVVerts"""
 		#faces is a placeholder: it should contain all possibly overlaping faces
 		#other_face is a placeholder too: that should be the sticking target and this sticker must fit into it
-		edge=uvedge.va.co-uvedge.vb.co
+		first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
+		edge = first_vertex - second_vertex
 		sticker_width=min(default_width, edge.length/2)
 		other=uvedge.edge.other_uvedge(uvedge) #This is the other uvedge - the sticking target
-		other_edge=other.vb.co-other.va.co
+		other_first, other_second = (other.va, other.vb) if not other.uvface.flipped else (other.vb, other.va)
+		other_edge = other_second - other_first
 		cos_a=cos_b=0.5 #angle a is at vertex uvedge.va, b is at uvedge.vb
 		sin_a=sin_b=0.75**0.5
 		len_a=len_b=sticker_width/sin_a #len_a is length of the side adjacent to vertex a, len_b similarly
 		#fix overlaps with the most often neighbour - its sticking target
-		if uvedge.va==other.vb:
+		if first_vertex == other_second:
 			cos_a=min(max(cos_a, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_a=(1-cos_a**2)**0.5
 			len_b=min(len_a, (edge.length*sin_a)/(sin_a*cos_b+sin_b*cos_a))
@@ -1074,7 +1023,7 @@ class Sticker(UVFace):
 				len_a=0
 			else:
 				len_a=min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
-		elif uvedge.vb==other.va:
+		elif second_vertex == other_first:
 			cos_b=min(max(cos_b, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
 			sin_b=(1-cos_b**2)**0.5
 			len_a=min(len_a, (edge.length*sin_b)/(sin_a*cos_b+sin_b*cos_a))
@@ -1082,12 +1031,12 @@ class Sticker(UVFace):
 				len_b=0
 			else:
 				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3 = uvedge.vb.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b/edge.length
-		v4 = uvedge.va.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a/edge.length
+		v3 = second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b/edge.length
+		v4 = first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a/edge.length
 		if v3!=v4:
-			self.verts=[uvedge.vb, UVVertex(v3), UVVertex(v4), uvedge.va]
+			self.verts=[second_vertex, UVVertex(v3), UVVertex(v4), first_vertex]
 		else:
-			self.verts=[uvedge.vb, UVVertex(v3), uvedge.va]
+			self.verts=[second_vertex, UVVertex(v3), first_vertex]
 		"""for face in faces: #TODO: fix all overlaps
 			self.cut(face) #yep, this is slow
 		if other_face: 
@@ -1141,13 +1090,12 @@ class SVG:
 					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
 						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in (uvedge.va, uvedge.vb)))
-						#FIXME: The following clause won't return correct results for uncut edges with more than two faces connected
 						if uvedge.edge.is_cut(uvedge.uvface.face):
 							assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer.append(data_uvedge)
 						else:
 							if uvedge.va.vertex.index > uvedge.vb.vertex.index: #each edge is in two opposite-oriented variants; we want to add each only once
-								angle = uvedge.edge.angles[uvedge.uvface.face]
+								angle = uvedge.edge.angle
 								if angle > 0.01:
 									data_convex.append(data_uvedge)
 								elif angle < -0.01:
