@@ -18,7 +18,6 @@
 # ##### END GPL LICENSE BLOCK #####
 
 #### FIXME:
-# there is something wrong with edge angle calculation, at least when normals are flipped
 
 #### TODO:
 # choose edge's main pair of faces intelligently
@@ -198,7 +197,7 @@ class Mesh:
 			face = Face(bpy_face, self)
 			self.faces[bpy_face.index] = face
 		for index in self.edges:
-			self.edges[index].process_faces()
+			self.edges[index].calculate_angle()
 	
 	def cut_obvious(self):
 		"""Cut all seams and non-manifold edges."""
@@ -518,7 +517,7 @@ class Edge:
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
 	
-	def process_faces(self):
+	def calculate_angle(self):
 		"""Choose two main faces and calculate the angle between them"""
 		if len(self.faces)==0:
 			return
@@ -528,12 +527,19 @@ class Edge:
 		else:
 			face_a, face_b = self.faces[:2]
 			# correction if normals are flipped
-			a_is_clockwise = ((face_a.verts.index(self.va) - face_a.verts.index(self.vb)) % len(face_a.verts) == 1)
-			b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) != 1)
+			a_is_clockwise = ((face_a.verts.index(self.vb) - face_a.verts.index(self.va)) % len(face_a.verts) == 1)
+			b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) == 1)
+			if face_a.uvface and face_b.uvface:
+				a_is_clockwise ^= face_a.uvface.flipped
+				b_is_clockwise ^= face_b.uvface.flipped
 			if a_is_clockwise == b_is_clockwise:
-				self.angle = face_a.normal.angle(face_b.normal)
+				if a_is_clockwise == (face_a.normal.cross(face_b.normal).dot(self.vect) > 0):
+					self.angle = face_a.normal.angle(face_b.normal) # the angle is convex
+				else:
+					self.angle = -face_a.normal.angle(face_b.normal) # the angle is concave
 			else:
-				self.angle = face_a.normal.angle(-face_b.normal)
+				self.angle = face_a.normal.angle(-face_b.normal) # normals are flipped, so we know nothing
+				# but let us be optimistic and treat the angle as convex :)
 
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
@@ -587,6 +593,7 @@ class Face:
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
 		self.loop_start = bpy_face.loop_start
+		self.uvface = None
 		
 		#TODO: would be nice to reuse the existing normal if possible
 		if len(self.verts) == 3:
@@ -1094,11 +1101,13 @@ class SVG:
 							assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer.append(data_uvedge)
 						else:
-							if uvedge.va.vertex.index > uvedge.vb.vertex.index: #each edge is in two opposite-oriented variants; we want to add each only once
-								angle = uvedge.edge.angle
-								if angle > 0.01:
+							if uvedge.uvface.flipped ^ (uvedge.va.vertex.index > uvedge.vb.vertex.index): # each uvedge is in two opposite-oriented variants; we want to add each only once
+								edge = uvedge.edge
+								if edge.faces[0].uvface.flipped != edge.faces[1].uvface.flipped:
+									edge.calculate_angle()
+								if edge.angle > 0.01:
 									data_convex.append(data_uvedge)
-								elif angle < -0.01:
+								elif edge.angle < -0.01:
 									data_concave.append(data_uvedge)
 					if island.stickers:
 						data_stickers = ["<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>" for sticker in island.stickers]
