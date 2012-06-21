@@ -170,7 +170,7 @@ class Unfolder:
 			self.mesh.save_image(tex, filepath, page_size * ppm)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
-		svg=SVG(page_size * ppm, properties.output_pure)
+		svg=SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
 		svg.add_mesh(self.mesh)
 		svg.write(filepath)
 
@@ -785,7 +785,7 @@ class Island:
 		return True
 
 	def add(self, uvface):
-		self.verts.update(uvface.verts) #FIXME: why isn't uvface.verts a set directly?
+		self.verts.update(uvface.verts)
 		if uvface.is_sticker:
 			self.stickers.append(uvface)
 		else:
@@ -967,10 +967,6 @@ class UVFace:
 				diff *= (va.co-vb.co).length/(uva.co-uvb.co).length
 			global differences
 			differences.append((diff, face.normal))
-		elif type(face) is UVFace: #copy constructor TODO: DOES NOT WORK
-			self.verts=list(face.verts)
-			self.face=face.face
-			self.uvvertex_by_id=dict(face.uvvertex_by_id)
 		self.edges=list()
 		edge_by_verts=dict()
 		for edge in face.edges:
@@ -1055,13 +1051,14 @@ class Sticker(UVFace):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, page_size_pixels:M.Vector, pure_net=True):
+	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1):
 		"""Initialize document settings.
 		page_size_pixels: document dimensions in pixels
 		pure_net: if True, do not use image"""
 		self.page_size = page_size_pixels
 		self.scale = page_size_pixels.y
 		self.pure_net = pure_net
+		self.line_thickness = float(line_thickness)
 	def add_mesh(self, mesh):
 		"""Set the Mesh to process."""
 		self.mesh=mesh
@@ -1078,15 +1075,15 @@ class SVG:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
 				f.write("<svg xmlns:svg='http://www.w3.org/2000/svg' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' width='" + str(self.page_size.x) + "px' height='" + str(self.page_size.y) + "px'>")
 				f.write("""<style type="text/css">
-					path {fill:none; stroke-width:1px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}
-					path.concave {stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}
-					path.convex {stroke:#000; stroke-dasharray:4,8; stroke-dashoffset:0}
-					path.outer {stroke:#000; stroke-dasharray:none; stroke-width:1.5px}
-					path.background {stroke:#fff}
-					path.outer_background {stroke:#fff; stroke-width:2px}
-					path.sticker {fill: #fff; stroke: #000; fill-opacity: 0.4; stroke-opacity: 0.7}
-					rect {fill:#ccc; stroke:none}
-				</style>""")
+					path {{fill:none; stroke-width:{thin:.2}px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}}
+					path.concave {{stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}}
+					path.convex {{stroke:#000; stroke-dasharray:4,8; stroke-dashoffset:0}}
+					path.outer {{stroke:#000; stroke-dasharray:none; stroke-width:{thick:.2}px}}
+					path.background {{stroke:#fff}}
+					path.outer_background {{stroke:#fff; stroke-width:{outline:.2}px}}
+					path.sticker {{fill: #fff; stroke: #000; fill-opacity: 0.4; stroke-opacity: 0.7}}
+					rect {{fill:#ccc; stroke:none}}
+				</style>""".format(thin=self.line_thickness, thick=1.5*self.line_thickness, outline=2*self.line_thickness))
 				if not self.pure_net:
 					f.write("<image x='0' y='0' width='" + str(self.page_size.x) + "' height='" + str(self.page_size.y) + "' xlink:href='file://" + filename + "_" + page.name + ".png'/>")
 				if len(page.islands) > 1:
@@ -1200,6 +1197,7 @@ class ExportPaperModel(bpy.types.Operator):
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
+	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
 	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
 	unfolder=None
 	largest_island_ratio=0
@@ -1252,6 +1250,7 @@ class ExportPaperModel(bpy.types.Operator):
 		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
 		layout.label(text="Document settings:")
 		layout.prop(self.properties, "sticker_width")
+		layout.prop(self.properties, "line_thickness")
 
 """ 
 class VIEW3D_paper_model(bpy.types.Panel):
@@ -1301,6 +1300,9 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		if sce.island_list:
 			box.label(text="{} island(s):".format(len(sce.island_list)))
 			box.template_list(sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+			if sce.island_list_index >= 0:
+				list_item = sce.island_list[sce.island_list_index]
+				box.prop(list_item, "label")
 			#layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
 			box.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
 		else:
@@ -1312,10 +1314,6 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		sub.active = sce.io_paper_model_display_islands and bool(sce.island_list)
 		sub.prop(sce, "io_paper_model_islands_alpha", slider=True)
 		
-		island_list = sce.island_list
-		if sce.island_list_index >= 0 and len(island_list) > 0:
-			list_item = island_list[sce.island_list_index]
-			box.prop(list_item, "label")
 		layout.operator("export_mesh.paper_model")
 	
 def display_islands(self, context):
@@ -1344,7 +1342,7 @@ def display_islands(self, context):
 		for vertex_id in face.vertices:
 			vertex = mesh.vertices[vertex_id]
 			co = vertex.co.to_4d()
-			co = ob.matrix_world * co
+			co = ob.matrix_world * co #TODO: cannot this calculation be done by GL?
 			co /= co[3]
 			bgl.glVertex3f(co[0], co[1], co[2])
 		bgl.glEnd()
