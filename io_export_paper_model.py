@@ -18,6 +18,7 @@
 # ##### END GPL LICENSE BLOCK #####
 
 #### FIXME:
+# check that edges with 0 or 1 faces need not be marked as cut
 
 #### TODO:
 # choose edge's main pair of faces intelligently
@@ -142,12 +143,13 @@ class Unfolder:
 		self.ob=ob
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 
-	def prepare(self, properties=None):
+	def prepare(self, properties=None, mark_seams=False):
 		"""Something that should be part of the constructor - TODO """
-		self.mesh.cut_obvious()
 		self.mesh.generate_cuts()
 		self.mesh.finalize_islands()
 		self.mesh.save_uv()
+		if mark_seams:
+			self.mesh.mark_cuts()
 
 	def save(self, properties):
 		"""Export the document."""
@@ -199,15 +201,6 @@ class Mesh:
 		for index in self.edges:
 			self.edges[index].calculate_angle()
 	
-	def cut_obvious(self):
-		"""Cut all seams and non-manifold edges."""
-		count=0
-		for i in self.edges:
-			edge = self.edges[i]
-			if not edge.is_cut() and (edge.data.use_seam or len(edge.faces)<2): #NOTE: Here is one of the rare cases when using the original BPy data
-				edge.cut()
-				count += 1
-	
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
 		global twisted_quads, labels
@@ -216,18 +209,15 @@ class Mesh:
 		#Silently check that all quads are flat
 		global differences
 		differences = list()
-
+		
 		for index in self.faces:
 			self.faces[index].check_twisted()
-
+		
 		self.islands = {Island(face) for face in self.faces.values()}
 		# check for edges that are cut permanently
-		edges = list()
-		edges = [self.edges[edge_id] for edge_id in self.edges if not self.edges[edge_id].is_main_cut]
+		edges = [edge for edge in self.edges.values() if not edge.force_cut and len(edge.faces) > 1]
 		if not edges:
 			return True
-		for edge in edges:
-			edge.is_main_cut = True
 		
 		average_length = sum(edge.length for edge in edges) / len(edges)
 		for edge in edges:
@@ -248,7 +238,12 @@ class Mesh:
 			for diff in differences[0:5]:
 				print ("{:.5f}".format(diff[0]))
 		return True
-		
+	
+	def mark_cuts(self):
+		"""Mark cut edges in the original mesh so that the user can see"""
+		for edge in self.edges.values():
+			edge.data.use_seam = edge.is_main_cut
+	
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
 		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
@@ -510,8 +505,9 @@ class Edge:
 		self.length=self.vect.length
 		self.faces=list()
 		self.uvedges=list()
-
-		self.is_main_cut=False #defines whether the first two faces are connected; all the others will be automatically treated as cut
+		
+		self.force_cut = bool(edge.use_seam) # such edges will always be cut
+		self.is_main_cut = True # defines whether the first two faces are connected; all the others will be automatically treated as cut
 		self.priority=None
 		self.angle = None
 		self.va.edges.append(self)
@@ -561,18 +557,6 @@ class Edge:
 		else:
 			return True
 	
-	def label_update(self):
-		"""Debug tool"""
-		global labels
-		labels[self][1] = strf(self.priority)
-	
-	def cut(self):
-		"""Set this edge as cut."""
-		self.data.use_seam=True #TODO: this should be optional; NOTE: Here, the original BPy Edge data is used
-		self.is_main_cut=True
-		if self.priority:
-			self.label_update()
-
 	def __str__(self):
 		return "Edge id: {}".format(self.data.index)
 	def __repr__(self):
@@ -1160,7 +1144,7 @@ class MakeUnfoldable(bpy.types.Operator):
 		sce.io_paper_model_display_islands = False
 
 		unfolder = Unfolder(context.active_object)
-		unfolder.prepare()
+		unfolder.prepare(mark_seams=True)
 
 		island_list = context.scene.island_list
 		island_list.clear() #remove previously defined islands
