@@ -49,8 +49,10 @@ Additional links:
 import bpy
 import mathutils as M
 import mathutils.geometry as G
-from heapq import heappush, heappop
-from math import pi
+try:
+	from math import pi
+except ImportError:
+	pi = 3.141592653589783
 try:
 	from blist import blist
 except ImportError:
