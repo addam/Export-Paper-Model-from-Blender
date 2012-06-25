@@ -48,7 +48,6 @@ Additional links:
 """
 import bpy
 import mathutils as M
-import mathutils.geometry as G
 try:
 	from math import pi
 except ImportError:
@@ -62,21 +61,13 @@ priority_effect={
 	'convex':0.5,
 	'concave':1,
 	'length':-0.05}
-lines = list() #TODO: currently lines are not used
-twisted_quads = list()
-labels = dict()
 highlight_faces = list()
 
 strf="{:.3f}".format
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
-	if a == 0:
-		return 0
-	if a < 0:
-		return -1
-	else:
-		return 1
+	return -1 if a < 0 else 1 if a > 0 else 0
 
 def vectavg(vectlist):
 	"""Vector average of given list."""
@@ -182,7 +173,6 @@ class Mesh:
 	"""Wrapper for Bpy Mesh"""
 	
 	def __init__(self, mesh, matrix):
-		global lines, twisted_quads
 		self.verts=dict()
 		self.edges=dict()
 		self.edges_by_verts_indices=dict()
@@ -205,15 +195,10 @@ class Mesh:
 	
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
-		global twisted_quads, labels
-		twisted_quads = list()
-		labels = dict()
-		#Silently check that all quads are flat
-		global differences
-		differences = list()
 		
-		for index in self.faces:
-			self.faces[index].check_twisted()
+		twisted_faces = [face for face in self.faces.values() if face.is_twisted()]
+		if twisted_faces:
+			print ("There are {} twisted face(s) with ids: {}".format(len(twisted_faces), ", ".join(str(face.index) for face in twisted_faces)))
 		
 		self.islands = {Island(face) for face in self.faces.values()}
 		# check for edges that are cut permanently
@@ -233,12 +218,6 @@ class Mesh:
 			if island_a is not island_b:
 				if island_a.join(island_b, edge):
 					self.islands.remove(island_b)
-		differences.sort(reverse=True)
-		if differences[0][0]>1+1e-5:
-			print ("""Papermodel warning: there are non-flat faces, which will be deformed in the output image. You should consider converting the mesh to triangle faces.
-			Showing first five values (normally they should be very close to 1.0):""")
-			for diff in differences[0:5]:
-				print ("{:.5f}".format(diff[0]))
 		return True
 	
 	def mark_cuts(self):
@@ -453,7 +432,6 @@ class Mesh:
 				for uvface in island.faces:
 					if not uvface.is_sticker:
 						texfaces[uvface.face.index].image=image
-				#island.save_uv(loop, aspect_ratio)
 			bpy.ops.object.bake_image()
 			image.save()
 			for island in page.islands:
@@ -491,10 +469,6 @@ class Vertex:
 			return other-self.co
 	def __add__(self, other):
 		return self.co+other.co
-	def __str__(self):
-		return "Vertex {} at: {}".format(self.index, self.co[0:2])
-	def __repr__(self):
-		return "Vertex(id={}...)".format(self.index)
 		
 class Edge:
 	"""Wrapper for BPy Edge"""
@@ -548,7 +522,6 @@ class Edge:
 			self.priority = -(angle/pi)*priority_effect['concave']
 		length_effect = (self.length/average_length) * priority_effect['length']
 		self.priority += length_effect
-		labels[self] = [(self.va+self.vb)*0.5, strf(self.priority)]
 	
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
@@ -559,10 +532,6 @@ class Edge:
 		else:
 			return True
 	
-	def __str__(self):
-		return "Edge id: {}".format(self.data.index)
-	def __repr__(self):
-		return "Edge(id={}...)".format(self.data.index)
 	def other_uvedge(self, this):
 		"""Get an uvedge of this edge that is not the given one - or None if no other uvedge was found."""
 		for uvedge in self.uvedges:
@@ -596,24 +565,18 @@ class Face:
 			edge = mesh.edges_by_verts_indices[verts_indices]
 			self.edges.append(edge)
 			edge.faces.append(self)
-	def check_twisted(self):
+	def is_twisted(self):
 		if len(self.verts) > 3:
-			global twisted_quads, lines
 			center = vectavg(self.verts)
 			plane_d = center.dot(self.normal)
 			diameter = max((center-vertex.co).length for vertex in self.verts)
 			for vertex in self.verts:
 				# check coplanarity
 				if abs(vertex.co.dot(self.normal) - plane_d) > diameter*0.01: #TODO: this threshold should be editable or well chosen at least
-					twisted_quads.append(self.verts)
 					return True
 		return False
 	def __hash__(self):
 		return hash(self.index)
-	def __str__(self):
-		return "Face id: "+str(self.index)
-	def __repr__(self):
-		return "Face(id="+str(self.index)+"...)"
 
 class Island:
 	def __init__(self, face=None):
@@ -947,12 +910,6 @@ class UVFace:
 				uvvertex=UVVertex(rot * vertex.co, vertex)
 				self.verts.append(uvvertex)
 				self.uvvertex_by_id[vertex.index]=uvvertex
-			#DEBUG: check lengths
-			diff=1
-			for (va, uva), (vb, uvb) in pairs(zip(face.verts, self.verts)):
-				diff *= (va.co-vb.co).length/(uva.co-uvb.co).length
-			global differences
-			differences.append((diff, face.normal))
 		self.edges=list()
 		edge_by_verts=dict()
 		for edge in face.edges:
@@ -962,31 +919,7 @@ class UVFace:
 			uvedge = UVEdge(va, vb, island, self, edge_by_verts[(va.vertex.index, vb.vertex.index)])
 			self.edges.append(uvedge)
 			island.edges.add(uvedge)
-		#self.edges=[UVEdge(self.uvvertex_by_id[edge.va.data.index], self.uvvertex_by_id[edge.vb.data.index], island, edge) for edge in face.edges]
-		#DEBUG:
-		#self.check("construct")
 	
-	def __lt__(self, other):
-		"""Hack for usage in heaps"""
-		return self.face.index < other.face.index
-	
-	def __repr__(self):
-		return "UVFace("+str(self.face.index)+")"
-	
-	#DEBUG:
-	def check(self, message=""):
-		for this_uvedge in self.edges:
-			if this_uvedge.va not in self.verts:
-				print("papermodel ERROR: My UVEdge doesn't belong to myself",this_uvedge.va.vertex.index, object.__repr__(this_uvedge), message)
-			if this_uvedge.vb not in self.verts:
-				print("papermodel ERROR: My UVEdge doesn't belong to myself",this_uvedge.vb.vertex.index, object.__repr__(this_uvedge), message)
-		for vertex_id, vertex in self.uvvertex_by_id.items():
-			if vertex not in self.verts:
-				print("papermodel ERROR: UVVertex found by ID does not exist")
-		if len(self.verts) == 4:
-			if (self.verts[0].co-self.verts[2].co).angle(self.verts[1].co-self.verts[3].co)<pi/10:
-				print("papermodel NOTICE: This face is weirdly twisted",self.face.index, message)
-		
 class Sticker(UVFace):
 	"""Sticker face"""
 	is_sticker=True
@@ -1026,14 +959,6 @@ class Sticker(UVFace):
 			self.verts=[second_vertex, UVVertex(v3), UVVertex(v4), first_vertex]
 		else:
 			self.verts=[second_vertex, UVVertex(v3), first_vertex]
-		"""for face in faces: #TODO: fix all overlaps
-			self.cut(face) #yep, this is slow
-		if other_face: 
-			dupli=UVFace(other_face, edge=edge)"""
-	def cut(self, face):
-		"""Cut the given UVFace's area from this sticker (if they overlap) - placeholder."""
-		#TODO
-		pass
 
 class SVG:
 	"""Simple SVG exporter"""
@@ -1164,9 +1089,6 @@ class MakeUnfoldable(bpy.types.Operator):
 		unfolder.mesh.data.show_edge_seams=True
 		bpy.ops.object.mode_set(mode=orig_mode)
 		sce.io_paper_model_display_islands = display_islands
-		#global twisted_quads
-		#if len(twisted_quads) > 0:
-		#	self.report(type={'ERROR_INVALID_INPUT'}, message="There are twisted quads in the model, you should divide them to triangles. Use the 'Twisted Quads' option in View Properties panel to see them.")
 		return {'FINISHED'}
 
 class ExportPaperModel(bpy.types.Operator):
@@ -1238,38 +1160,6 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.prop(self.properties, "sticker_width")
 		layout.prop(self.properties, "line_thickness")
 
-""" 
-class VIEW3D_paper_model(bpy.types.Panel):
-	Blender UI Panel definition for Unfolder
-	bl_space_type = 'VIEW_3D'
-	bl_region_type = 'TOOLS'
-	bl_label = "Export Paper Model"
-	
-	bpy.types.Scene.unfolder_output_size_x = bpy.props.FloatProperty(name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
-	bpy.types.Scene.unfolder_output_size_y = bpy.props.FloatProperty(name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
-	bpy.types.Scene.unfolder_output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
-	bpy.types.Scene.unfolder_output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
-	
-	@classmethod
-	def poll(cls, context):
-		return (context.active_object and context.active_object.type == 'MESH')
-
-	def draw(self, context):
-		layout = self.layout
-		layout.operator("mesh.make_unfoldable")
-		col = layout.column()
-		sub = col.column(align=True)
-		sub.label(text="Page size:")
-		sub.prop(bpy.context.scene, "unfolder_output_size_x", text="Width")
-		sub.prop(bpy.context.scene, "unfolder_output_size_y", text="Height")
-		col.prop(bpy.context.scene, "unfolder_output_dpi", text="DPI")
-		col.prop(bpy.context.scene, "unfolder_output_pure")
-		sub = col.column()
-		sub.active = not context.scene.unfolder_output_pure
-		sub.prop(context.scene.render, "use_bake_selected_to_active", text="Bake Selected to Active")
-		col.operator("export.paper_model", text="Export Net...")
-"""
-
 def menu_func(self, context):
 	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
 
@@ -1337,37 +1227,6 @@ def display_islands(self, context):
 display_islands.handle = None
 display_islands.object = None
 
-def display_labels(self, context):
-	import bgl, blf, mathutils
-	view_mat = context.space_data.region_3d.perspective_matrix
-	
-	global labels
-	mid_x = context.region.width/2.0
-	mid_y = context.region.height/2.0
-	width = context.region.width
-	height = context.region.height
-	bgl.glColor3f(1,1,0)
-	for position, label in labels.values():
-		position.resize_4d()
-		vec = position * view_mat
-		vec /= vec[3]
-		x = int(mid_x + vec[0]*width/2.0)
-		y = int(mid_y + vec[1]*height/2.0)
-		blf.position(0, x, y, 0)
-		blf.draw(0, label)
-display_labels.handle = None
-
-def display_labels_changed(self, context):
-	"""Switch displaying labels on/off"""
-	region = [region for region in context.area.regions if region.type=='WINDOW'][0]
-	if self.io_paper_model_display_labels:
-		if not display_labels.handle:
-			display_labels.handle = region.callback_add(display_labels, (self, context), "POST_PIXEL")
-	else:
-		if display_labels.handle:
-			region.callback_remove(display_labels.handle)
-			display_labels.handle = None
-
 def display_islands_changed(self, context):
 	"""Switch highlighting islands on/off"""
 	region = [region for region in context.area.regions if region.type=='WINDOW'][0]
@@ -1379,11 +1238,6 @@ def display_islands_changed(self, context):
 			region.callback_remove(display_islands.handle)
 			display_islands.handle = None
 
-def display_islands_check(scene):
-	global highlight_faces
-	#highlight_faces = list()
-	bpy.app.handlers.scene_update_pre.remove(display_islands_check)
-
 def list_selection_changed(self, context):
 	"""Update the island highlighted in 3D View"""
 	global highlight_faces
@@ -1391,17 +1245,10 @@ def list_selection_changed(self, context):
 		list_item = self.island_list[self.island_list_index]
 		highlight_faces = [face.id for face in list_item.faces]
 		display_islands.object = context.active_object
-		bpy.app.handlers.scene_update_pre.append(display_islands_check)
 	else:
 		highlight_faces = list()
 		display_islands.object = None
-	"""
-	mesh = bpy.context.active_object.data
-	face_data = list()
-	for vertex_id in mesh.faces[face_id].vertices:
-		face_data.append(mesh.vertices[vertex_id].co)
-	highlight_faces.append(face_data)
-	"""
+
 def label_changed(self, context):
 	self.name = "{} ({} faces)".format(self.label, len(self.faces))
 
@@ -1416,10 +1263,8 @@ bpy.utils.register_class(IslandList)
 def register():
 	bpy.utils.register_module(__name__)
 
-	bpy.types.Scene.io_paper_model_display_labels = bpy.props.BoolProperty(name="Display edge priority", description="*debug property*", update=display_labels_changed)
 	bpy.types.Scene.io_paper_model_display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
 	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
-	#bpy.types.Scene.io_paper_model_display_quads = bpy.props.BoolProperty(name="Highlight tilted quads", description="Highlight tilted quad faces that would be distorted by export")
 	bpy.types.Scene.island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
 	bpy.types.Scene.island_list_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, update=list_selection_changed)
 	bpy.types.INFO_MT_file_export.append(menu_func)
