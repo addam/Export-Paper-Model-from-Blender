@@ -218,6 +218,13 @@ class Mesh:
 			if island_a is not island_b:
 				if island_a.join(island_b, edge):
 					self.islands.remove(island_b)
+		
+		# mark edges of flat polygons that need not be drawn
+		for edge in self.edges.values():
+			if len(edge.uvedges) >= 2:
+				if edge.uvedges[0].is_similar(edge.uvedges[1]):
+					edge.is_hidden = True
+		
 		return True
 	
 	def mark_cuts(self):
@@ -233,11 +240,12 @@ class Mesh:
 			#This is just a placeholder
 			return uvedge.va.co.y
 		for edge in self.edges.values():
-			if edge.is_cut() and len(edge.uvedges) >= 2:
-				if uvedge_priority(edge.uvedges[0]) >= uvedge_priority(edge.uvedges[1]):
-					edge.uvedges[0].island.add(Sticker(edge.uvedges[0], default_width))
+			if not edge.is_hidden and edge.is_cut() and len(edge.uvedges) >= 2:
+				uvedge_a, uvedge_b = edge.uvedges[:2]
+				if uvedge_priority(uvedge_a) >= uvedge_priority(uvedge_b):
+					uvedge_a.island.add(Sticker(uvedge_a, default_width))
 				else:
-					edge.uvedges[1].island.add(Sticker(edge.uvedges[1], default_width))
+					uvedge_b.island.add(Sticker(uvedge_b, default_width))
 			if len(edge.uvedges) > 2:
 				for additional_uvedge in edge.uvedges[2:]:
 					additional_uvedge.island.add(Sticker(additional_uvedge, default_width))
@@ -484,6 +492,7 @@ class Edge:
 		
 		self.force_cut = bool(edge.use_seam) # such edges will always be cut
 		self.is_main_cut = True # defines whether the first two faces are connected; all the others will be automatically treated as cut
+		self.is_hidden = False # for cuts inside flat faces that need not actually be drawn
 		self.priority=None
 		self.angle = None
 		self.va.edges.append(self)
@@ -534,11 +543,9 @@ class Edge:
 	
 	def other_uvedge(self, this):
 		"""Get an uvedge of this edge that is not the given one - or None if no other uvedge was found."""
-		for uvedge in self.uvedges:
-			if uvedge is not this:
-				return uvedge
-		else:
+		if len(self.uvedges) < 2:
 			return None
+		return self.uvedges[1] if this is self.uvedges[0] else self.uvedges[0]
 
 class Face:
 	"""Wrapper for BPy Face"""
@@ -868,16 +875,19 @@ class UVEdge:
 		self.vb = vertex2
 		self.update()
 		self.island = island
+		self.uvface = uvface
 		if edge:
 			self.edge = edge
 			edge.uvedges.append(self)
 		#Every UVEdge is attached to only one UVFace. UVEdges are doubled as needed, because they both have to point clockwise around their faces
-		self.uvface = uvface
 	def update(self):
 		"""Update data if UVVertices have moved"""
 		self.min, self.max = (self.va, self.vb) if (self.va < self.vb) else (self.vb, self.va)
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
+	def is_similar(self, other, epsilon = 1e-5):
+		return ((self.va - other.vb).length_squared < epsilon and (self.vb - other.va).length_squared < epsilon) or \
+			((self.va - other.va).length_squared < epsilon and (self.vb - other.vb).length_squared < epsilon)
 	def __lt__(self, other):
 		return self.min.tup < other.min.tup
 	def __le__(self, other):
@@ -1004,9 +1014,10 @@ class SVG:
 					rot = M.Matrix.Rotation(island.angle, 2)
 					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
+						edge = uvedge.edge
 						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in (uvedge.va, uvedge.vb)))
-						if uvedge.edge.is_cut(uvedge.uvface.face):
-							assert uvedge in uvedge.uvface.island.boundary_sorted
+						if not edge.is_hidden and edge.is_cut(uvedge.uvface.face):
+							#DEBUG: assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer.append(data_uvedge)
 						else:
 							if uvedge.uvface.flipped ^ (uvedge.va.vertex.index > uvedge.vb.vertex.index): # each uvedge is in two opposite-oriented variants; we want to add each only once
