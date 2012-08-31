@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-# mesh_convert_to_armature.py Copyright (C) 2011, Addam Dominec
+# mesh_convert_to_armature.py
 #
 # Generate an armature with a single bone controlling each face.
 # The mesh must be a tree-like structure for this to make sense.
 #
 # ***** BEGIN GPL LICENSE BLOCK *****
-#
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,20 +26,20 @@ bl_info = {
 	"name": "Convert Mesh to Armature",
 	"author": "Addam Dominec",
 	"version": (0,3),
-	"blender": (2, 6, 0),
-	"api": 41178,
+	"blender": (2, 6, 3),
+	"api": 49166,
 	"location": "Object > Convert to Armature",
 	"warning": "",
 	"description": "Generate an armature with a single bone controlling each face",
 	"category": "Object",
-	"wiki_url": "",
+	"wiki_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/Scripts/Object/Convert_to_Armature",
 	"tracker_url": ""}
 
 import bpy
 from itertools import repeat
 from functools import reduce
 from mathutils import Vector
-from math import asin
+from math import asin, pi
 
 def pairs(sequence):
 	return zip(sequence, sequence[1:]+sequence[:1])
@@ -100,7 +99,7 @@ def main(context):
 			if va > vb:
 				va, vb = vb, va
 			edge_by_verts[(va, vb)] = edge
-	for face in mesh.faces:
+	for face in mesh.polygons:
 		for edge in get_edges(face):
 			if edge not in faces_by_edge:
 				faces_by_edge[edge]=list()
@@ -120,42 +119,40 @@ def main(context):
 	context.scene.objects.active = armature_object
 	bpy.ops.object.mode_set(mode='EDIT')
 	angles = dict() #bone -> folding angle
-	queue = [(None, mesh.faces[mesh.faces.active], None, None, None)] #Edge, face and a bone connecting these two, parent in the tree and (optionally) parent FGon's group
+	queue = [(None, mesh.polygons[mesh.polygons.active], None, None)] #Edge, face and a bone connecting these two and parent in the tree
 	while queue:
-		edge, face, parent_bone, parent_face, vgroup = queue.pop()
+		edge, face, parent_bone, parent_face = queue.pop()
 		if face in visited_faces:
 			loops += 1 #We went to the same face from two different directions
 			continue
 		visited_faces.add(face)
-		if not vgroup:
-			vgroup = mesh_object.vertex_groups.new("Face_%i" % face.index) #Create a vertex group for this face
-			vgroup.add(face.vertices, 1, 'ADD')
-			if edge:
-				edge_vector = mesh.vertices[edge.vertices[0]].co - mesh.vertices[edge.vertices[1]].co
-				head = vertex_avg(mesh, edge.vertices)
-				tail = face.center
-				tail = tail - (tail-head).project(edge_vector)
-			else: #root bone
-				head = face.center.copy()
-				head.z -= 1
-				tail = face.center
-			bone = add_bone(vgroup.name, armature, head, tail)
-			bone.align_roll(face.normal)
-			bone.parent = parent_bone
-			if edge: #all except the root bone
-				depth = bone.vector.dot(parent_face.normal)/parent_face.normal.length
-				clamped = min(1, max(-1, depth/bone.vector.length))
-				try:
-					angles[bone.name] = asin(clamped)
-				except ValueError:
-					print("Depth: {}, |vector|: {}".format(depth, bone.vector.length))
-					angles[bone.name] = 0
-		else:
-			vgroup.add(face.vertices, 1, 'ADD')
-			bone = parent_bone
+		vgroup = mesh_object.vertex_groups.new("Face_%i" % face.index) #Create a vertex group for this face
+		vgroup.add(face.vertices, 1, 'ADD')
+		if edge:
+			edge_vector = mesh.vertices[edge.vertices[0]].co - mesh.vertices[edge.vertices[1]].co
+			head = vertex_avg(mesh, edge.vertices)
+			tail = vertex_avg(mesh, face.vertices)
+			tail -= (tail-head).project(edge_vector)
+		else: #root bone
+			tail = vertex_avg(mesh, face.vertices)
+			head = tail.copy()
+			head.z -= 1
+		bone = add_bone(vgroup.name, armature, head, tail)
+		bone.align_roll(face.normal)
+		bone.parent = parent_bone
+		if edge: #all except the root bone
+			depth = bone.vector.dot(parent_face.normal)/parent_face.normal.length
+			clamped = min(1, max(-1, depth/bone.vector.length))
+			try:
+				angle = asin(clamped)
+			except ValueError:
+				print("Depth: {}, |vector|: {}".format(depth, bone.vector.length))
+				angle = 0
+			if face.normal.dot(parent_face.normal) < 0:
+				angle = pi - angle
+			angles[bone.name] = angle
 		for next_edge in get_edges(face, exclude=edge):
-			fgon_vgroup = vgroup if next_edge.is_fgon else None
-			queue += zip(repeat(next_edge), get_faces(next_edge, exclude=face), repeat(bone), repeat(face), repeat(fgon_vgroup))
+			queue += zip(repeat(next_edge), get_faces(next_edge, exclude=face), repeat(bone), repeat(face))
 	bpy.ops.object.mode_set()
 	#Set transform locks (must be done in object mode)
 	pose_bone = armature_object.pose.bones[0]
@@ -169,7 +166,7 @@ def main(context):
 		pose_bone.rotation_euler.x = -angles[pose_bone.name]
 	context.scene.objects.active = mesh_object
 	if loops:
-		raise ValueError (loops)
+		raise ValueError(loops)
 
 class OBJECT_OT_convert_to_armature(bpy.types.Operator):
 	'''Generate an armature with a single bone controlling each face. The mesh must be a tree-like structure for this to make sense. Active face is used for main bone.'''
@@ -186,7 +183,7 @@ class OBJECT_OT_convert_to_armature(bpy.types.Operator):
 			main(context)
 		except ValueError as E:
 			if isinstance(E.args[0], int):
-				self.report({'ERROR', 'ERROR_INVALID_INPUT'}, "There are at least %i loops of faces. Use Export Paper Model add-on and EdgeSplit modifier to eliminate them. The output armature may be unusable otherwise." % E.args[0])
+				self.report({'ERROR', 'ERROR_INVALID_INPUT'}, "There is a loop of connected faces. Use Export Paper Model add-on and EdgeSplit modifier to eliminate them. Otherwise, the armature may be unusable.")
 			else:
 				raise
 		return {'FINISHED'}
