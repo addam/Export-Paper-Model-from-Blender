@@ -146,6 +146,13 @@ class Unfolder:
 
 	def save(self, properties):
 		"""Export the document."""
+		if not properties.output_pure and properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED'):
+			try:
+				from os import mkdir, rmdir, remove
+				from os.path import dirname, basename
+			except ImportError:
+				raise UnfoldError("This method of image packing is not supported by your system.")
+		
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
@@ -162,11 +169,27 @@ class Unfolder:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
 			#TODO: do we really need a switch of our own?
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
-			self.mesh.save_image(tex, filepath, page_size * ppm)
+			if properties.image_packing == 'PAGE_LINK':
+				self.mesh.save_image(tex, filepath, page_size * ppm)
+			elif properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED'):
+				imagedir = "{path}/{directory}".format(path=dirname(filepath), directory = basename(filepath))
+				try:
+					mkdir(imagedir)
+					imagedir_existed = False
+				except OSError:
+					imagedir_existed = True
+				self.mesh.save_separate_images(tex, imagedir, page_size * ppm)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
 		svg=SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
 		svg.add_mesh(self.mesh)
+		if not properties.output_pure and properties.image_packing == 'ISLAND_EMBED':
+			for island in self.mesh.islands:
+				image_path = island.image_path
+				island.embed_image()
+				remove(image_path)
+			if not imagedir_existed:
+				rmdir(imagedir)
 		svg.write(filepath)
 
 class Mesh:
@@ -450,7 +473,17 @@ class Mesh:
 			bpy.data.images.remove(image)
 		rd.bake_margin=recall_margin
 		rd.use_bake_clear=recall_clear
-   
+	
+	def save_separate_images(self, tex, dirname, page_size_pixels:M.Vector):
+		rd=bpy.context.scene.render
+		recall_margin=rd.bake_margin; rd.bake_margin=0
+		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
+		
+		#TODO!
+		
+		rd.bake_margin=recall_margin
+		rd.use_bake_clear=recall_clear
+
 class Vertex:
 	"""BPy Vertex wrapper"""
 	
@@ -821,6 +854,14 @@ class Island:
 					uv = rot * uvvertex.co + self.pos + self.offset
 					texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
 					texface[uvface.face.loop_start + i].uv[1] = uv.y
+	
+	def save_image(self, path):
+		#TODO!
+		pass
+	
+	def embed_image(self):
+		#TODO!
+		pass
 
 class Page:
 	"""Container for several Islands"""
@@ -1006,6 +1047,7 @@ class SVG:
 					rect {{fill:#ccc; stroke:none}}
 				</style>""".format(thin=self.line_thickness, thick=1.5*self.line_thickness, outline=2*self.line_thickness))
 				if not self.pure_net:
+					#TODO!
 					f.write("<image x='0' y='0' width='" + str(self.page_size.x) + "' height='" + str(self.page_size.y) + "' xlink:href='file://" + filename + "_" + page.name + ".png'/>")
 				if len(page.islands) > 1:
 					f.write("<g>")
@@ -1117,6 +1159,10 @@ class ExportPaperModel(bpy.types.Operator):
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
 	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
+	image_packing = bpy.props.EnumProperty(name="Image Packing Method", description="Method of attaching baked image(s) to the SVG", default='PAGE_LINK', items=[
+			('PAGE_LINK', "Single", "Bake one image per page of output"),
+			('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
+			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")])
 	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
 	unfolder=None
 	largest_island_ratio=0
@@ -1170,6 +1216,9 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.label(text="Document settings:")
 		layout.prop(self.properties, "sticker_width")
 		layout.prop(self.properties, "line_thickness")
+		col = layout.column()
+		col.active = not self.properties.output_pure
+		col.prop(self.properties, "image_packing", text="Images")
 
 def menu_func(self, context):
 	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
