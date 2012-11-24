@@ -99,7 +99,7 @@ def cross_product(v1, v2):
 	return v1.x*v2.y - v1.y*v2.x
 
 def pairs(sequence):
-	"""Generate consequent pairs throughout the given sequence; at last, it gives elements last, first."""
+	"""Generate consecutive pairs throughout the given sequence; at last, it gives elements last, first."""
 	i=iter(sequence)
 	previous=first=next(i)
 	for this in i:
@@ -775,12 +775,11 @@ class Island:
 	
 	def generate_convex_hull(self) -> list:
 		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
-		def make_convex_curve(verts):
+		def make_convex_curve(verts, cross=cross_product):
 			"""Remove vertices from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
 			result = list()
 			for vertex in verts:
-				while len(result) >= 2 and \
-				(vertex.co-result[-1].co).to_3d().cross((result[-1].co-result[-2].co).to_3d()).z >= 0:
+				while len(result) >= 2 and cross((vertex.co-result[-1].co), (result[-1].co-result[-2].co)) >= 0:
 					result.pop()
 				result.append(vertex)
 			return result
