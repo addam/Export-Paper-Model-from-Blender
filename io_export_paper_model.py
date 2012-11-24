@@ -29,8 +29,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 3),
-	"api": 48011,
+	"blender": (2, 6, 4),
+	"api": 51791,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -106,6 +106,16 @@ def pairs(sequence):
 		yield previous, this
 		previous=this
 	yield this, first
+
+def argmax_pair(array, key):
+	l = len(array)
+	mi, mj, m = None, None, None
+	for i in range(l):
+		for j in range(i+1, l):
+			k = key(array[i], array[j])
+			if not m or k > m:
+				mi, mj, m = i, j, k
+	return mi, mj
 
 def fitting_matrix(v1, v2):
 	"""Matrix that rotates v1 to the same direction as v2"""
@@ -191,7 +201,10 @@ class Mesh:
 			face = Face(bpy_face, self)
 			self.faces[bpy_face.index] = face
 		for index in self.edges:
-			self.edges[index].calculate_angle()
+			edge = self.edges[index]
+			edge.choose_main_faces()
+			if edge.main_faces:
+				edge.calculate_angle()
 	
 	def generate_cuts(self):
 		"""Cut the mesh so that it will be unfoldable."""
@@ -211,7 +224,7 @@ class Mesh:
 			edge.generate_priority(average_length)
 		edges.sort(key = lambda edge:edge.priority, reverse=False)
 		for edge in edges:
-			face_a, face_b = edge.faces[:2]
+			face_a, face_b = edge.main_faces
 			island_a, island_b = face_a.uvface.island, face_b.uvface.island
 			if len(island_b.faces) > len(island_a.faces):
 				island_a, island_b = island_b, island_a
@@ -222,8 +235,16 @@ class Mesh:
 		# mark edges of flat polygons that need not be drawn
 		for edge in self.edges.values():
 			if len(edge.uvedges) >= 2:
+				reordered = [None, None]
+				for uvedge in edge.uvedges:
+					try:
+						index = edge.main_faces.index(uvedge.uvface.face)
+						reordered[index] = uvedge
+					except ValueError:
+						reordered.append(uvedge)
+				edge.uvedges = reordered
 				if edge.uvedges[0].is_similar(edge.uvedges[1]):
-					edge.is_hidden = True
+					edge.cut_is_hidden = True
 		
 		return True
 	
@@ -240,15 +261,15 @@ class Mesh:
 			#This is just a placeholder
 			return uvedge.va.co.y
 		for edge in self.edges.values():
-			if not edge.is_hidden and edge.is_cut() and len(edge.uvedges) >= 2:
+			if edge.is_cut() and len(edge.uvedges) >= 2:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
 				if uvedge_priority(uvedge_a) >= uvedge_priority(uvedge_b):
 					uvedge_a.island.add(Sticker(uvedge_a, default_width))
 				else:
 					uvedge_b.island.add(Sticker(uvedge_b, default_width))
 			if len(edge.uvedges) > 2:
-				for additional_uvedge in edge.uvedges[2:]:
-					additional_uvedge.island.add(Sticker(additional_uvedge, default_width))
+				for uvedge in edge.uvedges[2:]:
+					uvedge.island.add(Sticker(uvedge, default_width))
 	
 	def finalize_islands(self, scale_factor=1):
 		for island in self.islands:
@@ -488,39 +509,44 @@ class Edge:
 		self.vect=self.vb.co-self.va.co
 		self.length=self.vect.length
 		self.faces=list()
-		self.uvedges=list()
+		self.uvedges=list() # important: if self.main_faces is set, then self.uvedges[:2] must be the ones corresponding to self.main_faces.
+		                    # It is assured at the time of finishing mesh.generate_cuts
 		
 		self.force_cut = bool(edge.use_seam) # such edges will always be cut
-		self.is_main_cut = True # defines whether the first two faces are connected; all the others will be automatically treated as cut
-		self.is_hidden = False # for cuts inside flat faces that need not actually be drawn
+		self.main_faces = None # two faces that can be connected in the island
+		self.is_main_cut = True # defines whether the two main faces are connected; all the others will be automatically treated as cut
+		self.cut_is_hidden = False # for cuts inside flat faces that need not actually be drawn as cut
 		self.priority=None
 		self.angle = None
 		self.va.edges.append(self)
 		self.vb.edges.append(self)
 	
+	def choose_main_faces(self):
+		"""Choose two main faces that might get connected in an island"""
+		if len(self.faces) == 2:
+			self.main_faces = self.faces
+		elif len(self.faces) > 2:
+			# find (with brute force) the pair of indices whose faces have the most similar normals
+			i, j = argmax_pair(self.faces, key=lambda a, b: a.normal.dot(b.normal))
+			self.main_faces = self.faces[i], self.faces[j]		
+	
 	def calculate_angle(self):
-		"""Choose two main faces and calculate the angle between them"""
-		if len(self.faces)==0:
-			return
-		elif len(self.faces)==1:
-			self.angle = pi
-			return
-		else:
-			face_a, face_b = self.faces[:2]
-			# correction if normals are flipped
-			a_is_clockwise = ((face_a.verts.index(self.vb) - face_a.verts.index(self.va)) % len(face_a.verts) == 1)
-			b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) == 1)
-			if face_a.uvface and face_b.uvface:
-				a_is_clockwise ^= face_a.uvface.flipped
-				b_is_clockwise ^= face_b.uvface.flipped
-			if a_is_clockwise == b_is_clockwise:
-				if a_is_clockwise == (face_a.normal.cross(face_b.normal).dot(self.vect) > 0):
-					self.angle = face_a.normal.angle(face_b.normal) # the angle is convex
-				else:
-					self.angle = -face_a.normal.angle(face_b.normal) # the angle is concave
+		"""Calculate the angle between the main faces"""
+		face_a, face_b = self.main_faces
+		# correction if normals are flipped
+		a_is_clockwise = ((face_a.verts.index(self.vb) - face_a.verts.index(self.va)) % len(face_a.verts) == 1)
+		b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) == 1)
+		if face_a.uvface and face_b.uvface:
+			a_is_clockwise ^= face_a.uvface.flipped
+			b_is_clockwise ^= face_b.uvface.flipped
+		if a_is_clockwise == b_is_clockwise:
+			if a_is_clockwise == (face_a.normal.cross(face_b.normal).dot(self.vect) > 0):
+				self.angle = face_a.normal.angle(face_b.normal) # the angle is convex
 			else:
-				self.angle = face_a.normal.angle(-face_b.normal) # normals are flipped, so we know nothing
-				# but let us be optimistic and treat the angle as convex :)
+				self.angle = -face_a.normal.angle(face_b.normal) # the angle is concave
+		else:
+			self.angle = face_a.normal.angle(-face_b.normal) # normals are flipped, so we know nothing
+			# but let us be optimistic and treat the angle as convex :)
 
 	def generate_priority(self, average_length=1):
 		"""Calculate initial priority value."""
@@ -535,8 +561,8 @@ class Edge:
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
-		if face is None or self.faces.index(face) < 2:
-			return self.is_main_cut
+		if face is None or (self.main_faces and face in self.main_faces):
+			return self.is_main_cut and not self.cut_is_hidden
 		#All other faces (third and more) are automatically treated as cut
 		else:
 			return True
@@ -885,7 +911,8 @@ class UVEdge:
 		self.min, self.max = (self.va, self.vb) if (self.va < self.vb) else (self.vb, self.va)
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
-	def is_similar(self, other, epsilon = 1e-5):
+	def is_similar(self, other, epsilon = 1e-6):
+		#TODO: epsilon should somehow depend on model scale (be in on-page units)
 		return ((self.va - other.vb).length_squared < epsilon and (self.vb - other.va).length_squared < epsilon) or \
 			((self.va - other.va).length_squared < epsilon and (self.vb - other.vb).length_squared < epsilon)
 	def __lt__(self, other):
@@ -1016,13 +1043,13 @@ class SVG:
 					for uvedge in island.edges:
 						edge = uvedge.edge
 						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in (uvedge.va, uvedge.vb)))
-						if not edge.is_hidden and edge.is_cut(uvedge.uvface.face):
+						if edge.is_cut(uvedge.uvface.face):
 							#DEBUG: assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer.append(data_uvedge)
 						else:
 							if uvedge.uvface.flipped ^ (uvedge.va.vertex.index > uvedge.vb.vertex.index): # each uvedge is in two opposite-oriented variants; we want to add each only once
 								edge = uvedge.edge
-								if edge.faces[0].uvface.flipped != edge.faces[1].uvface.flipped:
+								if edge.main_faces[0].uvface.flipped != edge.main_faces[1].uvface.flipped:
 									edge.calculate_angle()
 								if edge.angle > 0.01:
 									data_convex.append(data_uvedge)
@@ -1134,15 +1161,15 @@ class ExportPaperModel(bpy.types.Operator):
 			return {'CANCELLED'}
 		except:
 			raise
-	def get_scale_ratio(self):
-		return self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale
+	def get_scale_ratio(self, sce):
+		return self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale * sce.unit_settings.scale_length
 	def invoke(self, context, event):
 		sce=context.scene
 		self.properties.bake_selected_to_active = sce.render.use_bake_selected_to_active
 		
 		self.unfolder=Unfolder(context.active_object)
 		self.unfolder.prepare(self.properties)
-		scale_ratio = self.get_scale_ratio()
+		scale_ratio = self.get_scale_ratio(sce)
 		if scale_ratio > 1:
 			self.properties.model_scale = 0.95/scale_ratio
 		wm = context.window_manager
@@ -1158,7 +1185,7 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.prop(self.properties, "output_dpi")
 		layout.label(text="Model scale:")
 		layout.prop(self.properties, "model_scale")
-		scale_ratio = self.get_scale_ratio()
+		scale_ratio = self.get_scale_ratio(context.scene)
 		if scale_ratio > 1:
 			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
 		elif scale_ratio > 0:
