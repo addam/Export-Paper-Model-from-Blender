@@ -138,6 +138,19 @@ def z_up_matrix(n):
 			(0,	sign(n.z), 0),
 			(0,         0, 0)))
 
+def create_blank_image(image_name, dimensions, alpha=1):
+	"""BPy API doesn't allow to directly create a transparent image; this hack uses the New Image operator for it"""
+	image_name = image_name[:20]
+	obstacle = bpy.data.images.get(image_name)
+	if obstacle:
+		obstacle.name = image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
+	bpy.ops.image.new(name=image_name, width=int(dimensions.x), height=int(dimensions.y), color=(1,1,1,alpha))
+	image = bpy.data.images.get(image_name) #this time it is our new image
+	if not image:
+		print ("papermodel ERROR: could not get image", image_name)
+	image.file_format = 'PNG'
+	return image
+
 class UnfoldError(ValueError):
 	pass
 
@@ -167,15 +180,21 @@ class Unfolder:
 		self.mesh.finalize_islands(scale_factor = scale / page_size.y)
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
-			tex = self.mesh.save_uv(aspect_ratio = page_size.x / page_size.y)
+			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
+			tex = self.mesh.save_uv(aspect_ratio=page_size.x/page_size.y, separate_image=use_separate_images)
 			if not tex:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
 			#TODO: do we really need a switch of our own?
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
-			self.mesh.save_image(tex, filepath, page_size * ppm)
+			if properties.image_packing == 'PAGE_LINK':
+				self.mesh.save_image(tex, filepath, page_size * ppm)
+			elif properties.image_packing == 'ISLAND_LINK':
+				self.mesh.save_separate_images(tex, page_size.y * ppm, filepath)
+			elif properties.image_packing == 'ISLAND_EMBED':
+				self.mesh.save_separate_images(tex, page_size.y * ppm, do_embed=True)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
-		svg=SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
+		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
 		svg.add_mesh(self.mesh)
 		svg.write(filepath)
 
@@ -423,7 +442,7 @@ class Mesh:
 					points.sort(key=lambda point: point.niceness) #ugly points first (to get rid of them)
 			self.pages.append(page)
 	
-	def save_uv(self, aspect_ratio=1): #page_size is in pixels
+	def save_uv(self, aspect_ratio=1, separate_image=False): #page_size is in pixels
 		bpy.ops.object.mode_set()
 		#note: expecting that the active object's data is self.mesh
 		tex = self.data.uv_textures.new()
@@ -431,31 +450,27 @@ class Mesh:
 			return None
 		tex.name = "Unfolded"
 		tex.active = True
-		loop = self.data.uv_layers[self.data.uv_layers.active_index]
-		for island in self.islands:
-			island.save_uv(loop, aspect_ratio)
+		loop = self.data.uv_layers[self.data.uv_layers.active_index] # TODO: this is somehow dirty, but I don't see a nicer way in the API
+		if separate_image:
+			for island in self.islands:
+				island.save_uv_separate(loop)
+		else:
+			for island in self.islands:
+				island.save_uv(loop, aspect_ratio)
 		return tex
 	
 	def save_image(self, tex, filename, page_size_pixels:M.Vector):
-		rd=bpy.context.scene.render
-		recall_margin=rd.bake_margin; rd.bake_margin=0
-		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
+		rd = bpy.context.scene.render
+		recall_margin, rd.bake_margin = rd.bake_margin, 0
+		recall_clear, rd.use_bake_clear = rd.use_bake_clear, False
 
 		tex.active = True
 		loop = self.data.uv_layers[self.data.uv_layers.active_index]
 		aspect_ratio = page_size_pixels.x / page_size_pixels.y
 		for page in self.pages:
 			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
-			image_name=(self.data.name[:16]+" "+page.name+" Unfolded")[:20]
-			obstacle=bpy.data.images.get(image_name)
-			if obstacle:
-				obstacle.name=image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
-			bpy.ops.image.new(name=image_name, width=int(page_size_pixels.x), height=int(page_size_pixels.y), color=(1,1,1,1))
-			image=bpy.data.images.get(image_name) #this time it is our new image
-			if not image:
-				print ("papermodel ERROR: could not get image", image_name)
-			image.filepath_raw=filename+"_"+page.name+".png"
-			image.file_format='PNG'
+			image = create_blank_image("{} {} Unfolded".format(self.data.name[:14], page.name), page_size_pixels, alpha=1)
+			image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
 			texfaces=tex.data
 			for island in page.islands:
 				for uvface in island.faces:
@@ -471,7 +486,55 @@ class Mesh:
 			bpy.data.images.remove(image)
 		rd.bake_margin=recall_margin
 		rd.use_bake_clear=recall_clear
-   
+	
+	def save_separate_images(self, tex, scale, filepath=None, do_embed=False):
+		if do_embed:
+			try:
+				from base64 import encodebytes as b64encode
+				from os import remove
+			except ImportError:
+				raise UnfoldError("Embedding images is not supported on your system")
+		else:
+			try:
+				from os import mkdir
+				from os.path import dirname, basename
+				imagedir = "{path}/{directory}".format(path=dirname(filepath), directory = basename(filepath))
+				mkdir(imagedir)
+			except ImportError:
+				raise UnfoldError("This method of image packing is not supported by your system.")
+			except OSError:
+				pass #imagedir already existed
+		rd=bpy.context.scene.render
+		recall_margin=rd.bake_margin; rd.bake_margin=0
+		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
+		
+		texfaces=tex.data
+		for i, island in enumerate(self.islands, 1):
+			image_name = "unfolder_temp_{}".format(id(island)%100) if do_embed else "{} isl{}".format(self.data.name[:15], i)
+			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
+			image.filepath_raw = image_path = "{}.png".format(image_name) if do_embed else "{}/island{}.png".format(imagedir, i)
+			for uvface in island.faces:
+				if not uvface.is_sticker:
+					texfaces[uvface.face.index].image=image
+			bpy.ops.object.bake_image()
+			image.save()
+			for uvface in island.faces:
+				if not uvface.is_sticker:
+					texfaces[uvface.face.index].image = None
+			image.user_clear()
+			bpy.data.images.remove(image)
+			
+			if do_embed:
+				with open(image_path, 'rb') as imgf:
+					island.embedded_image = b64encode(imgf.read()).decode('ascii')
+				remove(image_path)
+			else:
+				island.image_path = image_path
+				
+		
+		rd.bake_margin=recall_margin
+		rd.use_bake_clear=recall_clear
+
 class Vertex:
 	"""BPy Vertex wrapper"""
 	
@@ -623,6 +686,9 @@ class Island:
 		self.angle=0
 		self.is_placed=False
 		self.bounding_box=M.Vector((0,0))
+
+		self.image_path = None
+		self.embedded_image = None
 		
 		if face:
 			self.add(UVFace(face, self))
@@ -843,16 +909,38 @@ class Island:
 			if not uvface.is_sticker:
 				rot = M.Matrix.Rotation(self.angle, 2)
 				for i, uvvertex in enumerate(uvface.verts):
-					uv = rot * uvvertex.co + self.pos + self.offset
+					uv = rot * uvvertex.co + self.offset + self.pos
 					texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
 					texface[uvface.face.loop_start + i].uv[1] = uv.y
+	
+	def save_uv_separate(self, tex):
+		"""Save UV Coordinates of all UVFaces to a given UV texture, spanning from 0 to 1
+		tex: UV Texture layer to use (BPy MeshUVLoopLayer struct)
+		page_size: size of the page in pixels (vector)"""
+		texface = tex.data
+		scale_x, scale_y = 1/self.bounding_box.x, 1/self.bounding_box.y
+		for uvface in self.faces:
+			if not uvface.is_sticker:
+				rot = M.Matrix.Rotation(self.angle, 2)
+				for i, uvvertex in enumerate(uvface.verts):
+					uv = rot * uvvertex.co + self.offset
+					texface[uvface.face.loop_start + i].uv[0] = uv.x * scale_x
+					texface[uvface.face.loop_start + i].uv[1] = uv.y * scale_y
+	
+	def save_image(self, path):
+		#TODO?
+		pass
+	
+	def embed_image(self):
+		#TODO!
+		pass
 
 class Page:
 	"""Container for several Islands"""
 	def __init__(self, num=1):
 		self.islands=list()
-		self.image=None
 		self.name="page"+str(num)
+		self.image_path = None
 	def add(self, island):
 		self.islands.append(island)
 
@@ -1031,12 +1119,18 @@ class SVG:
 					path.sticker {{fill: #fff; stroke: #000; fill-opacity: 0.4; stroke-opacity: 0.7}}
 					rect {{fill:#ccc; stroke:none}}
 				</style>""".format(thin=self.line_thickness, thick=1.5*self.line_thickness, outline=2*self.line_thickness))
-				if not self.pure_net:
-					f.write("<image x='0' y='0' width='" + str(self.page_size.x) + "' height='" + str(self.page_size.y) + "' xlink:href='file://" + filename + "_" + page.name + ".png'/>")
+				if page.image_path:
+					f.write("<image transform='matrix(1 0 0 1 0 0)' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x, self.page_size.y, page.image_path))
 				if len(page.islands) > 1:
 					f.write("<g>")
 				for island in page.islands:
 					f.write("<g>")
+					if island.image_path:
+							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='file://{}'/>\n".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale, island.image_path))
+					elif island.embedded_image:
+							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='data:image/png;base64,".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale))
+							f.write(island.embedded_image)
+							f.write("'/>\n")
 					rot = M.Matrix.Rotation(island.angle, 2)
 					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
@@ -1069,7 +1163,6 @@ class SVG:
 				if len(page.islands) > 1:
 					f.write("</g>")
 				f.write("</svg>")
-				f.close()
 
 class MakeUnfoldable(bpy.types.Operator):
 	"""Blender Operator: unfold the selected object."""
@@ -1143,6 +1236,10 @@ class ExportPaperModel(bpy.types.Operator):
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
 	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
+	image_packing = bpy.props.EnumProperty(name="Image Packing Method", description="Method of attaching baked image(s) to the SVG", default='PAGE_LINK', items=[
+			('PAGE_LINK', "Single Linked", "Bake one image per page of output"),
+			('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
+			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")])
 	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
 	unfolder=None
 	largest_island_ratio=0
@@ -1196,6 +1293,9 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.label(text="Document settings:")
 		layout.prop(self.properties, "sticker_width")
 		layout.prop(self.properties, "line_thickness")
+		col = layout.column()
+		col.active = not self.properties.output_pure
+		col.prop(self.properties, "image_packing", text="Images")
 
 def menu_func(self, context):
 	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
