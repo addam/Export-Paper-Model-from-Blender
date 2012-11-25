@@ -141,7 +141,6 @@ def create_blank_image(image_name, dimensions, alpha=1):
 	image.file_format = 'PNG'
 	return image
 
-
 class UnfoldError(ValueError):
 	pass
 
@@ -160,13 +159,6 @@ class Unfolder:
 
 	def save(self, properties):
 		"""Export the document."""
-		if not properties.output_pure and properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED'):
-			try:
-				from os import mkdir, rmdir, remove
-				from os.path import dirname, basename
-			except ImportError:
-				raise UnfoldError("This method of image packing is not supported by your system.")
-		
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
@@ -186,25 +178,15 @@ class Unfolder:
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
 			if properties.image_packing == 'PAGE_LINK':
 				self.mesh.save_image(tex, filepath, page_size * ppm)
-			elif use_separate_images:
-				imagedir = "{path}/{directory}".format(path=dirname(filepath), directory = basename(filepath))
-				try:
-					mkdir(imagedir)
-					imagedir_existed = False
-				except OSError:
-					imagedir_existed = True
-				self.mesh.save_separate_images(tex, imagedir, page_size.y * ppm)
+			elif properties.image_packing == 'ISLAND_LINK':
+				self.mesh.save_separate_images(tex, page_size.y * ppm, filepath)
+			elif properties.image_packing == 'ISLAND_EMBED':
+				self.mesh.save_separate_images(tex, page_size.y * ppm, do_embed=True)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
-		embed_images = not properties.output_pure and properties.image_packing == 'ISLAND_EMBED'
-		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness, embed_images=embed_images)
+		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
 		svg.add_mesh(self.mesh)
 		svg.write(filepath)
-		if not properties.output_pure and properties.image_packing == 'ISLAND_EMBED':
-			for island in self.mesh.islands:
-				remove(island.image_path)#...?
-			if not imagedir_existed:
-				rmdir(imagedir)
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
@@ -484,15 +466,32 @@ class Mesh:
 		rd.bake_margin=recall_margin
 		rd.use_bake_clear=recall_clear
 	
-	def save_separate_images(self, tex, dirname, scale):
+	def save_separate_images(self, tex, scale, filepath=None, do_embed=False):
+		if do_embed:
+			try:
+				from base64 import encodebytes as b64encode
+				from os import remove
+			except ImportError:
+				raise UnfoldError("Embedding images is not supported on your system")
+		else:
+			try:
+				from os import mkdir
+				from os.path import dirname, basename
+				imagedir = "{path}/{directory}".format(path=dirname(filepath), directory = basename(filepath))
+				mkdir(imagedir)
+			except ImportError:
+				raise UnfoldError("This method of image packing is not supported by your system.")
+			except OSError:
+				pass #imagedir already existed
 		rd=bpy.context.scene.render
 		recall_margin=rd.bake_margin; rd.bake_margin=0
 		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
 		
 		texfaces=tex.data
 		for i, island in enumerate(self.islands, 1):
-			image = create_blank_image("{} isl{}".format(self.data.name[:15], i), island.bounding_box * scale, alpha=0)
-			image.filepath_raw = island.image_path = "{}/island{}.png".format(dirname, i)
+			image_name = "unfolder_temp_{}".format(id(island)%100) if do_embed else "{} isl{}".format(self.data.name[:15], i)
+			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
+			image.filepath_raw = image_path = "{}.png".format(image_name) if do_embed else "{}/island{}.png".format(imagedir, i)
 			for uvface in island.faces:
 				if not uvface.is_sticker:
 					texfaces[uvface.face.index].image=image
@@ -503,6 +502,14 @@ class Mesh:
 					texfaces[uvface.face.index].image = None
 			image.user_clear()
 			bpy.data.images.remove(image)
+			
+			if do_embed:
+				with open(image_path, 'rb') as imgf:
+					island.embedded_image = b64encode(imgf.read()).decode('ascii')
+				remove(image_path)
+			else:
+				island.image_path = image_path
+				
 		
 		rd.bake_margin=recall_margin
 		rd.use_bake_clear=recall_clear
@@ -653,7 +660,9 @@ class Island:
 		self.angle=0
 		self.is_placed=False
 		self.bounding_box=M.Vector((0,0))
+
 		self.image_path = None
+		self.embedded_image = None
 		
 		if face:
 			self.add(UVFace(face, self))
@@ -1051,14 +1060,13 @@ class Sticker(UVFace):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1, embed_images=False):
+	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1):
 		"""Initialize document settings.
 		page_size_pixels: document dimensions in pixels
 		pure_net: if True, do not use image"""
 		self.page_size = page_size_pixels
 		self.scale = page_size_pixels.y
 		self.pure_net = pure_net
-		self.embed_images = embed_images
 		self.line_thickness = float(line_thickness)
 	def add_mesh(self, mesh):
 		"""Set the Mesh to process."""
@@ -1071,11 +1079,6 @@ class SVG:
 		"""Write data to a file given by its name."""
 		line_through = " L ".join #utility function
 		rows = "\n".join
-		if self.embed_images:
-			try:
-				from base64 import encodebytes as b64encode
-			except ImportError:
-				raise UnfoldError("Embedding images are not supported on your system")
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
@@ -1095,21 +1098,18 @@ class SVG:
 				if len(page.islands) > 1:
 					f.write("<g>")
 				for island in page.islands:
-					island_position = island.pos + island.offset
 					f.write("<g>")
 					if island.image_path:
-						if self.embed_images:
-							with open(island.image_path, 'rb') as imgf:
-								f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='data:image/png;base64,".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale))
-								f.write(b64encode(imgf.read()).decode('ascii'))
-								f.write("'/>\n")
-						else:
 							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='file://{}'/>\n".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale, island.image_path))
+					elif island.embedded_image:
+							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='data:image/png;base64,".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale))
+							f.write(island.embedded_image)
+							f.write("'/>\n")
 					rot = M.Matrix.Rotation(island.angle, 2)
 					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
 						edge = uvedge.edge
-						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island_position) for vertex in (uvedge.va, uvedge.vb)))
+						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in (uvedge.va, uvedge.vb)))
 						if not edge.is_hidden and edge.is_cut(uvedge.uvface.face):
 							#DEBUG: assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer.append(data_uvedge)
@@ -1123,7 +1123,7 @@ class SVG:
 								elif edge.angle < -0.01:
 									data_concave.append(data_uvedge)
 					if island.stickers:
-						data_stickers = ["<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island_position) for vertex in sticker.verts)) + " Z'/>" for sticker in island.stickers]
+						data_stickers = ["<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>" for sticker in island.stickers]
 						f.write("<g>" + rows(data_stickers) + "</g>") #Stickers are separate paths in one group
 					if data_outer: 
 						if not self.pure_net:
