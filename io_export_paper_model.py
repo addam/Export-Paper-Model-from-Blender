@@ -196,16 +196,15 @@ class Unfolder:
 				self.mesh.save_separate_images(tex, imagedir, page_size.y * ppm)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
-		svg=SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
+		embed_images = not properties.output_pure and properties.image_packing == 'ISLAND_EMBED'
+		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness, embed_images=embed_images)
 		svg.add_mesh(self.mesh)
+		svg.write(filepath)
 		if not properties.output_pure and properties.image_packing == 'ISLAND_EMBED':
 			for island in self.mesh.islands:
-				image_path = island.image_path
-				island.embed_image()
-				remove(image_path)
+				remove(island.image_path)#...?
 			if not imagedir_existed:
 				rmdir(imagedir)
-		svg.write(filepath)
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
@@ -1052,13 +1051,14 @@ class Sticker(UVFace):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1):
+	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1, embed_images=False):
 		"""Initialize document settings.
 		page_size_pixels: document dimensions in pixels
 		pure_net: if True, do not use image"""
 		self.page_size = page_size_pixels
 		self.scale = page_size_pixels.y
 		self.pure_net = pure_net
+		self.embed_images = embed_images
 		self.line_thickness = float(line_thickness)
 	def add_mesh(self, mesh):
 		"""Set the Mesh to process."""
@@ -1071,6 +1071,11 @@ class SVG:
 		"""Write data to a file given by its name."""
 		line_through = " L ".join #utility function
 		rows = "\n".join
+		if self.embed_images:
+			try:
+				from base64 import encodebytes as b64encode
+			except ImportError:
+				raise UnfoldError("Embedding images are not supported on your system")
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
@@ -1086,14 +1091,20 @@ class SVG:
 					rect {{fill:#ccc; stroke:none}}
 				</style>""".format(thin=self.line_thickness, thick=1.5*self.line_thickness, outline=2*self.line_thickness))
 				if page.image_path:
-					f.write("<image transform='matrix(1 0 0 1 0 0)' width='{}' height='{}' xlink:href='file://{}'/>".format(self.page_size.x, self.page_size.y, page.image_path))
+					f.write("<image transform='matrix(1 0 0 1 0 0)' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x, self.page_size.y, page.image_path))
 				if len(page.islands) > 1:
 					f.write("<g>")
 				for island in page.islands:
 					island_position = island.pos + island.offset
 					f.write("<g>")
 					if island.image_path:
-						f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='file://{}'/>".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale, island.image_path))
+						if self.embed_images:
+							with open(island.image_path, 'rb') as imgf:
+								f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='data:image/png;base64,".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale))
+								f.write(b64encode(imgf.read()).decode('ascii'))
+								f.write("'/>\n")
+						else:
+							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='file://{}'/>\n".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale, island.image_path))
 					rot = M.Matrix.Rotation(island.angle, 2)
 					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
@@ -1126,7 +1137,6 @@ class SVG:
 				if len(page.islands) > 1:
 					f.write("</g>")
 				f.write("</svg>")
-				f.close()
 
 class MakeUnfoldable(bpy.types.Operator):
 	"""Blender Operator: unfold the selected object."""
