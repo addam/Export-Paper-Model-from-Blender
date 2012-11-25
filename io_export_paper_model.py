@@ -46,7 +46,7 @@ Additional links:
     e-mail: adominec {at} gmail {dot} com
 
 """
-import bpy
+import bpy, bgl
 import mathutils as M
 try:
 	from math import pi
@@ -1322,37 +1322,36 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		layout.operator("export_mesh.paper_model")
 	
 def display_islands(self, context):
-	import bgl
 	#TODO: save the vertex positions and don't recalculate them always
 	#TODO: don't use active object, but rather save the object itself
 	if context.active_object != display_islands.object:
 		return
-	perspMatrix = context.space_data.region_3d.perspective_matrix
-	perspBuff = bgl.Buffer(bgl.GL_FLOAT, 16, [(perspMatrix[i][j]) for j in range(4) for i in range(4)])
-	bgl.glLoadIdentity()
+	ob = context.active_object
+	mesh = ob.data
 	bgl.glMatrixMode(bgl.GL_PROJECTION)
+	perspMatrix = context.space_data.region_3d.perspective_matrix
+	perspBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), perspMatrix.transposed())
 	bgl.glLoadMatrixf(perspBuff)
+	bgl.glMatrixMode(bgl.GL_MODELVIEW)
+	objectBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), ob.matrix_world.transposed())
+	bgl.glLoadMatrixf(objectBuff)
 	bgl.glEnable(bgl.GL_BLEND)
-	bgl.glBlendFunc (bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA);
+	bgl.glBlendFunc(bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA);
 	bgl.glEnable(bgl.GL_POLYGON_OFFSET_FILL)
 	bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
 	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
 	bgl.glColor4f(1.0, 0.4, 0.0, self.io_paper_model_islands_alpha)
-	ob = context.active_object
-	mesh = ob.data
 	global highlight_faces
 	for face_id in highlight_faces:
 		face = mesh.polygons[face_id]
 		bgl.glBegin(bgl.GL_POLYGON)
 		for vertex_id in face.vertices:
 			vertex = mesh.vertices[vertex_id]
-			co = vertex.co.to_4d()
-			co = ob.matrix_world * co #TODO: cannot this calculation be done by GL?
-			co /= co[3]
-			bgl.glVertex3f(co[0], co[1], co[2])
+			bgl.glVertex4f(*vertex.co.to_4d())
 		bgl.glEnd()
 	bgl.glPolygonOffset(0.0, 0.0)
 	bgl.glDisable(bgl.GL_POLYGON_OFFSET_FILL)
+	bgl.glLoadIdentity()
 display_islands.handle = None
 display_islands.object = None
 
