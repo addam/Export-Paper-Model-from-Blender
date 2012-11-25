@@ -926,14 +926,6 @@ class Island:
 					uv = rot * uvvertex.co + self.offset
 					texface[uvface.face.loop_start + i].uv[0] = uv.x * scale_x
 					texface[uvface.face.loop_start + i].uv[1] = uv.y * scale_y
-	
-	def save_image(self, path):
-		#TODO?
-		pass
-	
-	def embed_image(self):
-		#TODO!
-		pass
 
 class Page:
 	"""Container for several Islands"""
