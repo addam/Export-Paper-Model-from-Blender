@@ -158,12 +158,13 @@ class Unfolder:
 	def __init__(self, ob):
 		self.ob=ob
 		self.mesh=Mesh(ob.data, ob.matrix_world)
+		self.tex = None
 
 	def prepare(self, properties=None, mark_seams=False):
 		"""Something that should be part of the constructor - TODO """
 		self.mesh.generate_cuts()
 		self.mesh.finalize_islands()
-		self.mesh.save_uv()
+		self.tex = self.mesh.save_uv()
 		if mark_seams:
 			self.mesh.mark_cuts()
 
@@ -181,9 +182,7 @@ class Unfolder:
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
-			tex = self.mesh.save_uv(aspect_ratio=page_size.x/page_size.y, separate_image=use_separate_images)
-			if not tex:
-				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
+			tex = self.mesh.save_uv(aspect_ratio=page_size.x/page_size.y, separate_image=use_separate_images, tex=self.tex)
 			#TODO: do we really need a switch of our own?
 			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
 			if properties.image_packing == 'PAGE_LINK':
@@ -442,12 +441,13 @@ class Mesh:
 					points.sort(key=lambda point: point.niceness) #ugly points first (to get rid of them)
 			self.pages.append(page)
 	
-	def save_uv(self, aspect_ratio=1, separate_image=False): #page_size is in pixels
+	def save_uv(self, aspect_ratio=1, separate_image=False, tex=None): #page_size is in pixels
 		bpy.ops.object.mode_set()
 		#note: expecting that the active object's data is self.mesh
-		tex = self.data.uv_textures.new()
 		if not tex:
-			return None
+			tex = self.data.uv_textures.new()
+			if not tex:
+				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
 		tex.name = "Unfolded"
 		tex.active = True
 		loop = self.data.uv_layers[self.data.uv_layers.active_index] # TODO: this is somehow dirty, but I don't see a nicer way in the API
