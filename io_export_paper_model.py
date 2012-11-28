@@ -160,11 +160,12 @@ class Unfolder:
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 		self.tex = None
 
-	def prepare(self, properties=None, mark_seams=False):
+	def prepare(self, create_uvmap=False, mark_seams=False):
 		"""Something that should be part of the constructor - TODO """
 		self.mesh.generate_cuts()
 		self.mesh.finalize_islands()
-		self.tex = self.mesh.save_uv()
+		if create_uvmap:
+			self.tex = self.mesh.save_uv()
 		if mark_seams:
 			self.mesh.mark_cuts()
 
@@ -173,18 +174,19 @@ class Unfolder:
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
-		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) #real page size in meters FIXME: must be scaled according to unit settings ?
+		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # real page size in meters
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
-		ppm = properties.output_dpi * 100 / 2.54 #points per meter
+		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.generate_stickers(default_width = properties.sticker_width * page_size.y / scale)
-		#Scale everything so that page height is 1
-		self.mesh.finalize_islands(scale_factor = scale / page_size.y)
+		self.mesh.finalize_islands(scale_factor = scale / page_size.y) # Scale everything so that page height is 1
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
 			tex = self.mesh.save_uv(aspect_ratio=page_size.x/page_size.y, separate_image=use_separate_images, tex=self.tex)
-			#TODO: do we really need a switch of our own?
-			selected_to_active = bpy.context.scene.render.use_bake_selected_to_active; bpy.context.scene.render.use_bake_selected_to_active = properties.bake_selected_to_active
+			if not tex:
+				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
+			rd = bpy.context.scene.render
+			recall_selected_to_active, rd.use_bake_selected_to_active = rd.use_bake_selected_to_active, properties.bake_selected_to_active
 			if properties.image_packing == 'PAGE_LINK':
 				self.mesh.save_image(tex, filepath, page_size * ppm)
 			elif properties.image_packing == 'ISLAND_LINK':
@@ -192,7 +194,10 @@ class Unfolder:
 			elif properties.image_packing == 'ISLAND_EMBED':
 				self.mesh.save_separate_images(tex, page_size.y * ppm, do_embed=True)
 			#revoke settings
-			bpy.context.scene.render.use_bake_selected_to_active=selected_to_active
+			bpy.context.scene.render.use_bake_selected_to_active = recall_selected_to_active
+			if not properties.do_create_uvmap:
+				tex.active = True
+				bpy.ops.mesh.uv_texture_remove()
 		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
 		svg.add_mesh(self.mesh)
 		svg.write(filepath)
@@ -447,7 +452,7 @@ class Mesh:
 		if not tex:
 			tex = self.data.uv_textures.new()
 			if not tex:
-				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
+				return None
 		tex.name = "Unfolded"
 		tex.active = True
 		loop = self.data.uv_layers[self.data.uv_layers.active_index] # TODO: this is somehow dirty, but I don't see a nicer way in the API
@@ -1166,6 +1171,8 @@ class MakeUnfoldable(bpy.types.Operator):
 	priority_effect_convex = bpy.props.FloatProperty(name="Priority Convex", description="Priority effect for edges in convex angles", default=priority_effect["convex"], soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_concave = bpy.props.FloatProperty(name="Priority Concave", description="Priority effect for edges in concave angles", default=priority_effect["concave"], soft_min=-1, soft_max=10, subtype='FACTOR')
 	priority_effect_length = bpy.props.FloatProperty(name="Priority Length", description="Priority effect of edge length", default=priority_effect["length"], soft_min=-10, soft_max=1, subtype='FACTOR')
+	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
+	unfolder = None
 	
 	@classmethod
 	def poll(cls, context):
@@ -1173,6 +1180,9 @@ class MakeUnfoldable(bpy.types.Operator):
 		
 	def draw(self, context):
 		layout = self.layout
+		col = layout.column()
+		col.active = not self.unfolder or len(self.unfolder.mesh.data.uv_textures) < 8
+		col.prop(self.properties, "do_create_uvmap")
 		layout.label(text="Edge Cutting Factors:")
 		col = layout.column(align=True)
 		col.label(text="Face Angle:")
@@ -1187,13 +1197,13 @@ class MakeUnfoldable(bpy.types.Operator):
 		priority_effect['convex']=props.priority_effect_convex
 		priority_effect['concave']=props.priority_effect_concave
 		priority_effect['length']=props.priority_effect_length
-		orig_mode=context.object.mode
+		recall_mode = context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
-		display_islands = sce.io_paper_model_display_islands
-		sce.io_paper_model_display_islands = False
+		recall_display_islands, sce.io_paper_model_display_islands = sce.io_paper_model_display_islands, False
+		
 
-		unfolder = Unfolder(context.active_object)
-		unfolder.prepare(mark_seams=True)
+		self.unfolder = unfolder = Unfolder(context.active_object)
+		unfolder.prepare(mark_seams=True, create_uvmap=self.do_create_uvmap)
 
 		island_list = context.scene.island_list
 		island_list.clear() #remove previously defined islands
@@ -1208,9 +1218,9 @@ class MakeUnfoldable(bpy.types.Operator):
 		sce.island_list_index = -1
 		list_selection_changed(sce, bpy.context)
 
-		unfolder.mesh.data.show_edge_seams=True
-		bpy.ops.object.mode_set(mode=orig_mode)
-		sce.io_paper_model_display_islands = display_islands
+		unfolder.mesh.data.show_edge_seams = True
+		bpy.ops.object.mode_set(mode=recall_mode)
+		sce.io_paper_model_display_islands = recall_display_islands
 		return {'FINISHED'}
 
 class ExportPaperModel(bpy.types.Operator):
@@ -1233,6 +1243,7 @@ class ExportPaperModel(bpy.types.Operator):
 			('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
 			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")])
 	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
+	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
 	unfolder=None
 	largest_island_ratio=0
 	
@@ -1255,8 +1266,9 @@ class ExportPaperModel(bpy.types.Operator):
 		sce=context.scene
 		self.properties.bake_selected_to_active = sce.render.use_bake_selected_to_active
 		
-		self.unfolder=Unfolder(context.active_object)
-		self.unfolder.prepare(self.properties)
+		self.object = context.active_object
+		self.unfolder = Unfolder(self.object)
+		self.unfolder.prepare(create_uvmap=self.properties.do_create_uvmap)
 		scale_ratio = self.get_scale_ratio(sce)
 		if scale_ratio > 1:
 			self.properties.model_scale = 0.95/scale_ratio
@@ -1278,10 +1290,14 @@ class ExportPaperModel(bpy.types.Operator):
 			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
 		elif scale_ratio > 0:
 			layout.label(text="Largest island is 1/"+strf(1/scale_ratio)+" of page")
+		layout.prop(self.properties, "do_create_uvmap")
 		layout.prop(self.properties, "output_pure")
 		col = layout.column()
+		if len(self.object.data.uv_textures) == 8:
+			col.label(text="No UV slots left, pure net is the only option.", icon="ERROR")
 		col.active = not self.properties.output_pure
 		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
+		layout.separator()
 		layout.label(text="Document settings:")
 		layout.prop(self.properties, "sticker_width")
 		layout.prop(self.properties, "line_thickness")
