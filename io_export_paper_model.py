@@ -1373,10 +1373,9 @@ display_islands.object = None
 
 def display_islands_changed(self, context):
 	"""Switch highlighting islands on/off"""
-	region = [region for region in context.area.regions if region.type=='WINDOW'][0]
 	if self.io_paper_model_display_islands:
 		if not display_islands.handle:
-			display_islands.handle = region.callback_add(display_islands, (self, context), "POST_VIEW")
+			display_islands.handle = bpy.types.SpaceView3D.draw_handler_add(display_islands, (self, context), 'WINDOW', 'POST_VIEW')
 	else:
 		if display_islands.handle:
 			region.callback_remove(display_islands.handle)
