@@ -906,6 +906,7 @@ class Island:
 				vertex.co *= scale
 			for sticker in self.stickers:
 				sticker.center *= scale
+				sticker.other_center *= scale
 				sticker.width *= scale
 	
 	def save_uv(self, tex, aspect_ratio=1):
@@ -1055,6 +1056,7 @@ class Sticker(UVFace):
 		
 		Sticker.max_index += 1
 		self.index = self.max_index
+		
 		first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
 		edge = first_vertex - second_vertex
 		sticker_width=min(default_width, edge.length/2)
@@ -1092,7 +1094,10 @@ class Sticker(UVFace):
 		self.center = (uvedge.va.co + uvedge.vb.co) / 2
 		self.width = sticker_width * 0.8
 		sin, cos = edge.y/edge.length, edge.x/edge.length
-		self.rot = M.Matrix(((cos, -sin),(sin, cos)))
+		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+		self.other_center = (other.va.co + other.vb.co) / 2
+		osin, ocos = other_edge.y/other_edge.length, other_edge.x/other_edge.length
+		self.other_rot = M.Matrix(((ocos, -osin), (osin, ocos)))
 
 class SVG:
 	"""Simple SVG exporter"""
@@ -1166,8 +1171,13 @@ class SVG:
 							size=int(sticker.width * self.scale),
 							pos=self.format_vertex(sticker.center + sticker.rot*M.Vector((0, sticker.width*0.3)), rot, island.pos + island.offset),
 							mat=format_matrix(rot * sticker.rot)) for sticker in island.stickers]
+						data_arrows = ["<text transform='matrix(1 0 0 1 {pos})' xml:space='preserve' style='font-size:{size}px;font-style:normal;fill:#000;fill-opacity:1;stroke:none;'><tspan style='text-anchor:middle'>{index}</tspan></text><path transform='matrix({mat} {pos})' style='fill:#000' d='M 0 -0.75 L 1 0.25 L 0 -0.5 L -1 0.25 Z'/>".format(
+							index=sticker.index,
+							size=int(sticker.width * self.scale),
+							pos=self.format_vertex(sticker.other_center + sticker.other_rot*M.Vector((0, sticker.width*-0.75)), rot, island.pos + island.offset),
+							mat=format_matrix(sticker.width * self.scale * rot * sticker.other_rot)) for sticker in island.stickers]
 						f.write("<g>" + rows(data_stickers) + "</g>") #Stickers are separate paths in one group
-						f.write("<g>" + rows(data_labels) + "</g>")
+						f.write("<g>" + rows(data_labels + data_arrows) + "</g>")
 					if data_outer: 
 						if not self.pure_net:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
