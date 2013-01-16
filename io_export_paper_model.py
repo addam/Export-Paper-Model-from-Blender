@@ -24,13 +24,14 @@
 # choose edge's main pair of faces intelligently
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
+# use mathutils.geometry.box_pack_2d
 
 bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 4),
-	"api": 51791,
+	"blender": (2, 6, 6),
+	"api": 53847,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -1104,8 +1105,8 @@ class SVG:
 		rows = "\n".join
 		for num, page in enumerate(self.mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
-				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
-				f.write("<svg xmlns:svg='http://www.w3.org/2000/svg' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' width='" + str(self.page_size.x) + "px' height='" + str(self.page_size.y) + "px'>")
+				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>\n")
+				f.write("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' x='0px' y='0px' width='" + str(self.page_size.x) + "px' height='" + str(self.page_size.y) + "px'>")
 				f.write("""<style type="text/css">
 					path {{fill:none; stroke-width:{thin:.2}px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}}
 					path.concave {{stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}}
@@ -1320,7 +1321,10 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		box = layout.box()
 		if sce.island_list:
 			box.label(text="{} island(s):".format(len(sce.island_list)))
-			box.template_list(sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+			box.template_list('UI_UL_list', 'io_paper_model_island_list', sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+			# The first one is the identifier of the registered UIList to use (if you want only the default list,
+			# with no custom draw code, use "UI_UL_list").
+			# layout.template_list("MATERIAL_UL_matslots_example", "", obj, "material_slots", obj, "active_material_index")
 			if sce.island_list_index >= 0:
 				list_item = sce.island_list[sce.island_list_index]
 				box.prop(list_item, "label")
