@@ -904,6 +904,9 @@ class Island:
 		if scale != 1:
 			for vertex in self.verts:
 				vertex.co *= scale
+			for sticker in self.stickers:
+				sticker.center *= scale
+				sticker.width *= scale
 	
 	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
@@ -1044,14 +1047,19 @@ class UVFace:
 class Sticker(UVFace):
 	"""Sticker face"""
 	is_sticker=True
+	max_index=0
 	def __init__(self, uvedge, default_width=0.005, faces=list(), other_face=None):
 		"""Sticker is directly appended to the edge given by two UVVerts"""
 		#faces is a placeholder: it should contain all possibly overlaping faces
 		#other_face is a placeholder too: that should be the sticking target and this sticker must fit into it
+		
+		Sticker.max_index += 1
+		self.index = self.max_index
 		first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
 		edge = first_vertex - second_vertex
 		sticker_width=min(default_width, edge.length/2)
 		other=uvedge.edge.other_uvedge(uvedge) #This is the other uvedge - the sticking target
+		
 		other_first, other_second = (other.va, other.vb) if not other.uvface.flipped else (other.vb, other.va)
 		other_edge = other_second - other_first
 		cos_a=cos_b=0.5 #angle a is at vertex uvedge.va, b is at uvedge.vb
@@ -1080,6 +1088,11 @@ class Sticker(UVFace):
 			self.verts=[second_vertex, UVVertex(v3), UVVertex(v4), first_vertex]
 		else:
 			self.verts=[second_vertex, UVVertex(v3), first_vertex]
+		
+		self.center = (uvedge.va.co + uvedge.vb.co) / 2
+		self.width = sticker_width * 0.8
+		sin, cos = edge.y/edge.length, edge.x/edge.length
+		self.rot = M.Matrix(((cos, -sin),(sin, cos)))
 
 class SVG:
 	"""Simple SVG exporter"""
@@ -1147,7 +1160,14 @@ class SVG:
 									data_concave.append(data_uvedge)
 					if island.stickers:
 						data_stickers = ["<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>" for sticker in island.stickers]
+						format_matrix = lambda mat: " ".join(" ".join(map(str, v)) for v in mat)
+						data_labels = ["<text transform='matrix({mat} {pos})' xml:space='preserve' style='font-size:{size}px;font-style:normal;fill:#000;fill-opacity:1;stroke:none;'><tspan style='text-anchor:middle'>{index}</tspan></text>".format(
+							index=sticker.index,
+							size=int(sticker.width * self.scale),
+							pos=self.format_vertex(sticker.center + sticker.rot*M.Vector((0, sticker.width*0.3)), rot, island.pos + island.offset),
+							mat=format_matrix(rot * sticker.rot)) for sticker in island.stickers]
 						f.write("<g>" + rows(data_stickers) + "</g>") #Stickers are separate paths in one group
+						f.write("<g>" + rows(data_labels) + "</g>")
 					if data_outer: 
 						if not self.pure_net:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
