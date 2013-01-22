@@ -205,6 +205,7 @@ class Unfolder:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
 		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
+		svg.do_create_stickers = properties.do_create_stickers
 		svg.write(self.mesh, filepath)
 
 class Mesh:
@@ -1204,13 +1205,19 @@ class SVG:
 					format_matrix = lambda mat: " ".join(" ".join(map(str, col)) for col in mat)
 					for marker in island.markers:
 						if type(marker) is Sticker:
-							text = "<text class='scaled' transform='matrix({mat} {pos})'><tspan>{index}</tspan></text>".format(
-								index=marker.text,
-								pos=self.format_vertex(marker.center, rot, pos),
-								mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)) if marker.text else ""
-							data_markers.append("<g><path class='sticker' d='M {data} Z'/>{text}</g>".format(
-								data=line_through((self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)),
-								text=text))
+							if self.do_create_stickers:
+								text = "<text class='scaled' transform='matrix({mat} {pos})'><tspan>{index}</tspan></text>".format(
+									index=marker.text,
+									pos=self.format_vertex(marker.center, rot, pos),
+									mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)) if marker.text else ""
+								data_markers.append("<g><path class='sticker' d='M {data} Z'/>{text}</g>".format(
+									data=line_through((self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)),
+									text=text))
+							elif marker.text:
+								data_markers.append("<text class='scaled' transform='matrix({mat} {pos})'><tspan>{index}</tspan></text>".format(
+									index=marker.text,
+									pos=self.format_vertex(marker.center, rot, pos),
+									mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)))
 						elif type(marker) is Arrow:
 							size = marker.size * island.scale * self.scale
 							data_markers.append("<g><path transform='matrix({mat} {arrow_pos})' class='arrow' d='M 0 0 L 1 1 L 0 0.25 L -1 1 Z'/><text class='scaled' transform='matrix({scale} 0 0 {scale} {pos})'><tspan>{index}</tspan></text></g>".format(
@@ -1302,6 +1309,7 @@ class ExportPaperModel(bpy.types.Operator):
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
+	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
 	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
 	image_packing = bpy.props.EnumProperty(name="Image Packing Method", description="Method of attaching baked image(s) to the SVG", default='PAGE_LINK', items=[
@@ -1365,7 +1373,10 @@ class ExportPaperModel(bpy.types.Operator):
 		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
 		layout.separator()
 		layout.label(text="Document settings:")
-		layout.prop(self.properties, "sticker_width")
+		layout.prop(self.properties, "do_create_stickers")
+		col = layout.column()
+		col.active = self.properties.do_create_stickers
+		col.prop(self.properties, "sticker_width")
 		layout.prop(self.properties, "line_thickness")
 		col = layout.column()
 		col.active = not self.properties.output_pure
