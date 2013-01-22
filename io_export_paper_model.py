@@ -310,7 +310,11 @@ class Mesh:
 					if (uvedge.neighbor_left.edge is not right_edge or uvedge.neighbor_right.edge is not left_edge) and\
 							uvedge not in (uvedge_a.neighbor_left, uvedge_a.neighbor_right):
 						# sticking pairs of these uvedges seem not not to be trivial to find. So, create an arrow and put the index on all stickers
-						index = target_island.sticker_numbering = target_island.sticker_numbering + 1
+						target_island.sticker_numbering += 1
+						index = str(target_island.sticker_numbering)
+						if set(index).issubset("6890"):
+							# Add a dot to the end of indistinguishable numbers
+							index += "."
 						target_island.add_marker(Arrow(uvedge_a, default_width, index))
 						break
 				else:
@@ -1119,7 +1123,7 @@ class Sticker(Marker):
 		sin, cos = edge.y/edge.length, edge.x/edge.length
 		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
 		self.width = sticker_width * 0.9
-		self.text = "{}:{}".format(target_island.label, index) if index and target_island is not uvedge.island else int(index) if index else None
+		self.text = "{}:{}".format(target_island.label, index) if index and target_island is not uvedge.island else index or None
 		self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot*M.Vector((0, self.width*0.2))
 		self.bounds = [v3.co, v4.co, self.center] if v3.co != v4.co else [v3.co, self.center]
 
