@@ -24,13 +24,19 @@
 # choose edge's main pair of faces intelligently
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
+# sanitize the constructors so that they don't edit their parent object
+# apply island rotation and position before exporting, to simplify things
+# s/verts/vertices/g
+# SVG object doesn't need a 'pure_net' argument in constructor
+# maybe Island would do with a list of points as well, set of vertices makes things more complicated
+# why does UVVertex copy its position in constructor?
 
 bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 4),
-	"api": 51791,
+	"blender": (2, 6, 5),
+	"api": 53177,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -199,8 +205,7 @@ class Unfolder:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
 		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
-		svg.add_mesh(self.mesh)
-		svg.write(filepath)
+		svg.write(self.mesh, filepath)
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
@@ -255,8 +260,11 @@ class Mesh:
 				if island_a.join(island_b, edge):
 					self.islands.remove(island_b)
 		
-		# mark edges of flat polygons that need not be drawn
 		for edge in self.edges.values():
+			# some edges did not know until now whether their angle is convex or concave
+			if edge.main_faces and edge.main_faces[0].uvface.flipped != edge.main_faces[1].uvface.flipped:
+				edge.calculate_angle()
+			# ensure that the order of faces corresponds to the order of uvedges
 			if len(edge.uvedges) >= 2:
 				reordered = [None, None]
 				for uvedge in edge.uvedges:
@@ -266,8 +274,16 @@ class Mesh:
 					except ValueError:
 						reordered.append(uvedge)
 				edge.uvedges = reordered
+				# mark edges of flat polygons that need not be drawn
 				if edge.uvedges[0].is_similar(edge.uvedges[1]):
 					edge.cut_is_hidden = True
+
+		# construct a linked list from each island's boundary
+		for island in self.islands:
+			neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb): uvedge for uvedge in island.boundary_sorted}
+			for uvedge in island.boundary_sorted:
+				uvedge.neighbor_right = neighbor_lookup[uvedge.vb if uvedge.uvface.flipped else uvedge.va]
+				uvedge.neighbor_right.neighbor_left = uvedge
 		
 		return True
 	
@@ -278,26 +294,39 @@ class Mesh:
 	
 	def generate_stickers(self, default_width):
 		"""Add sticker faces where they are needed."""
-		#TODO: it should take into account overlaps with faces and with already created stickers and size of the face that sticker will be actually sticked on
 		def uvedge_priority(uvedge):
-			"""Retuns whether it is a good idea to create a sticker on this edge"""
-			#This is just a placeholder
-			return uvedge.va.co.y
+			"""Retuns whether it is a good idea to stick something on this edge's face"""
+			#TODO: it should take into account overlaps with faces and with other stickers
+			return uvedge.uvface.face.area / sum((vb-va).length for (va, vb) in pairs(uvedge.uvface.verts))
 		for edge in self.edges.values():
 			if edge.is_cut() and len(edge.uvedges) >= 2:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
-				if uvedge_priority(uvedge_a) >= uvedge_priority(uvedge_b):
-					uvedge_a.island.add(Sticker(uvedge_a, default_width))
+				if uvedge_priority(uvedge_a) < uvedge_priority(uvedge_b):
+					uvedge_a, uvedge_b = uvedge_b, uvedge_a
+				target_island = uvedge_a.island
+				left_edge, right_edge = uvedge_a.neighbor_left.edge, uvedge_a.neighbor_right.edge
+				for uvedge in [uvedge_b] + edge.uvedges[2:]:
+					if (uvedge.neighbor_left.edge is not right_edge or uvedge.neighbor_right.edge is not left_edge) and\
+							uvedge not in (uvedge_a.neighbor_left, uvedge_a.neighbor_right):
+						# sticking pairs of these uvedges seem not not to be trivial to find. So, create an arrow and put the index on all stickers
+						index = target_island.sticker_numbering = target_island.sticker_numbering + 1
+						target_island.add_marker(Arrow(uvedge_a, default_width, index))
+						break
 				else:
-					uvedge_b.island.add(Sticker(uvedge_b, default_width))
+					index = None
+				uvedge_b.island.add_marker(Sticker(uvedge_b, default_width, index, target_island))
+			elif len(edge.uvedges) > 2:
+				index = None
+				target_island = edge.uvedges[0].island
 			if len(edge.uvedges) > 2:
 				for uvedge in edge.uvedges[2:]:
-					uvedge.island.add(Sticker(uvedge, default_width))
+					uvedge.island.add_marker(Sticker(uvedge, default_width, index, target_island))
 	
 	def finalize_islands(self, scale_factor=1):
-		for island in self.islands:
+		for num, island in enumerate(self.islands, 1):
 			island.apply_scale(scale_factor)
 			island.generate_bounding_box()
+			island.label = str(num)
 	
 	def largest_island_ratio(self, page_size):
 		largest_ratio=0
@@ -479,14 +508,12 @@ class Mesh:
 			texfaces=tex.data
 			for island in page.islands:
 				for uvface in island.faces:
-					if not uvface.is_sticker:
-						texfaces[uvface.face.index].image=image
+					texfaces[uvface.face.index].image=image
 			bpy.ops.object.bake_image()
 			image.save()
 			for island in page.islands:
 				for uvface in island.faces:
-					if not uvface.is_sticker:
-						texfaces[uvface.face.index].image=None
+					texfaces[uvface.face.index].image=None
 			image.user_clear()
 			bpy.data.images.remove(image)
 		rd.bake_margin=recall_margin
@@ -519,13 +546,11 @@ class Mesh:
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
 			image.filepath_raw = image_path = "{}.png".format(image_name) if do_embed else "{}/island{}.png".format(imagedir, i)
 			for uvface in island.faces:
-				if not uvface.is_sticker:
-					texfaces[uvface.face.index].image=image
+				texfaces[uvface.face.index].image=image
 			bpy.ops.object.bake_image()
 			image.save()
 			for uvface in island.faces:
-				if not uvface.is_sticker:
-					texfaces[uvface.face.index].image = None
+				texfaces[uvface.face.index].image = None
 			image.user_clear()
 			bpy.data.images.remove(image)
 			
@@ -649,6 +674,7 @@ class Face:
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
 		self.loop_start = bpy_face.loop_start
+		self.area = bpy_face.area
 		self.uvface = None
 		
 		#TODO: would be nice to reuse the existing normal if possible
@@ -685,7 +711,7 @@ class Island:
 		self.faces=list()
 		self.edges=set()
 		self.verts=set()
-		self.stickers=list()
+		self.fake_verts = list()
 		self.pos=M.Vector((0,0))
 		self.offset=M.Vector((0,0))
 		self.angle=0
@@ -699,7 +725,11 @@ class Island:
 			self.add(UVFace(face, self))
 		
 		self.boundary_sorted = list(self.edges)
-		self.boundary_sorted.sort()		
+		self.boundary_sorted.sort()
+		
+		self.scale = 1
+		self.markers = list()
+		self.sticker_numbering = 0
 
 	def join(self, other, edge:Edge) -> bool:
 		"""
@@ -839,50 +869,48 @@ class Island:
 
 	def add(self, uvface):
 		self.verts.update(uvface.verts)
-		if uvface.is_sticker:
-			self.stickers.append(uvface)
-		else:
-			self.faces.append(uvface)
+		self.faces.append(uvface)
 	
-	def generate_convex_hull(self) -> list:
-		"""Returns a subset of self.verts that forms the best fitting convex polygon."""
-		def make_convex_curve(verts, cross=cross_product):
-			"""Remove vertices from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
+	def add_marker(self, marker):
+		self.fake_verts.extend(marker.bounds)
+		self.markers.append(marker)
+	
+	def convex_hull(self) -> list:
+		"""Returns a list of Vectors that forms the best fitting convex polygon."""
+		def make_convex_curve(points, cross=cross_product):
+			"""Remove points from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
 			result = list()
-			for vertex in verts:
-				while len(result) >= 2 and cross((vertex.co-result[-1].co), (result[-1].co-result[-2].co)) >= 0:
+			for point in points:
+				while len(result) >= 2 and cross((point - result[-1]), (result[-1] - result[-2])) >= 0:
 					result.pop()
-				result.append(vertex)
+				result.append(point)
 			return result
-		self.verts=set()
-		for face in self.faces + self.stickers:
-			self.verts.update(face.verts)
-		verts_list = sorted(self.verts, key=lambda vertex: vertex.co.x)
-		verts_top = make_convex_curve(verts_list)
-		verts_bottom = make_convex_curve(reversed(verts_list))
+		points = list(self.fake_verts)
+		points.extend(vertex.co for vertex in self.verts)
+		points.sort(key=lambda point: point.x)
+		points_top = make_convex_curve(points)
+		points_bottom = make_convex_curve(reversed(points))
 		#remove left and right ends and concatenate the lists to form a polygon in the right order
-		verts_top.pop()
-		verts_bottom.pop()
-		return verts_top + verts_bottom
+		return points_top[:-1] + points_bottom[:-1]
 	
 	def generate_bounding_box(self):
 		"""Find the rotation for the optimal bounding box and calculate its dimensions."""
 		def bounding_box_score(size):
 			"""Calculate the score - the bigger result, the better box."""
 			return 1/(size.x*size.y)
-		verts_convex = self.generate_convex_hull()
-		if not verts_convex:
-			raise UnfoldError("Error, check topology of the mesh object (failed to calculate convex hull)")
+		points_convex = self.convex_hull()
+		if not points_convex:
+			raise UnfoldError("Error, check topology of the mesh object (failed to calculate a convex hull)")
 		#go through all edges and search for the best solution
 		best_score = 0
 		best_box = (0, M.Vector((0,0)), M.Vector((0,0))) #(angle, box, offset) for the best score
-		for vertex_a, vertex_b in pairs(verts_convex):
-			if vertex_b.co == vertex_a.co:
+		for point_a, point_b in pairs(points_convex):
+			if point_a == point_b:
 				continue
-			angle = angle2d(vertex_b.co - vertex_a.co)
+			angle = angle2d(point_b - point_a)
 			rot = M.Matrix.Rotation(angle, 2)
 			#find the dimensions in both directions
-			rotated = [rot*vertex.co for vertex in verts_convex]
+			rotated = [rot*point for point in points_convex]
 			bottom_left = M.Vector((min(v.x for v in rotated), min(v.y for v in rotated)))
 			top_right = M.Vector((max(v.x for v in rotated), max(v.y for v in rotated)))
 			box = top_right - bottom_left
@@ -902,12 +930,11 @@ class Island:
 	
 	def apply_scale(self, scale=1):
 		if scale != 1:
+			self.scale *= scale
 			for vertex in self.verts:
 				vertex.co *= scale
-			for sticker in self.stickers:
-				sticker.center *= scale
-				sticker.other_center *= scale
-				sticker.width *= scale
+			for point in self.fake_verts:
+				point *= scale
 	
 	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
@@ -915,12 +942,11 @@ class Island:
 		page_size: size of the page in pixels (vector)"""
 		texface = tex.data
 		for uvface in self.faces:
-			if not uvface.is_sticker:
-				rot = M.Matrix.Rotation(self.angle, 2)
-				for i, uvvertex in enumerate(uvface.verts):
-					uv = rot * uvvertex.co + self.offset + self.pos
-					texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
-					texface[uvface.face.loop_start + i].uv[1] = uv.y
+			rot = M.Matrix.Rotation(self.angle, 2)
+			for i, uvvertex in enumerate(uvface.verts):
+				uv = rot * uvvertex.co + self.offset + self.pos
+				texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
+				texface[uvface.face.loop_start + i].uv[1] = uv.y
 	
 	def save_uv_separate(self, tex):
 		"""Save UV Coordinates of all UVFaces to a given UV texture, spanning from 0 to 1
@@ -929,12 +955,11 @@ class Island:
 		texface = tex.data
 		scale_x, scale_y = 1/self.bounding_box.x, 1/self.bounding_box.y
 		for uvface in self.faces:
-			if not uvface.is_sticker:
-				rot = M.Matrix.Rotation(self.angle, 2)
-				for i, uvvertex in enumerate(uvface.verts):
-					uv = rot * uvvertex.co + self.offset
-					texface[uvface.face.loop_start + i].uv[0] = uv.x * scale_x
-					texface[uvface.face.loop_start + i].uv[1] = uv.y * scale_y
+			rot = M.Matrix.Rotation(self.angle, 2)
+			for i, uvvertex in enumerate(uvface.verts):
+				uv = rot * uvvertex.co + self.offset
+				texface[uvface.face.loop_start + i].uv[0] = uv.x * scale_x
+				texface[uvface.face.loop_start + i].uv[1] = uv.y * scale_y
 
 class Page:
 	"""Container for several Islands"""
@@ -959,7 +984,7 @@ class UVVertex:
 		if self.vertex:
 			return self.vertex.index
 		else:
-			return hash(self.co.x) ^ hash(self.co.y)
+			return hash(self.co.x) ^ hash(self.co.y) # this is dirty: hash of such UVVertex can change
 	def __sub__(self, other):
 		return self.co - other.co
 	def __str__(self):
@@ -1016,25 +1041,23 @@ class UVEdge:
 
 class UVFace:
 	"""Face in 2D"""
-	is_sticker=False
 	def __init__(self, face:Face, island:Island):
 		"""Creace an UVFace from a Face and a fixed edge.
 		face: Face to take coordinates from
 		island: Island to register itself in
 		fixed_edge: Edge to connect to (that already has UV coordinates)"""
-		if type(face) is Face:
-			self.verts=list()
-			self.face=face
-			face.uvface=self
-			self.island=island
-			self.flipped = False # a flipped UVFace has edges clockwise
-			
-			rot=z_up_matrix(face.normal)
-			self.uvvertex_by_id=dict() #link vertex id -> UVVertex
-			for vertex in face.verts:
-				uvvertex=UVVertex(rot * vertex.co, vertex)
-				self.verts.append(uvvertex)
-				self.uvvertex_by_id[vertex.index]=uvvertex
+		self.verts=list()
+		self.face=face
+		face.uvface=self
+		self.island=island
+		self.flipped = False # a flipped UVFace has edges clockwise
+		
+		rot=z_up_matrix(face.normal)
+		self.uvvertex_by_id=dict() #link vertex id -> UVVertex
+		for vertex in face.verts:
+			uvvertex=UVVertex(rot * vertex.co, vertex)
+			self.verts.append(uvvertex)
+			self.uvvertex_by_id[vertex.index]=uvvertex
 		self.edges=list()
 		edge_by_verts=dict()
 		for edge in face.edges:
@@ -1045,18 +1068,25 @@ class UVFace:
 			self.edges.append(uvedge)
 			island.edges.add(uvedge)
 	
-class Sticker(UVFace):
+class Marker:
+	"""Various graphical elements linked to the net, but not being parts of the mesh"""
+	def __init__(self):
+		self.bounds = list()
+
+class Arrow(Marker):
+	def __init__(self, uvedge, size, index):
+		self.text = str(index)
+		edge = (uvedge.vb - uvedge.va) if not uvedge.uvface.flipped else (uvedge.va - uvedge.vb)
+		self.center = (uvedge.va.co + uvedge.vb.co) / 2
+		self.size = size
+		sin, cos = edge.y/edge.length, edge.x/edge.length
+		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+		self.bounds = [self.center]
+
+class Sticker(Marker):
 	"""Sticker face"""
-	is_sticker=True
-	max_index=0
-	def __init__(self, uvedge, default_width=0.005, faces=list(), other_face=None):
-		"""Sticker is directly appended to the edge given by two UVVerts"""
-		#faces is a placeholder: it should contain all possibly overlaping faces
-		#other_face is a placeholder too: that should be the sticking target and this sticker must fit into it
-		
-		Sticker.max_index += 1
-		self.index = self.max_index
-		
+	def __init__(self, uvedge, default_width=0.005, index=None, target_island=None):
+		"""Sticker is directly attached to the given UVEdge"""
 		first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
 		edge = first_vertex - second_vertex
 		sticker_width=min(default_width, edge.length/2)
@@ -1069,35 +1099,28 @@ class Sticker(UVFace):
 		len_a=len_b=sticker_width/sin_a #len_a is length of the side adjacent to vertex a, len_b similarly
 		#fix overlaps with the most often neighbour - its sticking target
 		if first_vertex == other_second:
-			cos_a=min(max(cos_a, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
-			sin_a=(1-cos_a**2)**0.5
-			len_b=min(len_a, (edge.length*sin_a)/(sin_a*cos_b+sin_b*cos_a))
-			if sin_a==0:
-				len_a=0
-			else:
-				len_a=min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
+			cos_a = min(max(cos_a, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
+			sin_a = (1-cos_a**2)**0.5
+			len_b = min(len_a, (edge.length*sin_a)/(sin_a*cos_b+sin_b*cos_a))
+			len_a = 0 if sin_a == 0 else min(sticker_width/sin_a, (edge.length-len_b*cos_b)/cos_a)
 		elif second_vertex == other_first:
-			cos_b=min(max(cos_b, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
-			sin_b=(1-cos_b**2)**0.5
-			len_a=min(len_a, (edge.length*sin_b)/(sin_a*cos_b+sin_b*cos_a))
-			if sin_b==0:
-				len_b=0
-			else:
-				len_b=min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
-		v3 = second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b/edge.length
-		v4 = first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a/edge.length
-		if v3!=v4:
-			self.verts=[second_vertex, UVVertex(v3), UVVertex(v4), first_vertex]
+			cos_b = min(max(cos_b, (edge*other_edge)/(edge.length**2)), 1) #angles between pi/3 and 0; fix for math errors
+			sin_b = (1-cos_b**2)**0.5
+			len_a = min(len_a, (edge.length*sin_b)/(sin_a*cos_b+sin_b*cos_a))
+			len_b = 0 if sin_b == 0 else min(sticker_width/sin_b, (edge.length-len_a*cos_a)/cos_b)
+		v3 = UVVertex(second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b/edge.length)
+		v4 = UVVertex(first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a/edge.length)
+		if v3.co != v4.co:
+			self.vertices=[second_vertex, v3, v4, first_vertex]
 		else:
-			self.verts=[second_vertex, UVVertex(v3), first_vertex]
+			self.vertices=[second_vertex, v3, first_vertex]
 		
-		self.center = (uvedge.va.co + uvedge.vb.co) / 2
-		self.width = sticker_width * 0.8
 		sin, cos = edge.y/edge.length, edge.x/edge.length
 		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
-		self.other_center = (other.va.co + other.vb.co) / 2
-		osin, ocos = other_edge.y/other_edge.length, other_edge.x/other_edge.length
-		self.other_rot = M.Matrix(((ocos, -osin), (osin, ocos)))
+		self.width = sticker_width * 0.9
+		self.text = "{}:{}".format(target_island.label, index) if index and target_island is not uvedge.island else int(index) if index else None
+		self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot*M.Vector((0, self.width*0.2))
+		self.bounds = [v3.co, v4.co, self.center] if v3.co != v4.co else [v3.co, self.center]
 
 class SVG:
 	"""Simple SVG exporter"""
@@ -1109,18 +1132,15 @@ class SVG:
 		self.scale = page_size_pixels.y
 		self.pure_net = pure_net
 		self.line_thickness = float(line_thickness)
-	def add_mesh(self, mesh):
-		"""Set the Mesh to process."""
-		self.mesh=mesh
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
 		vector = rot*vector + pos
 		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
-	def write(self, filename):
+	def write(self, mesh, filename):
 		"""Write data to a file given by its name."""
 		line_through = " L ".join #utility function
 		rows = "\n".join
-		for num, page in enumerate(self.mesh.pages):
+		for num, page in enumerate(mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>")
 				f.write("<svg xmlns:svg='http://www.w3.org/2000/svg' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' width='" + str(self.page_size.x) + "px' height='" + str(self.page_size.y) + "px'>")
@@ -1132,7 +1152,10 @@ class SVG:
 					path.background {{stroke:#fff}}
 					path.outer_background {{stroke:#fff; stroke-width:{outline:.2}px}}
 					path.sticker {{fill: #fff; stroke: #000; fill-opacity: 0.4; stroke-opacity: 0.7}}
-					rect {{fill:#ccc; stroke:none}}
+					path.arrow {{fill: #000;}}
+					text {{font-size: 12px; font-style: normal; fill: #000; fill-opacity: 1; stroke: none;}}
+					text.scaled {{font-size: 1px;}}
+					tspan {{text-anchor:middle;}}
 				</style>""".format(thin=self.line_thickness, thick=1.5*self.line_thickness, outline=2*self.line_thickness))
 				if page.image_path:
 					f.write("<image transform='matrix(1 0 0 1 0 0)' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x, self.page_size.y, page.image_path))
@@ -1141,43 +1164,30 @@ class SVG:
 				for island in page.islands:
 					f.write("<g>")
 					if island.image_path:
-							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='file://{}'/>\n".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale, island.image_path))
+						f.write("<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='file://{path}'/>\n".format(
+							pos=self.format_vertex(island.pos), width=island.bounding_box.x*self.scale, height=island.bounding_box.y*self.scale,
+							path=island.image_path))
 					elif island.embedded_image:
-							f.write("<image transform='matrix(1 0 0 1 {} {})' width='{}' height='{}' xlink:href='data:image/png;base64,".format(island.pos.x*self.scale, (1-island.pos.y-island.bounding_box.y)*self.scale, island.bounding_box.x*self.scale, island.bounding_box.y*self.scale))
-							f.write(island.embedded_image)
-							f.write("'/>\n")
+						f.write("<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='data:image/png;base64,".format(
+							pos=self.format_vertex(island.pos), width=island.bounding_box.x*self.scale, height=island.bounding_box.y*self.scale,
+							path=island.image_path))
+						f.write(island.embedded_image)
+						f.write("'/>\n")
 					rot = M.Matrix.Rotation(island.angle, 2)
+					pos = island.pos + island.offset
+					
 					data_outer, data_convex, data_concave = list(), list(), list()
 					for uvedge in island.edges:
 						edge = uvedge.edge
-						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in (uvedge.va, uvedge.vb)))
+						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
 						if edge.is_cut(uvedge.uvface.face):
-							#DEBUG: assert uvedge in uvedge.uvface.island.boundary_sorted
 							data_outer.append(data_uvedge)
 						else:
 							if uvedge.uvface.flipped ^ (uvedge.va.vertex.index > uvedge.vb.vertex.index): # each uvedge is in two opposite-oriented variants; we want to add each only once
-								edge = uvedge.edge
-								if edge.main_faces[0].uvface.flipped != edge.main_faces[1].uvface.flipped:
-									edge.calculate_angle()
 								if edge.angle > 0.01:
 									data_convex.append(data_uvedge)
 								elif edge.angle < -0.01:
 									data_concave.append(data_uvedge)
-					if island.stickers:
-						data_stickers = ["<path class='sticker' d='M " + line_through((self.format_vertex(vertex.co, rot, island.pos + island.offset) for vertex in sticker.verts)) + " Z'/>" for sticker in island.stickers]
-						format_matrix = lambda mat: " ".join(" ".join(map(str, v)) for v in mat)
-						data_labels = ["<text transform='matrix({mat} {pos})' xml:space='preserve' style='font-size:{size}px;font-style:normal;fill:#000;fill-opacity:1;stroke:none;'><tspan style='text-anchor:middle'>{index}</tspan></text>".format(
-							index=sticker.index,
-							size=int(sticker.width * self.scale),
-							pos=self.format_vertex(sticker.center + sticker.rot*M.Vector((0, sticker.width*0.3)), rot, island.pos + island.offset),
-							mat=format_matrix(rot * sticker.rot)) for sticker in island.stickers]
-						data_arrows = ["<text transform='matrix(1 0 0 1 {pos})' xml:space='preserve' style='font-size:{size}px;font-style:normal;fill:#000;fill-opacity:1;stroke:none;'><tspan style='text-anchor:middle'>{index}</tspan></text><path transform='matrix({mat} {pos})' style='fill:#000' d='M 0 -0.75 L 1 0.25 L 0 -0.5 L -1 0.25 Z'/>".format(
-							index=sticker.index,
-							size=int(sticker.width * self.scale),
-							pos=self.format_vertex(sticker.other_center + sticker.other_rot*M.Vector((0, sticker.width*-0.75)), rot, island.pos + island.offset),
-							mat=format_matrix(sticker.width * self.scale * rot * sticker.other_rot)) for sticker in island.stickers]
-						f.write("<g>" + rows(data_stickers) + "</g>") #Stickers are separate paths in one group
-						f.write("<g>" + rows(data_labels + data_arrows) + "</g>")
 					if data_outer: 
 						if not self.pure_net:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
@@ -1186,7 +1196,33 @@ class SVG:
 						f.write("<path class='background' d='" + rows(data_convex + data_concave) + "'/>")
 					if data_convex: f.write("<path class='convex' d='" + rows(data_convex) + "'/>")
 					if data_concave: f.write("<path class='concave' d='" + rows(data_concave) + "'/>")
+					
+					f.write("<text transform='translate({x} {y})'><tspan>^Island: {label}^</tspan></text>".format(
+						x=self.scale * (island.bounding_box.x*0.5 + island.pos.x), y=self.scale * (1 - island.pos.y) + 12,
+						label=island.label))
+					data_markers = list()
+					format_matrix = lambda mat: " ".join(" ".join(map(str, col)) for col in mat)
+					for marker in island.markers:
+						if type(marker) is Sticker:
+							text = "<text class='scaled' transform='matrix({mat} {pos})'><tspan>{index}</tspan></text>".format(
+								index=marker.text,
+								pos=self.format_vertex(marker.center, rot, pos),
+								mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)) if marker.text else ""
+							data_markers.append("<g><path class='sticker' d='M {data} Z'/>{text}</g>".format(
+								data=line_through((self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)),
+								text=text))
+						elif type(marker) is Arrow:
+							size = marker.size * island.scale * self.scale
+							data_markers.append("<g><path transform='matrix({mat} {arrow_pos})' class='arrow' d='M 0 0 L 1 1 L 0 0.25 L -1 1 Z'/><text class='scaled' transform='matrix({scale} 0 0 {scale} {pos})'><tspan>{index}</tspan></text></g>".format(
+								index=marker.text,
+								arrow_pos=self.format_vertex(marker.center, rot, pos),
+								scale=size,
+								pos=self.format_vertex(marker.center + marker.rot*marker.size*island.scale*M.Vector((0, -0.9)), rot, pos - marker.size*island.scale*M.Vector((0, 0.4))),
+								mat=format_matrix(size * rot * marker.rot)))
+					if data_markers:
+						f.write("<g>" + rows(data_markers) + "</g>") #Stickers are separate paths in one group
 					f.write("</g>")
+				
 				if len(page.islands) > 1:
 					f.write("</g>")
 				f.write("</svg>")
