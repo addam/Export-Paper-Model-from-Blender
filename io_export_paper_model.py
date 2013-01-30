@@ -184,7 +184,7 @@ class Unfolder:
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.generate_stickers(default_width = properties.sticker_width * page_size.y / scale)
-		self.mesh.finalize_islands(scale_factor = scale / page_size.y) # Scale everything so that page height is 1
+		self.mesh.finalize_islands(scale_factor=scale / page_size.y, space_at_bottom=12/(page_size.y*ppm)) # Scale everything so that page height is 1
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
@@ -327,10 +327,10 @@ class Mesh:
 				for uvedge in edge.uvedges[2:]:
 					uvedge.island.add_marker(Sticker(uvedge, default_width, index, target_island))
 	
-	def finalize_islands(self, scale_factor=1):
+	def finalize_islands(self, scale_factor=1, space_at_bottom=0):
 		for num, island in enumerate(self.islands, 1):
 			island.apply_scale(scale_factor)
-			island.generate_bounding_box()
+			island.generate_bounding_box(space_at_bottom=space_at_bottom)
 			island.label = str(num)
 	
 	def largest_island_ratio(self, page_size):
@@ -898,7 +898,7 @@ class Island:
 		#remove left and right ends and concatenate the lists to form a polygon in the right order
 		return points_top[:-1] + points_bottom[:-1]
 	
-	def generate_bounding_box(self):
+	def generate_bounding_box(self, space_at_bottom=0):
 		"""Find the rotation for the optimal bounding box and calculate its dimensions."""
 		def bounding_box_score(size):
 			"""Calculate the score - the bigger result, the better box."""
@@ -929,6 +929,8 @@ class Island:
 			angle += pi/2
 			offset = M.Vector((-offset.y-box.y, offset.x))
 			box = box.yx
+		box.y += space_at_bottom
+		offset.y -= space_at_bottom
 		self.angle = angle
 		self.bounding_box = box
 		self.offset = -offset
@@ -1086,7 +1088,9 @@ class Arrow(Marker):
 		self.size = size
 		sin, cos = edge.y/edge.length, edge.x/edge.length
 		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
-		self.bounds = [self.center]
+		tangent = edge.normalized()
+		normal = M.Vector((tangent.y, -tangent.x))
+		self.bounds = [self.center, self.center + (1.2*normal+tangent)*size, self.center + (1.2*normal-tangent)*size]
 
 class Sticker(Marker):
 	"""Sticker face"""
@@ -1202,9 +1206,10 @@ class SVG:
 					if data_convex: f.write("<path class='convex' d='" + rows(data_convex) + "'/>")
 					if data_concave: f.write("<path class='concave' d='" + rows(data_concave) + "'/>")
 					
-					f.write("<text transform='translate({x} {y})'><tspan>^Island: {label}^</tspan></text>".format(
-						x=self.scale * (island.bounding_box.x*0.5 + island.pos.x), y=self.scale * (1 - island.pos.y) + 12,
-						label=island.label))
+					island_label = "^Island: {}^".format(island.label) if island.bounding_box.x*self.scale > 80 else island.label # just a guess of the text width
+					f.write("<text transform='translate({x} {y})'><tspan>{label}</tspan></text>".format(
+						x=self.scale * (island.bounding_box.x*0.5 + island.pos.x), y=self.scale * (1 - island.pos.y),
+						label=island_label))
 					data_markers = list()
 					format_matrix = lambda mat: " ".join(" ".join(map(str, col)) for col in mat)
 					for marker in island.markers:
