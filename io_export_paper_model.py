@@ -17,6 +17,9 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
+#Aktuálně: zprovoznit vypínač Create numbers (a možná ho přejmenovat)
+#a zajistit, aby když nejsou taby a není bake texture, tak se čísla psaly dovnitř
+
 #### FIXME:
 # check that edges with 0 or 1 faces need not be marked as cut
 
@@ -183,8 +186,14 @@ class Unfolder:
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # real page size in meters
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
-		self.mesh.generate_stickers(default_width = properties.sticker_width * page_size.y / scale)
-		self.mesh.finalize_islands(scale_factor=scale / page_size.y, space_at_bottom=12/(page_size.y*ppm)) # Scale everything so that page height is 1
+		if properties.do_create_numbers:
+			self.mesh.enumerate_islands()
+		if properties.do_create_stickers:
+			self.mesh.generate_stickers(properties.sticker_width * page_size.y / scale, properties.do_create_numbers)
+		elif properties.do_create_numbers:
+			self.mesh.generate_numbers_alone(properties.sticker_width * page_size.y / scale)
+		text_height = 12/(page_size.y*ppm) if properties.do_create_numbers else 0
+		self.mesh.finalize_islands(scale_factor=scale / page_size.y, space_at_bottom=text_height) # Scale everything so that page height is 1
 		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
 		if not properties.output_pure:
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
@@ -293,7 +302,7 @@ class Mesh:
 		for edge in self.edges.values():
 			edge.data.use_seam = edge.is_main_cut
 	
-	def generate_stickers(self, default_width):
+	def generate_stickers(self, default_width, do_create_numbers=True):
 		"""Add sticker faces where they are needed."""
 		def uvedge_priority(uvedge):
 			"""Retuns whether it is a good idea to stick something on this edge's face"""
@@ -306,17 +315,21 @@ class Mesh:
 					uvedge_a, uvedge_b = uvedge_b, uvedge_a
 				target_island = uvedge_a.island
 				left_edge, right_edge = uvedge_a.neighbor_left.edge, uvedge_a.neighbor_right.edge
-				for uvedge in [uvedge_b] + edge.uvedges[2:]:
-					if (uvedge.neighbor_left.edge is not right_edge or uvedge.neighbor_right.edge is not left_edge) and\
-							uvedge not in (uvedge_a.neighbor_left, uvedge_a.neighbor_right):
-						# sticking pairs of these uvedges seem not not to be trivial to find. So, create an arrow and put the index on all stickers
-						target_island.sticker_numbering += 1
-						index = str(target_island.sticker_numbering)
-						if set(index).issubset("6890"):
-							# Add a dot to the end of indistinguishable numbers
-							index += "."
-						target_island.add_marker(Arrow(uvedge_a, default_width, index))
-						break
+				if do_create_numbers:
+					for uvedge in [uvedge_b] + edge.uvedges[2:]:
+						if (uvedge.neighbor_left.edge is not right_edge or uvedge.neighbor_right.edge is not left_edge) and\
+								uvedge not in (uvedge_a.neighbor_left, uvedge_a.neighbor_right):
+							# it is perhaps not easy to see that these uvedges should be sticked together. So, create an arrow and put the index on all stickers
+							target_island.sticker_numbering += 1
+							index = str(target_island.sticker_numbering)
+							if {'6','9'} < set(index) < {'6','8','9','0'}:
+								# if index consists of the digits 6, 8, 9, 0 only and contains 6 or 9, make it distinguishable
+								index += "."
+							target_island.add_marker(Arrow(uvedge_a, default_width, index))
+							break
+					else:
+						# if all uvedges to be sticked are easy to see, create no numbers
+						index = None
 				else:
 					index = None
 				uvedge_b.island.add_marker(Sticker(uvedge_b, default_width, index, target_island))
@@ -327,12 +340,30 @@ class Mesh:
 				for uvedge in edge.uvedges[2:]:
 					uvedge.island.add_marker(Sticker(uvedge, default_width, index, target_island))
 	
-	def finalize_islands(self, scale_factor=1, space_at_bottom=0):
+	def generate_numbers_alone(self, size):
+		for edge in self.edges.values():
+			if edge.is_cut() and len(edge.uvedges) >= 2:
+				target_island = edge.uvedges[0].island
+				target_island.sticker_numbering += 1
+				index = str(target_island.sticker_numbering)
+				if {'6','9'} < set(index) < {'6','8','9','0'}:
+					# if index consists of the digits 6, 8, 9, 0 only and contains 6 or 9, make it distinguishable
+					index += "."
+				for uvedge in edge.uvedges:
+					uvedge.island.add_marker(NumberAlone(uvedge, index, target_island, size))
+	
+	def enumerate_islands(self):
 		for num, island in enumerate(self.islands, 1):
+			name = str(num)
+			if {'6','9'} < set(name) < {'6','8','9','0'}:
+				name += "."
+			island.label = name
+	
+	def finalize_islands(self, scale_factor=1, space_at_bottom=0, do_enumerate=False):
+		for island in self.islands:
 			island.apply_scale(scale_factor)
 			island.generate_bounding_box(space_at_bottom=space_at_bottom)
-			island.label = str(num)
-	
+
 	def largest_island_ratio(self, page_size):
 		largest_ratio=0
 		for island in self.islands:
@@ -735,6 +766,7 @@ class Island:
 		self.scale = 1
 		self.markers = list()
 		self.sticker_numbering = 0
+		self.label = None
 
 	def join(self, other, edge:Edge) -> bool:
 		"""
@@ -1131,6 +1163,19 @@ class Sticker(Marker):
 		self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot*M.Vector((0, self.width*0.2))
 		self.bounds = [v3.co, v4.co, self.center] if v3.co != v4.co else [v3.co, self.center]
 
+class NumberAlone(Marker):
+	"""Numbering inside the island describing edges to be sticked"""
+	def __init__(self, uvedge, index, target_island, default_size=0.005):
+		"""Sticker is directly attached to the given UVEdge"""
+		edge = (uvedge.va - uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb - uvedge.va)
+
+		self.size = default_size# min(default_size, edge.length/2)
+		sin, cos = edge.y/edge.length, edge.x/edge.length
+		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+		self.text = "{}:{}".format(target_island.label, index) if target_island is not uvedge.island else index
+		self.center = (uvedge.va.co + uvedge.vb.co) / 2 - self.rot*M.Vector((0, self.size*1.2))
+		self.bounds = [self.center]
+
 class SVG:
 	"""Simple SVG exporter"""
 	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1):
@@ -1206,10 +1251,11 @@ class SVG:
 					if data_convex: f.write("<path class='convex' d='" + rows(data_convex) + "'/>")
 					if data_concave: f.write("<path class='concave' d='" + rows(data_concave) + "'/>")
 					
-					island_label = "^Island: {}^".format(island.label) if island.bounding_box.x*self.scale > 80 else island.label # just a guess of the text width
-					f.write("<text transform='translate({x} {y})'><tspan>{label}</tspan></text>".format(
-						x=self.scale * (island.bounding_box.x*0.5 + island.pos.x), y=self.scale * (1 - island.pos.y),
-						label=island_label))
+					if island.label:
+						island_label = "^Island: {}^".format(island.label) if island.bounding_box.x*self.scale > 80 else island.label # just a guess of the text width
+						f.write("<text transform='translate({x} {y})'><tspan>{label}</tspan></text>".format(
+							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x), y=self.scale * (1 - island.pos.y),
+							label=island_label))
 					data_markers = list()
 					format_matrix = lambda mat: " ".join(" ".join(map(str, col)) for col in mat)
 					for marker in island.markers:
@@ -1234,6 +1280,12 @@ class SVG:
 								arrow_pos=self.format_vertex(marker.center, rot, pos),
 								scale=size,
 								pos=self.format_vertex(marker.center + marker.rot*marker.size*island.scale*M.Vector((0, -0.9)), rot, pos - marker.size*island.scale*M.Vector((0, 0.4))),
+								mat=format_matrix(size * rot * marker.rot)))
+						elif type(marker) is NumberAlone:
+							size = marker.size * island.scale * self.scale
+							data_markers.append("<text class='scaled' transform='matrix({mat} {pos})'><tspan>{index}</tspan></text>".format(
+								index=marker.text,
+								pos=self.format_vertex(marker.center, rot, pos),
 								mat=format_matrix(size * rot * marker.rot)))
 					if data_markers:
 						f.write("<g>" + rows(data_markers) + "</g>") #Stickers are separate paths in one group
@@ -1319,7 +1371,8 @@ class ExportPaperModel(bpy.types.Operator):
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
-	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
+	do_create_numbers = bpy.props.BoolProperty(name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together", default=True)
+	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs and their numbers", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
 	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
 	image_packing = bpy.props.EnumProperty(name="Image Packing Method", description="Method of attaching baked image(s) to the SVG", default='PAGE_LINK', items=[
 			('PAGE_LINK', "Single Linked", "Bake one image per page of output"),
@@ -1382,9 +1435,11 @@ class ExportPaperModel(bpy.types.Operator):
 		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
 		layout.separator()
 		layout.label(text="Document settings:")
-		layout.prop(self.properties, "do_create_stickers")
+		row = layout.row()
+		row.prop(self.properties, "do_create_stickers")
+		row.prop(self.properties, "do_create_numbers")
 		col = layout.column()
-		col.active = self.properties.do_create_stickers
+		col.active = self.properties.do_create_stickers or self.properties.do_create_numbers
 		col.prop(self.properties, "sticker_width")
 		layout.prop(self.properties, "line_thickness")
 		col = layout.column()
