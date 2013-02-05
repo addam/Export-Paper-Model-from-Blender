@@ -17,13 +17,11 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
-#Aktuálně: zprovoznit vypínač Create numbers (a možná ho přejmenovat)
-#a zajistit, aby když nejsou taby a není bake texture, tak se čísla psaly dovnitř
-
 #### FIXME:
 # check that edges with 0 or 1 faces need not be marked as cut
 
 #### TODO:
+# change UI 'Model Scale' to be a divisor, not a coefficient
 # choose edge's main pair of faces intelligently
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
@@ -1219,11 +1217,11 @@ class SVG:
 					f.write("<g>")
 					if island.image_path:
 						f.write("<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='file://{path}'/>\n".format(
-							pos=self.format_vertex(island.pos), width=island.bounding_box.x*self.scale, height=island.bounding_box.y*self.scale,
+							pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))), width=island.bounding_box.x*self.scale, height=island.bounding_box.y*self.scale,
 							path=island.image_path))
 					elif island.embedded_image:
 						f.write("<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='data:image/png;base64,".format(
-							pos=self.format_vertex(island.pos), width=island.bounding_box.x*self.scale, height=island.bounding_box.y*self.scale,
+							pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))), width=island.bounding_box.x*self.scale, height=island.bounding_box.y*self.scale,
 							path=island.image_path))
 						f.write(island.embedded_image)
 						f.write("'/>\n")
@@ -1372,7 +1370,7 @@ class ExportPaperModel(bpy.types.Operator):
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
 	do_create_numbers = bpy.props.BoolProperty(name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together", default=True)
-	sticker_width = bpy.props.FloatProperty(name="Tab Size", description="Width of gluing tabs and their numbers", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
+	sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size", description="Width of gluing tabs and their numbers", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
 	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
 	image_packing = bpy.props.EnumProperty(name="Image Packing Method", description="Method of attaching baked image(s) to the SVG", default='PAGE_LINK', items=[
 			('PAGE_LINK', "Single Linked", "Bake one image per page of output"),
