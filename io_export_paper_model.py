@@ -184,7 +184,7 @@ class Unfolder:
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # real page size in meters
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
-		if properties.do_create_numbers:
+		if properties.do_create_numbers and properties.do_create_stickers:
 			self.mesh.enumerate_islands()
 		if properties.do_create_stickers:
 			self.mesh.generate_stickers(properties.sticker_width * page_size.y / scale, properties.do_create_numbers)
@@ -339,16 +339,16 @@ class Mesh:
 					uvedge.island.add_marker(Sticker(uvedge, default_width, index, target_island))
 	
 	def generate_numbers_alone(self, size):
+		global_numbering = 0
 		for edge in self.edges.values():
 			if edge.is_cut() and len(edge.uvedges) >= 2:
-				target_island = edge.uvedges[0].island
-				target_island.sticker_numbering += 1
-				index = str(target_island.sticker_numbering)
+				global_numbering += 1
+				index = str(global_numbering)
 				if {'6','9'} < set(index) < {'6','8','9','0'}:
 					# if index consists of the digits 6, 8, 9, 0 only and contains 6 or 9, make it distinguishable
 					index += "."
 				for uvedge in edge.uvedges:
-					uvedge.island.add_marker(NumberAlone(uvedge, index, target_island, size))
+					uvedge.island.add_marker(NumberAlone(uvedge, index, size))
 	
 	def enumerate_islands(self):
 		for num, island in enumerate(self.islands, 1):
@@ -1163,14 +1163,14 @@ class Sticker(Marker):
 
 class NumberAlone(Marker):
 	"""Numbering inside the island describing edges to be sticked"""
-	def __init__(self, uvedge, index, target_island, default_size=0.005):
+	def __init__(self, uvedge, index, default_size=0.005):
 		"""Sticker is directly attached to the given UVEdge"""
 		edge = (uvedge.va - uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb - uvedge.va)
 
 		self.size = default_size# min(default_size, edge.length/2)
 		sin, cos = edge.y/edge.length, edge.x/edge.length
 		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
-		self.text = "{}:{}".format(target_island.label, index) if target_island is not uvedge.island else index
+		self.text = index
 		self.center = (uvedge.va.co + uvedge.vb.co) / 2 - self.rot*M.Vector((0, self.size*1.2))
 		self.bounds = [self.center]
 
