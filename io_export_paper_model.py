@@ -252,22 +252,21 @@ class Mesh:
 		self.islands = {Island(face) for face in self.faces.values()}
 		# check for edges that are cut permanently
 		edges = [edge for edge in self.edges.values() if not edge.force_cut and len(edge.faces) > 1]
-		if not edges:
-			return True
 		
-		average_length = sum(edge.length for edge in edges) / len(edges)
-		for edge in edges:
-			edge.generate_priority(average_length)
-		edges.sort(key = lambda edge:edge.priority, reverse=False)
-		for edge in edges:
-			face_a, face_b = edge.main_faces
-			island_a, island_b = face_a.uvface.island, face_b.uvface.island
-			if len(island_b.faces) > len(island_a.faces):
-				island_a, island_b = island_b, island_a
-			if island_a is not island_b:
-				if island_a.join(island_b, edge):
-					self.islands.remove(island_b)
-		
+		if edges:
+			average_length = sum(edge.length for edge in edges) / len(edges)
+			for edge in edges:
+				edge.generate_priority(average_length)
+			edges.sort(key = lambda edge:edge.priority, reverse=False)
+			for edge in edges:
+				face_a, face_b = edge.main_faces
+				island_a, island_b = face_a.uvface.island, face_b.uvface.island
+				if len(island_b.faces) > len(island_a.faces):
+					island_a, island_b = island_b, island_a
+				if island_a is not island_b:
+					if island_a.join(island_b, edge):
+						self.islands.remove(island_b)
+			
 		for edge in self.edges.values():
 			# some edges did not know until now whether their angle is convex or concave
 			if edge.main_faces and edge.main_faces[0].uvface.flipped != edge.main_faces[1].uvface.flipped:
@@ -1063,8 +1062,9 @@ class UVEdge:
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
 	def is_similar(self, other, epsilon = 1e-6):
 		#TODO: epsilon should somehow depend on model scale (be in on-page units)
-		return ((self.va - other.vb).length_squared < epsilon and (self.vb - other.va).length_squared < epsilon) or \
-			((self.va - other.va).length_squared < epsilon and (self.vb - other.vb).length_squared < epsilon)
+		return self.island is other.island and \
+			(((self.va - other.vb).length_squared < epsilon and (self.vb - other.va).length_squared < epsilon) or \
+			((self.va - other.va).length_squared < epsilon and (self.vb - other.vb).length_squared < epsilon))
 	def __lt__(self, other):
 		return self.min.tup < other.min.tup
 	def __le__(self, other):
