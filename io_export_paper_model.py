@@ -1321,7 +1321,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		box = layout.box()
 		if sce.island_list:
 			box.label(text="{} island(s):".format(len(sce.island_list)))
-			box.template_list('UI_UL_list', "", sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+			box.template_list('UI_UL_list', 'io_paper_model_island_list', sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
 			# The first one is the identifier of the registered UIList to use (if you want only the default list,
 			# with no custom draw code, use "UI_UL_list").
 			# layout.template_list("MATERIAL_UL_matslots_example", "", obj, "material_slots", obj, "active_material_index")
