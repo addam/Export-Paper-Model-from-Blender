@@ -37,7 +37,7 @@ bl_info = {
 	"author": "Addam Dominec",
 	"version": (0, 8),
 	"blender": (2, 6, 5),
-	"api": 53177,
+	"api": 54491,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -343,7 +343,7 @@ class Mesh:
 			if edge.is_cut() and len(edge.uvedges) >= 2:
 				global_numbering += 1
 				index = str(global_numbering)
-				if {'6','9'} < set(index) < {'6','8','9','0'}:
+				if ('6' in name or '9' in name) and set(name) <= {'6','8','9','0'}:
 					# if index consists of the digits 6, 8, 9, 0 only and contains 6 or 9, make it distinguishable
 					index += "."
 				for uvedge in edge.uvedges:
@@ -352,7 +352,7 @@ class Mesh:
 	def enumerate_islands(self):
 		for num, island in enumerate(self.islands, 1):
 			name = str(num)
-			if {'6','9'} < set(name) < {'6','8','9','0'}:
+			if ('6' in name or '9' in name) and set(name) <= {'6','8','9','0'}:
 				name += "."
 			island.label = name
 	
