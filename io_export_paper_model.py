@@ -1382,7 +1382,7 @@ def display_islands_changed(self, context):
 			display_islands.handle = bpy.types.SpaceView3D.draw_handler_add(display_islands, (self, context), 'WINDOW', 'POST_VIEW')
 	else:
 		if display_islands.handle:
-			region.callback_remove(display_islands.handle)
+			bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
 			display_islands.handle = None
 
 def list_selection_changed(self, context):
