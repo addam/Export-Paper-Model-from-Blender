@@ -22,10 +22,8 @@
 
 #### TODO:
 # change UI 'Model Scale' to be a divisor, not a coefficient
-# choose edge's main pair of faces intelligently
 # split islands bigger than selected page size
 # UI elements to set line thickness and page size conveniently
-# use mathutils.geometry.box_pack_2d
 # sanitize the constructors so that they don't edit their parent object
 # apply island rotation and position before exporting, to simplify things
 # s/verts/vertices/g
@@ -37,8 +35,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 6),
-	"api": 56177,
+	"blender": (2, 6, 7),
+	"api": 56725,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -179,12 +177,14 @@ class Unfolder:
 
 	def save(self, properties):
 		"""Export the document."""
+		# Note about scale: input is direcly in blender length. finalize_islands multiplies everything by scale/page_size.y, SVG object multiplies everything by page_size.y*ppm.
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # real page size in meters
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
+		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.line_thickness) / (ppm * scale))
 		if properties.do_create_numbers and properties.do_create_stickers:
 			self.mesh.enumerate_islands()
 		if properties.do_create_stickers:
@@ -282,9 +282,6 @@ class Mesh:
 					except ValueError:
 						reordered.append(uvedge)
 				edge.uvedges = reordered
-				# mark edges of flat polygons that need not be drawn
-				if edge.uvedges[0].is_similar(edge.uvedges[1]):
-					edge.cut_is_hidden = True
 
 		# construct a linked list from each island's boundary
 		for island in self.islands:
@@ -294,6 +291,13 @@ class Mesh:
 				uvedge.neighbor_right.neighbor_left = uvedge
 		
 		return True
+	
+	def mark_hidden_cuts(self, distance):
+		epsilon = distance**2
+		for edge in self.edges.values():
+			# mark edges of flat polygons that need not be drawn, and also cuts whose uvedges are very close
+			if edge.is_main_cut and edge.uvedges[0].is_similar(edge.uvedges[1], epsilon):
+				edge.cut_is_hidden = True
 	
 	def mark_cuts(self):
 		"""Mark cut edges in the original mesh so that the user can see"""
@@ -307,7 +311,7 @@ class Mesh:
 			#TODO: it should take into account overlaps with faces and with other stickers
 			return uvedge.uvface.face.area / sum((vb-va).length for (va, vb) in pairs(uvedge.uvface.verts))
 		for edge in self.edges.values():
-			if edge.is_cut() and len(edge.uvedges) >= 2:
+			if edge.is_main_cut and not edge.cut_is_hidden and len(edge.uvedges) >= 2:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
 				if uvedge_priority(uvedge_a) < uvedge_priority(uvedge_b):
 					uvedge_a, uvedge_b = uvedge_b, uvedge_a
@@ -341,7 +345,7 @@ class Mesh:
 	def generate_numbers_alone(self, size):
 		global_numbering = 0
 		for edge in self.edges.values():
-			if edge.is_cut() and len(edge.uvedges) >= 2:
+			if edge.is_main_cut and not edge.cut_is_hidden and len(edge.uvedges) >= 2:
 				global_numbering += 1
 				index = str(global_numbering)
 				if ('6' in index or '9' in index) and set(index) <= {'6','8','9','0'}:
@@ -352,10 +356,8 @@ class Mesh:
 	
 	def enumerate_islands(self):
 		for num, island in enumerate(self.islands, 1):
-			name = str(num)
-			if ('6' in name or '9' in name) and set(name) <= {'6','8','9','0'}:
-				name += "."
-			island.label = name
+			island.number = num
+			island.generate_label()
 	
 	def finalize_islands(self, scale_factor=1, space_at_bottom=0, do_enumerate=False):
 		for island in self.islands:
@@ -689,7 +691,7 @@ class Edge:
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
 		#Return whether there is a cut between the two main faces
 		if face is None or (self.main_faces and face in self.main_faces):
-			return self.is_main_cut and not self.cut_is_hidden
+			return self.is_main_cut
 		#All other faces (third and more) are automatically treated as cut
 		else:
 			return True
@@ -973,6 +975,13 @@ class Island:
 			for point in self.fake_verts:
 				point *= scale
 	
+	def generate_label(self, label=None, abbreviation=None):
+		abbr = abbreviation or str(self.number)
+		if not set('69NZMWpbqd').isdisjoint(abbr) and set('6890oOxXNZMWIlpbqd').issuperset(abbr):
+			abbr += "."
+		self.label = label or ("{}:Island {}".format(abbreviation, self.number) if abbreviation else "Island: {}".format(self.number))
+		self.abbreviation = abbr
+	
 	def save_uv(self, tex, aspect_ratio=1):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
 		tex: UV Texture layer to use (BPy MeshUVLoopLayer struct)
@@ -1062,10 +1071,10 @@ class UVEdge:
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
 	def is_similar(self, other, epsilon = 1e-6):
-		#TODO: epsilon should somehow depend on model scale (be in on-page units)
-		return self.island is other.island and \
-			(((self.va - other.vb).length_squared < epsilon and (self.vb - other.va).length_squared < epsilon) or \
-			((self.va - other.va).length_squared < epsilon and (self.vb - other.vb).length_squared < epsilon))
+		if self.island is not other.island:
+			return False
+		pair_a, pair_b = (other.va, other.vb) if self.uvface.flipped ^ other.uvface.flipped else (other.vb, other.va)
+		return (self.va - pair_a).length_squared < epsilon and (self.vb - pair_b).length_squared < epsilon
 	def __lt__(self, other):
 		return self.min.tup < other.min.tup
 	def __le__(self, other):
@@ -1233,15 +1242,15 @@ class SVG:
 					for uvedge in island.edges:
 						edge = uvedge.edge
 						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
-						if edge.is_cut(uvedge.uvface.face):
-							data_outer.append(data_uvedge)
-						else:
+						if not edge.is_cut(uvedge.uvface.face) or edge.cut_is_hidden:
 							if uvedge.uvface.flipped ^ (uvedge.va.vertex.index > uvedge.vb.vertex.index): # each uvedge is in two opposite-oriented variants; we want to add each only once
 								if edge.angle > 0.01:
 									data_convex.append(data_uvedge)
 								elif edge.angle < -0.01:
 									data_concave.append(data_uvedge)
-					if data_outer: 
+						else:
+							data_outer.append(data_uvedge)
+					if data_outer:
 						if not self.pure_net:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
 						f.write("<path class='outer' d='" + rows(data_outer) + "'/>")
@@ -1343,7 +1352,8 @@ class MakeUnfoldable(bpy.types.Operator):
 		for island in unfolder.mesh.islands:
 			#add islands to UI list and set default descriptions
 			list_item = island_list.add()
-			list_item.name = "Island ({} faces)".format(len(island.faces))
+			list_item.name = "{} ({} faces)".format(island.label, len(island.faces))
+			list_item.island = island
 			#add faces' IDs to the island
 			for uvface in island.faces:
 				face_list_item = list_item.faces.add()
@@ -1536,13 +1546,19 @@ def list_selection_changed(self, context):
 		display_islands.object = None
 
 def label_changed(self, context):
+	if len(self.abbreviation > 3):
+		self.abbreviation = self.abbreviation[:3]
+	self.island.generate_label(self.label, self.abbreviation)
+	self.label = self.island.label
+	self.abbreviation = self.island.abbreviation
 	self.name = "{} ({} faces)".format(self.label, len(self.faces))
 
 class FaceList(bpy.types.PropertyGroup):
 	id = bpy.props.IntProperty(name="Face ID")
 class IslandList(bpy.types.PropertyGroup):
 	faces = bpy.props.CollectionProperty(type=FaceList, name="Faces", description="Faces belonging to this island")
-	label = bpy.props.StringProperty(name="Label", description="Label on this island", default="No Label", update=label_changed)
+	label = bpy.props.StringProperty(name="Label", description="Label on this island", default="", update=label_changed)
+	abbreviation = bpy.props.StringProperty(name="Abbreviation", description="Three-letter label to use when there is not enough space", default="", update=label_changed)
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
@@ -1558,6 +1574,9 @@ def register():
 def unregister():
 	bpy.utils.unregister_module(__name__)
 	bpy.types.INFO_MT_file_export.remove(menu_func)
+	if display_islands.handle:
+		bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
+		display_islands.handle = None
 
 if __name__ == "__main__":
 	register()
