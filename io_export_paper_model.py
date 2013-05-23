@@ -296,13 +296,13 @@ class Mesh:
 		epsilon = distance**2
 		for edge in self.edges.values():
 			# mark edges of flat polygons that need not be drawn, and also cuts whose uvedges are very close
-			if edge.is_main_cut and edge.uvedges[0].is_similar(edge.uvedges[1], epsilon):
+			if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.uvedges[0].is_similar(edge.uvedges[1], epsilon):
 				edge.cut_is_hidden = True
 	
 	def mark_cuts(self):
 		"""Mark cut edges in the original mesh so that the user can see"""
 		for edge in self.edges.values():
-			edge.data.use_seam = edge.is_main_cut
+			edge.data.use_seam = len(edge.uvedges) > 1 and edge.is_main_cut
 	
 	def generate_stickers(self, default_width, do_create_numbers=True):
 		"""Add sticker faces where they are needed."""
