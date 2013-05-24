@@ -17,9 +17,6 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
-#### FIXME:
-# check that edges with 0 or 1 faces need not be marked as cut
-
 #### TODO:
 # change UI 'Model Scale' to be a divisor, not a coefficient
 # split islands bigger than selected page size
@@ -1334,11 +1331,10 @@ class MakeUnfoldable(bpy.types.Operator):
 	
 	def execute(self, context):
 		global priority_effect
-		props = self.properties
 		sce = bpy.context.scene
-		priority_effect['convex']=props.priority_effect_convex
-		priority_effect['concave']=props.priority_effect_concave
-		priority_effect['length']=props.priority_effect_length
+		priority_effect['convex']=self.priority_effect_convex
+		priority_effect['concave']=self.priority_effect_concave
+		priority_effect['length']=self.priority_effect_length
 		recall_mode = context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
 		recall_display_islands, sce.io_paper_model_display_islands = sce.io_paper_model_display_islands, False
@@ -1366,6 +1362,21 @@ class MakeUnfoldable(bpy.types.Operator):
 		sce.io_paper_model_display_islands = recall_display_islands
 		return {'FINISHED'}
 
+def page_size_preset_changed(self, context):
+	"""Update the actual document size to correct values"""
+	if self.page_size_preset == 'A4':
+		self.output_size_x = 0.210
+		self.output_size_y = 0.297
+	elif self.page_size_preset == 'A3':
+		self.output_size_x = 0.297
+		self.output_size_y = 0.420
+	elif self.page_size_preset == 'US_LETTER':
+		self.output_size_x = 0.216
+		self.output_size_y = 0.279
+	elif self.page_size_preset == 'US_LEGAL':
+		self.output_size_x = 0.216
+		self.output_size_y = 0.356
+
 class ExportPaperModel(bpy.types.Operator):
 	"""Blender Operator: save the selected object's net and optionally bake its texture"""
 	bl_idname = "export_mesh.paper_model"
@@ -1374,9 +1385,15 @@ class ExportPaperModel(bpy.types.Operator):
 	filepath = bpy.props.StringProperty(name="File Path", description="Target file to save the SVG")
 	filename = bpy.props.StringProperty(name="File Name", description="Name of the file")
 	directory = bpy.props.StringProperty(name="Directory", description="Directory of the file")
+	page_size_preset = bpy.props.EnumProperty(name="Page Size", description="Size of the exported document", default='A4', update=page_size_preset_changed, items=[
+			('USER', "User defined", "User defined paper size"),
+			('A4', "A4", "International standard paper size"),
+			('A3', "A3", "International standard paper size"),
+			('US_LETTER', "Letter", "North American paper size"),
+			('US_LEGAL', "Legal", "North American paper size")])
 	output_size_x = bpy.props.FloatProperty(name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
 	output_size_y = bpy.props.FloatProperty(name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
-	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Output resolution in points per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
+	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Resolution of images and lines in pixels per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
@@ -1389,6 +1406,7 @@ class ExportPaperModel(bpy.types.Operator):
 			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")])
 	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
+	ui_expanded_document = bpy.props.BoolProperty(name="Show Document Settings Expanded", description="Shows the box 'Document Settings' expanded in user interface", default=False)
 	unfolder=None
 	largest_island_ratio=0
 	
@@ -1399,6 +1417,7 @@ class ExportPaperModel(bpy.types.Operator):
 	def execute(self, context):
 		try:
 			self.unfolder.save(self.properties)
+			self.report({'INFO'}, "Saved {}-page document".format(len(self.unfolder.mesh.pages)))
 			return {'FINISHED'}
 		except UnfoldError as error:
 			self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
@@ -1406,28 +1425,23 @@ class ExportPaperModel(bpy.types.Operator):
 		except:
 			raise
 	def get_scale_ratio(self, sce):
-		return self.unfolder.mesh.largest_island_ratio(M.Vector((self.properties.output_size_x, self.properties.output_size_y))) * self.properties.model_scale * sce.unit_settings.scale_length
+		return self.unfolder.mesh.largest_island_ratio(M.Vector((self.output_size_x, self.output_size_y))) * self.model_scale * sce.unit_settings.scale_length
 	def invoke(self, context, event):
 		sce=context.scene
-		self.properties.bake_selected_to_active = sce.render.use_bake_selected_to_active
+		self.bake_selected_to_active = sce.render.use_bake_selected_to_active
 		
 		self.object = context.active_object
 		self.unfolder = Unfolder(self.object)
-		self.unfolder.prepare(create_uvmap=self.properties.do_create_uvmap)
+		self.unfolder.prepare(create_uvmap=self.do_create_uvmap)
 		scale_ratio = self.get_scale_ratio(sce)
 		if scale_ratio > 1:
-			self.properties.model_scale = 0.95/scale_ratio
+			self.model_scale = 0.95/scale_ratio
 		wm = context.window_manager
 		wm.fileselect_add(self)
 		return {'RUNNING_MODAL'}
 	
 	def draw(self, context):
 		layout = self.layout
-		col = layout.column(align=True)
-		col.label(text="Page size:")
-		col.prop(self.properties, "output_size_x")
-		col.prop(self.properties, "output_size_y")
-		layout.prop(self.properties, "output_dpi")
 		layout.label(text="Model scale:")
 		layout.prop(self.properties, "model_scale")
 		scale_ratio = self.get_scale_ratio(context.scene)
@@ -1440,20 +1454,31 @@ class ExportPaperModel(bpy.types.Operator):
 		col = layout.column()
 		if len(self.object.data.uv_textures) == 8:
 			col.label(text="No UV slots left, pure net is the only option.", icon="ERROR")
-		col.active = not self.properties.output_pure
+		col.active = not self.output_pure
 		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
-		layout.separator()
-		layout.label(text="Document settings:")
-		row = layout.row()
-		row.prop(self.properties, "do_create_stickers")
-		row.prop(self.properties, "do_create_numbers")
-		col = layout.column()
-		col.active = self.properties.do_create_stickers or self.properties.do_create_numbers
-		col.prop(self.properties, "sticker_width")
-		layout.prop(self.properties, "line_thickness")
-		col = layout.column()
-		col.active = not self.properties.output_pure
-		col.prop(self.properties, "image_packing", text="Images")
+		
+		box = layout.box()
+		row = box.row(align=True)
+		row.prop(self.properties, "ui_expanded_document", text="", icon=('TRIA_DOWN' if self.ui_expanded_document else 'TRIA_RIGHT'), emboss=False)
+		row.label(text="Document Settings")
+		
+		if self.ui_expanded_document:
+			box.prop(self.properties, "page_size_preset")
+			col = box.column(align=True)
+			col.active = self.page_size_preset == 'USER'
+			col.prop(self.properties, "output_size_x")
+			col.prop(self.properties, "output_size_y")
+			box.prop(self.properties, "output_dpi")
+			col = box.column()
+			col.prop(self.properties, "do_create_stickers")
+			col.prop(self.properties, "do_create_numbers")
+			col = box.column()
+			col.active = self.do_create_stickers or self.do_create_numbers
+			col.prop(self.properties, "sticker_width")
+			box.prop(self.properties, "line_thickness")
+			col = box.column()
+			col.active = not self.output_pure
+			col.prop(self.properties, "image_packing", text="Images")
 
 def menu_func(self, context):
 	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
