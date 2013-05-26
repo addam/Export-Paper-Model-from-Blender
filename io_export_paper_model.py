@@ -181,7 +181,7 @@ class Unfolder:
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # real page size in meters
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
-		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.line_thickness) / (ppm * scale))
+		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
 		if properties.do_create_numbers and properties.do_create_stickers:
 			self.mesh.enumerate_islands()
 		if properties.do_create_stickers:
@@ -209,7 +209,7 @@ class Unfolder:
 			if not properties.do_create_uvmap:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
-		svg = SVG(page_size * ppm, properties.output_pure, properties.line_thickness)
+		svg = SVG(page_size * ppm, properties.style, properties.output_pure)
 		svg.do_create_stickers = properties.do_create_stickers
 		svg.write(self.mesh, filepath)
 
@@ -1183,14 +1183,14 @@ class NumberAlone(Marker):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, page_size_pixels:M.Vector, pure_net=True, line_thickness=1):
+	def __init__(self, page_size_pixels:M.Vector, style, pure_net=True):
 		"""Initialize document settings.
 		page_size_pixels: document dimensions in pixels
 		pure_net: if True, do not use image"""
 		self.page_size = page_size_pixels
 		self.scale = page_size_pixels.y
 		self.pure_net = pure_net
-		self.line_thickness = float(line_thickness)
+		self.style = style
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
 		vector = rot*vector + pos
@@ -1198,24 +1198,32 @@ class SVG:
 	def write(self, mesh, filename):
 		"""Write data to a file given by its name."""
 		line_through = " L ".join #utility function
+		format_color = lambda vec: "#{:02x}{:02x}{:02x}".format(round(vec[0]*255), round(vec[1]*255), round(vec[2])*255)
+		format_style = {'SOLID':"none", 'DOT':"0.2,4", 'DASH':"4,8", 'LONGDASH':"6,3", 'DASHDOT':"8,4,2,4"}
 		rows = "\n".join
 		for num, page in enumerate(mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>\n")
 				f.write("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1' x='0px' y='0px' width='" + str(self.page_size.x) + "px' height='" + str(self.page_size.y) + "px'>")
 				f.write("""<style type="text/css">
-					path {{fill:none; stroke-width:{thin:.2}px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}}
-					path.concave {{stroke:#000; stroke-dasharray:8,4,2,4; stroke-dashoffset:0}}
-					path.convex {{stroke:#000; stroke-dasharray:4,8; stroke-dashoffset:0}}
-					path.outer {{stroke:#000; stroke-dasharray:none; stroke-width:{thick:.2}px}}
+					path {{fill:none; stroke-width:{outer_width:.2}px; stroke-linecap:square; stroke-linejoin:bevel; stroke-dasharray:none}}
+					path.outer {{stroke:{outer_color}; stroke-dasharray:{outer_style}; stroke-dashoffset:0; stroke-width:{outer_width:.2}px; stroke-opacity: {outer_alpha:.2}}}
+					path.convex {{stroke:{convex_color}; stroke-dasharray:{convex_style}; stroke-dashoffset:0; stroke-width:{convex_width:.2}px; stroke-opacity: {convex_alpha:.2}}}
+					path.concave {{stroke:{concave_color}; stroke-dasharray:{concave_style}; stroke-dashoffset:0; stroke-width:{concave_width:.2}px; stroke-opacity: {concave_alpha:.2}}}
 					path.background {{stroke:#fff}}
 					path.outer_background {{stroke:#fff; stroke-width:{outline:.2}px}}
-					path.sticker {{fill: #fff; stroke: #000; fill-opacity: 0.4; stroke-opacity: 0.7}}
+					path.sticker {{fill: {sticker_fill}; stroke: {sticker_color}; fill-opacity: {sticker_alpha:.2}; stroke-width:{sticker_width:.2}; stroke-opacity: 1}}
 					path.arrow {{fill: #000;}}
-					text {{font-size: 12px; font-style: normal; fill: #000; fill-opacity: 1; stroke: none;}}
+					text {{font-size: 12px; font-style: normal; fill: {text_color}; fill-opacity: {text_alpha:.2}; stroke: none;}}
 					text.scaled {{font-size: 1px;}}
 					tspan {{text-anchor:middle;}}
-				</style>""".format(thin=self.line_thickness, thick=1.5*self.line_thickness, outline=2*self.line_thickness))
+				</style>""".format(outer_color=format_color(self.style.outer_color), outer_alpha=self.style.outer_color[3], outer_style=format_style[self.style.outer_style],
+					convex_color=format_color(self.style.convex_color), convex_alpha=self.style.convex_color[3], convex_style=format_style[self.style.convex_style],
+					concave_color=format_color(self.style.concave_color), concave_alpha=self.style.concave_color[3], concave_style=format_style[self.style.concave_style],
+					sticker_fill=format_color(self.style.sticker_fill), sticker_color=format_color(self.style.sticker_color), sticker_alpha=self.style.sticker_fill[3],
+					text_color=format_color(self.style.text_color), text_alpha=self.style.text_color[3],
+					outer_width=self.style.outer_width, convex_width=self.style.convex_width, concave_width=self.style.concave_width,
+					sticker_width=self.style.sticker_width, outline=1.5*self.style.outer_width))
 				if page.image_path:
 					f.write("<image transform='matrix(1 0 0 1 0 0)' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x, self.page_size.y, page.image_path))
 				if len(page.islands) > 1:
@@ -1377,6 +1385,28 @@ def page_size_preset_changed(self, context):
 		self.output_size_x = 0.216
 		self.output_size_y = 0.356
 
+class PaperModelStyle(bpy.types.PropertyGroup):
+	line_styles = [
+			('SOLID', "Solid (----)", "Solid line"),
+			('DOT', "Dots (· · ·)", "Dotted line"),
+			('DASH', "Short Dashes (- - -)", "Solid line"),
+			('LONGDASH', "Long Dashes (-- --)", "Solid line"),
+			('DASHDOT', "Dash-dotted (-- ·)", "Solid line")]
+	outer_color = bpy.props.FloatVectorProperty(name="Outer Lines", description="Color of net outline", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+	outer_style = bpy.props.EnumProperty(name="Outer Lines Drawing Style", description="Drawing style of net outline", default='SOLID', items=line_styles)
+	outer_width = bpy.props.FloatProperty(name="Outer Lines Thickness", description="Thickness of net outline, in pixels", default=1.5, min=0, soft_max=10, precision=1)
+	convex_color = bpy.props.FloatVectorProperty(name="Inner Convex Lines", description="Color of lines to be folded to a convex angle", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+	convex_style = bpy.props.EnumProperty(name="Convex Lines Drawing Style", description="Drawing style of lines to be folded to a convex angle", default='DASH', items=line_styles)
+	convex_width = bpy.props.FloatProperty(name="Convex Lines Thickness", description="Thickness of concave lines, in pixels", default=1, min=0, soft_max=10, precision=1)
+	concave_color = bpy.props.FloatVectorProperty(name="Inner Concave Lines", description="Color of lines to be folded to a concave angle", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+	concave_style = bpy.props.EnumProperty(name="Concave Lines Drawing Style", description="Drawing style of lines to be folded to a concave angle", default='DASHDOT', items=line_styles)
+	concave_width = bpy.props.FloatProperty(name="Concave Lines Thickness", description="Thickness of concave lines, in pixels", default=1, min=0, soft_max=10, precision=1)
+	sticker_fill = bpy.props.FloatVectorProperty(name="Tabs Fill", description="Fill color of sticking tabs", default=(1.0, 1.0, 1.0, 0.4), min=0, max=1, subtype='COLOR', size=4)
+	sticker_color = bpy.props.FloatVectorProperty(name="Tabs Outline", description="Outline color of sticking tabs", default=(0.0, 0.0, 0.0), min=0, max=1, subtype='COLOR', size=3)
+	sticker_width = bpy.props.FloatProperty(name="Tabs Outline Thickness", description="Thickness of tabs outer line, in pixels", default=1, min=0, soft_max=10, precision=1)
+	text_color = bpy.props.FloatVectorProperty(name="Text Color", description="Color of all text used in the document", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+bpy.utils.register_class(PaperModelStyle)
+
 class ExportPaperModel(bpy.types.Operator):
 	"""Blender Operator: save the selected object's net and optionally bake its texture"""
 	bl_idname = "export_mesh.paper_model"
@@ -1391,22 +1421,24 @@ class ExportPaperModel(bpy.types.Operator):
 			('A3', "A3", "International standard paper size"),
 			('US_LETTER', "Letter", "North American paper size"),
 			('US_LEGAL', "Legal", "North American paper size")])
-	output_size_x = bpy.props.FloatProperty(name="Page Size X", description="Page width", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
-	output_size_y = bpy.props.FloatProperty(name="Page Size Y", description="Page height", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+	output_size_x = bpy.props.FloatProperty(name="Page Width", description="Width of the exported document", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+	output_size_y = bpy.props.FloatProperty(name="Page Height", description="Height of the exported document", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Resolution of images and lines in pixels per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
 	do_create_numbers = bpy.props.BoolProperty(name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size", description="Width of gluing tabs and their numbers", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
-	line_thickness = bpy.props.FloatProperty(name="Line Thickness", description="SVG inner line thickness in pixels (outer lines are 1.5x thicker)", default=1, min=0, soft_max=10, subtype="UNSIGNED")
 	image_packing = bpy.props.EnumProperty(name="Image Packing Method", description="Method of attaching baked image(s) to the SVG", default='PAGE_LINK', items=[
 			('PAGE_LINK', "Single Linked", "Bake one image per page of output"),
 			('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
 			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")])
 	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
-	ui_expanded_document = bpy.props.BoolProperty(name="Show Document Settings Expanded", description="Shows the box 'Document Settings' expanded in user interface", default=False)
+	ui_expanded_document = bpy.props.BoolProperty(name="Show Document Settings Expanded", description="Shows the box 'Document Settings' expanded in user interface", default=True)
+	ui_expanded_style = bpy.props.BoolProperty(name="Show Style Settings Expanded", description="Shows the box 'Colors and Style' expanded in user interface", default=False)
+	style = bpy.props.PointerProperty(type=PaperModelStyle)
+	
 	unfolder=None
 	largest_island_ratio=0
 	
@@ -1450,13 +1482,7 @@ class ExportPaperModel(bpy.types.Operator):
 		elif scale_ratio > 0:
 			layout.label(text="Largest island is 1/"+strf(1/scale_ratio)+" of page")
 		layout.prop(self.properties, "do_create_uvmap")
-		layout.prop(self.properties, "output_pure")
-		col = layout.column()
-		if len(self.object.data.uv_textures) == 8:
-			col.label(text="No UV slots left, pure net is the only option.", icon="ERROR")
-		col.active = not self.output_pure
-		col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
-		
+
 		box = layout.box()
 		row = box.row(align=True)
 		row.prop(self.properties, "ui_expanded_document", text="", icon=('TRIA_DOWN' if self.ui_expanded_document else 'TRIA_RIGHT'), emboss=False)
@@ -1475,10 +1501,39 @@ class ExportPaperModel(bpy.types.Operator):
 			col = box.column()
 			col.active = self.do_create_stickers or self.do_create_numbers
 			col.prop(self.properties, "sticker_width")
-			box.prop(self.properties, "line_thickness")
+			
+			box.prop(self.properties, "output_pure")
 			col = box.column()
+			if len(self.object.data.uv_textures) == 8:
+				col.label(text="No UV slots left, pure net is the only option.", icon="ERROR")
 			col.active = not self.output_pure
+			col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
 			col.prop(self.properties, "image_packing", text="Images")
+		
+		box = layout.box()
+		row = box.row(align=True)
+		row.prop(self.properties, "ui_expanded_style", text="", icon=('TRIA_DOWN' if self.ui_expanded_style else 'TRIA_RIGHT'), emboss=False)
+		row.label(text="Colors and Style")
+		
+		if self.ui_expanded_style:
+			col = box.column()
+			col.prop(self.style, "outer_color")
+			col.prop(self.style, "outer_width", text="Width (pixels)")
+			col.prop(self.style, "outer_style", text="Style")
+			col = box.column()
+			col.prop(self.style, "convex_color")
+			col.prop(self.style, "convex_width", text="Width (pixels)")
+			col.prop(self.style, "convex_style", text="Style")
+			col = box.column()
+			col.prop(self.style, "concave_color")
+			col.prop(self.style, "concave_width", text="Width (pixels)")
+			col.prop(self.style, "concave_style", text="Style")
+			col = box.column()
+			col.active = self.do_create_stickers
+			col.prop(self.style, "sticker_fill")
+			col.prop(self.style, "sticker_color")
+			col.prop(self.style, "sticker_width", text="Outline width (pixels)")
+			box.prop(self.style, "text_color")
 
 def menu_func(self, context):
 	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
