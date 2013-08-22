@@ -32,8 +32,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 7),
-	"api": 56725,
+	"blender": (2, 6, 8),
+	"api": 59380,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -257,6 +257,8 @@ class Mesh:
 				edge.generate_priority(average_length)
 			edges.sort(key = lambda edge:edge.priority, reverse=False)
 			for edge in edges:
+				if edge.length == 0:
+					continue
 				face_a, face_b = edge.main_faces
 				island_a, island_b = face_a.uvface.island, face_b.uvface.island
 				if len(island_b.faces) > len(island_a.faces):
