@@ -1390,10 +1390,10 @@ def page_size_preset_changed(self, context):
 class PaperModelStyle(bpy.types.PropertyGroup):
 	line_styles = [
 			('SOLID', "Solid (----)", "Solid line"),
-			('DOT', "Dots (· · ·)", "Dotted line"),
+			('DOT', "Dots (. . .)", "Dotted line"),
 			('DASH', "Short Dashes (- - -)", "Solid line"),
 			('LONGDASH', "Long Dashes (-- --)", "Solid line"),
-			('DASHDOT', "Dash-dotted (-- ·)", "Solid line")]
+			('DASHDOT', "Dash-dotted (-- .)", "Solid line")]
 	outer_color = bpy.props.FloatVectorProperty(name="Outer Lines", description="Color of net outline", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
 	outer_style = bpy.props.EnumProperty(name="Outer Lines Drawing Style", description="Drawing style of net outline", default='SOLID', items=line_styles)
 	outer_width = bpy.props.FloatProperty(name="Outer Lines Thickness", description="Thickness of net outline, in pixels", default=1.5, min=0, soft_max=10, precision=1)
