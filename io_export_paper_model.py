@@ -178,39 +178,42 @@ class Unfolder:
 		filepath=properties.filepath
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
-		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # real page size in meters
+		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # page size in meters
+		printable_size = page_size - 2*properties.output_margin*M.Vector((1, 1)) # printable area size in meters
+		print(page_size, printable_size)
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
 		if properties.do_create_numbers and properties.do_create_stickers:
 			self.mesh.enumerate_islands()
 		if properties.do_create_stickers:
-			self.mesh.generate_stickers(properties.sticker_width * page_size.y / scale, properties.do_create_numbers)
+			self.mesh.generate_stickers(properties.sticker_width * printable_size.y / scale, properties.do_create_numbers)
 		elif properties.do_create_numbers:
-			self.mesh.generate_numbers_alone(properties.sticker_width * page_size.y / scale)
-		text_height = 12/(page_size.y*ppm) if properties.do_create_numbers else 0
-		self.mesh.finalize_islands(scale_factor=scale / page_size.y, space_at_bottom=text_height) # Scale everything so that page height is 1
-		self.mesh.fit_islands(aspect_ratio = page_size.x / page_size.y)
+			self.mesh.generate_numbers_alone(properties.sticker_width * printable_size.y / scale)
+		text_height = 12/(printable_size.y*ppm) if properties.do_create_numbers else 0
+		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, space_at_bottom=text_height) # Scale everything so that page height is 1
+		self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)
 		if not properties.output_pure:
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
-			tex = self.mesh.save_uv(aspect_ratio=page_size.x/page_size.y, separate_image=use_separate_images, tex=self.tex)
+			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
 			if not tex:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
 			rd = bpy.context.scene.render
 			recall_selected_to_active, rd.use_bake_selected_to_active = rd.use_bake_selected_to_active, properties.bake_selected_to_active
 			if properties.image_packing == 'PAGE_LINK':
-				self.mesh.save_image(tex, filepath, page_size * ppm)
+				self.mesh.save_image(tex, filepath, printable_size * ppm)
 			elif properties.image_packing == 'ISLAND_LINK':
-				self.mesh.save_separate_images(tex, page_size.y * ppm, filepath)
+				self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath)
 			elif properties.image_packing == 'ISLAND_EMBED':
-				self.mesh.save_separate_images(tex, page_size.y * ppm, do_embed=True)
+				self.mesh.save_separate_images(tex, printable_size.y * ppm, do_embed=True)
 			#revoke settings
 			bpy.context.scene.render.use_bake_selected_to_active = recall_selected_to_active
 			if not properties.do_create_uvmap:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
-		svg = SVG(page_size * ppm, properties.style, properties.output_pure)
+		svg = SVG(page_size * ppm, printable_size.y*ppm, properties.style, properties.output_pure)
 		svg.do_create_stickers = properties.do_create_stickers
+		svg.margin = properties.output_margin*ppm
 		svg.write(self.mesh, filepath)
 
 class Mesh:
@@ -1185,18 +1188,19 @@ class NumberAlone(Marker):
 
 class SVG:
 	"""Simple SVG exporter"""
-	def __init__(self, page_size_pixels:M.Vector, style, pure_net=True):
+	def __init__(self, page_size_pixels:M.Vector, scale, style, pure_net=True):
 		"""Initialize document settings.
 		page_size_pixels: document dimensions in pixels
 		pure_net: if True, do not use image"""
 		self.page_size = page_size_pixels
-		self.scale = page_size_pixels.y
+		self.scale = scale
 		self.pure_net = pure_net
 		self.style = style
+		self.margin = 0
 	def format_vertex(self, vector, rot=1, pos=M.Vector((0,0))):
 		"""Return a string with both coordinates of the given vertex."""
 		vector = rot*vector + pos
-		return str(vector.x*self.scale) + " " + str((1-vector.y)*self.scale)
+		return str((vector.x)*self.scale + self.margin) + " " + str((1-vector.y)*self.scale+self.margin)
 	def write(self, mesh, filename):
 		"""Write data to a file given by its name."""
 		line_through = " L ".join #utility function
@@ -1269,7 +1273,7 @@ class SVG:
 					if island.label:
 						island_label = "^Island: {}^".format(island.label) if island.bounding_box.x*self.scale > 80 else island.label # just a guess of the text width
 						f.write("<text transform='translate({x} {y})'><tspan>{label}</tspan></text>".format(
-							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x), y=self.scale * (1 - island.pos.y),
+							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x) + self.margin, y=self.scale * (1 - island.pos.y) + self.margin,
 							label=island_label))
 					data_markers = list()
 					format_matrix = lambda mat: " ".join(" ".join(map(str, col)) for col in mat)
@@ -1425,6 +1429,7 @@ class ExportPaperModel(bpy.types.Operator):
 			('US_LEGAL', "Legal", "North American paper size")])
 	output_size_x = bpy.props.FloatProperty(name="Page Width", description="Width of the exported document", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
 	output_size_y = bpy.props.FloatProperty(name="Page Height", description="Height of the exported document", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+	output_margin = bpy.props.FloatProperty(name="Page Margin", description="Distance from page borders to the printable area", default=0.005, min=0, soft_max=0.1, subtype="UNSIGNED", unit="LENGTH")
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Resolution of images and lines in pixels per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
 	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
@@ -1459,7 +1464,10 @@ class ExportPaperModel(bpy.types.Operator):
 		except:
 			raise
 	def get_scale_ratio(self, sce):
-		return self.unfolder.mesh.largest_island_ratio(M.Vector((self.output_size_x, self.output_size_y))) * self.model_scale * sce.unit_settings.scale_length
+		if min(self.output_size_x, output_size_y) <= 2*self.output_margin:
+			return False
+		ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.output_size_x-2*self.output_margin, self.output_size_y-2*self.output_margin)))
+		return ratio * self.model_scale * sce.unit_settings.scale_length
 	def invoke(self, context, event):
 		sce=context.scene
 		self.bake_selected_to_active = sce.render.use_bake_selected_to_active
@@ -1496,6 +1504,7 @@ class ExportPaperModel(bpy.types.Operator):
 			col.active = self.page_size_preset == 'USER'
 			col.prop(self.properties, "output_size_x")
 			col.prop(self.properties, "output_size_y")
+			box.prop(self.properties, "output_margin")
 			box.prop(self.properties, "output_dpi")
 			col = box.column()
 			col.prop(self.properties, "do_create_stickers")
