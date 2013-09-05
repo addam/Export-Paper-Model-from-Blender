@@ -33,7 +33,7 @@ bl_info = {
 	"author": "Addam Dominec",
 	"version": (0, 8),
 	"blender": (2, 6, 8),
-	"api": 59380,
+	"api": 58966,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -1570,6 +1570,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		sub.active = sce.io_paper_model_display_islands and bool(sce.island_list)
 		sub.prop(sce, "io_paper_model_islands_alpha", slider=True)
 		
+		layout.prop(sce, "io_paper_model_display_tabs", icon='RESTRICT_VIEW_OFF')
 		layout.operator("export_mesh.paper_model")
 	
 def display_islands(self, context):
@@ -1644,6 +1645,67 @@ class IslandList(bpy.types.PropertyGroup):
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
+#flip = bm.edges.layers.int.new("flip_tab")
+#bmm.edges[0][bmm.edges.layers.int["flip_tab"]]
+
+def display_tabs(self, context):
+	if context.active_object.type != 'MESH':
+		return
+	from bmesh import new as BMesh
+	bm = BMesh()
+	ob = context.active_object
+	bm.from_mesh(ob.data)
+	
+	bgl.glMatrixMode(bgl.GL_PROJECTION)
+	perspMatrix = context.space_data.region_3d.perspective_matrix
+	perspBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), perspMatrix.transposed())
+	bgl.glLoadMatrixf(perspBuff)
+	bgl.glMatrixMode(bgl.GL_MODELVIEW)
+	objectBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), ob.matrix_world.transposed())
+	bgl.glLoadMatrixf(objectBuff)
+	bgl.glEnable(bgl.GL_POLYGON_OFFSET_LINE)
+	bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
+	polygonMode = bgl.Buffer(bgl.GL_INT, 2)
+	bgl.glGetIntegerv(bgl.GL_POLYGON_MODE, polygonMode)
+	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
+	bgl.glColor3f(1.0, 0.2, 0.0)
+	
+	linear_component = ob.matrix_world.to_3x3()
+	
+	for edge in bm.edges:
+		if len(edge.link_faces) < 1:
+			continue
+		face = edge.link_faces[0] # use custom edge layer to pick the correct one
+
+		shear = edge.verts[1].co - edge.verts[0].co
+		offset = linear_component.inverted() * (linear_component*face.normal).cross(linear_component*shear)
+		shear /= (linear_component*shear).length
+		offset /= (linear_component*offset).length
+		
+		bgl.glBegin(bgl.GL_POLYGON)
+		bgl.glVertex3f(*edge.verts[0].co)
+		bgl.glVertex3f(*edge.verts[1].co)
+		bgl.glVertex3f(*(edge.verts[1].co + offset))
+		bgl.glVertex3f(*(edge.verts[0].co + offset))
+		bgl.glEnd()
+
+	bgl.glPolygonOffset(0.0, 0.0)
+	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, polygonMode[0])
+	del polygonMode
+	bgl.glDisable(bgl.GL_POLYGON_OFFSET_LINE)
+	bgl.glLoadIdentity()
+display_tabs.handle = None
+
+def display_tabs_changed(self, context):
+	if self.io_paper_model_display_tabs:
+		if not display_tabs.handle:
+			display_tabs.handle = bpy.types.SpaceView3D.draw_handler_add(display_tabs, (self, context), 'WINDOW', 'POST_VIEW')
+	else:
+		if display_tabs.handle:
+			bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
+			display_tabs.handle = None
+	
+
 def register():
 	bpy.utils.register_module(__name__)
 
@@ -1651,6 +1713,8 @@ def register():
 	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
 	bpy.types.Scene.island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
 	bpy.types.Scene.island_list_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, update=list_selection_changed)
+	bpy.types.Scene.io_paper_model_display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", update=display_tabs_changed)
+	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
 	bpy.types.INFO_MT_file_export.append(menu_func)
 
 def unregister():
@@ -1659,6 +1723,9 @@ def unregister():
 	if display_islands.handle:
 		bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
 		display_islands.handle = None
+	if display_tabs.handle:
+		bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
+		display_tabs.handle = None
 
 if __name__ == "__main__":
 	register()
