@@ -1464,7 +1464,7 @@ class ExportPaperModel(bpy.types.Operator):
 		except:
 			raise
 	def get_scale_ratio(self, sce):
-		if min(self.output_size_x, output_size_y) <= 2*self.output_margin:
+		if min(self.output_size_x, self.output_size_y) <= 2*self.output_margin:
 			return False
 		ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.output_size_x-2*self.output_margin, self.output_size_y-2*self.output_margin)))
 		return ratio * self.model_scale * sce.unit_settings.scale_length
