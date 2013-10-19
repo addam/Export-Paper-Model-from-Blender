@@ -32,8 +32,8 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 8),
-	"api": 58966,
+	"blender": (2, 6, 9),
+	"api": 60841,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -163,9 +163,9 @@ class Unfolder:
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 		self.tex = None
 
-	def prepare(self, create_uvmap=False, mark_seams=False):
+	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False):
 		"""Something that should be part of the constructor - TODO """
-		self.mesh.generate_cuts()
+		self.mesh.generate_cuts(page_size)
 		self.mesh.finalize_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
@@ -243,7 +243,7 @@ class Mesh:
 			if edge.main_faces:
 				edge.calculate_angle()
 	
-	def generate_cuts(self):
+	def generate_cuts(self, page_size):
 		"""Cut the mesh so that it will be unfoldable."""
 		
 		twisted_faces = [face for face in self.faces.values() if face.is_twisted()]
@@ -267,7 +267,7 @@ class Mesh:
 				if len(island_b.faces) > len(island_a.faces):
 					island_a, island_b = island_b, island_a
 				if island_a is not island_b:
-					if island_a.join(island_b, edge):
+					if island_a.join(island_b, edge, size_limit=page_size):
 						self.islands.remove(island_b)
 			
 		for edge in self.edges.values():
@@ -770,7 +770,7 @@ class Island:
 		self.sticker_numbering = 0
 		self.label = None
 
-	def join(self, other, edge:Edge) -> bool:
+	def join(self, other, edge:Edge, size_limit=None) -> bool:
 		"""
 		Try to join other island on given edge
 		Returns False if they would overlap
@@ -864,7 +864,20 @@ class Island:
 		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
 		phantoms[first_b], phantoms[second_b] = uvedge_a.vb, uvedge_a.va
 		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge is not uvedge_b]
-		# create event list
+		
+		# check the size of the resulting island
+		if size_limit:
+			# first check: bounding box
+			bbox_width = max(self.boundary_sorted[-1].max.co.x, max(vertex.co.x for vertex in phantoms)) - min(self.boundary_sorted[0].min.co.x, min(vertex.co.x for vertex in phantoms))
+			bbox_height = max(max(seg.top for seg in self.boundary_sorted), max(vertex.co.y for vertex in phantoms)) - min(min(seg.bottom for seg in self.boundary_sorted), min(vertex.co.y for vertex in phantoms))
+			if min(bbox_width, bbox_height)**2 > size_limit.x**2 + size_limit.y**2:
+				return False
+			if (bbox_width > size_limit.x or bbox_height > size_limit.y) and (bbox_height > size_limit.x or bbox_width > size_limit.y):
+				# further checks (FIXME!)
+				# for the time being, just throw this piece away
+				return False
+		
+		# check for self-intersections: create event list
 		sweepline = Sweepline()
 		events_add = boundary_other + self.boundary_sorted
 		events_add.remove(uvedge_a)
@@ -1353,9 +1366,9 @@ class MakeUnfoldable(bpy.types.Operator):
 		bpy.ops.object.mode_set(mode='OBJECT')
 		recall_display_islands, sce.io_paper_model_display_islands = sce.io_paper_model_display_islands, False
 		
-
+		page_size = M.Vector((0.210, 0.297)) if sce.io_paper_model_limit_by_page else None
 		self.unfolder = unfolder = Unfolder(context.active_object)
-		unfolder.prepare(mark_seams=True, create_uvmap=self.do_create_uvmap)
+		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap)
 
 		island_list = context.scene.island_list
 		island_list.clear() #remove previously defined islands
@@ -1557,6 +1570,14 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 	def draw(self, context):
 		layout = self.layout
 		sce = context.scene
+		
+		#layout.prop(sce.paper_model.page_width) FIXME!
+		box = layout.box()
+		box.prop(sce, "io_paper_model_limit_by_page")
+		if sce.io_paper_model_limit_by_page:
+			box.label("Page width: 210mm")
+			box.label("Page height: 297mm")
+		
 		layout.operator("mesh.make_unfoldable")
 		box = layout.box()
 		if sce.island_list:
@@ -1724,6 +1745,7 @@ def register():
 	bpy.types.Scene.island_list_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, update=list_selection_changed)
 	bpy.types.Scene.io_paper_model_display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", update=display_tabs_changed)
 	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
+	bpy.types.Scene.io_paper_model_limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
 	bpy.types.INFO_MT_file_export.append(menu_func)
 
 def unregister():
