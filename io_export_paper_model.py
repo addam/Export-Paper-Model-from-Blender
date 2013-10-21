@@ -1363,9 +1363,9 @@ class MakeUnfoldable(bpy.types.Operator):
 		priority_effect['length']=self.priority_effect_length
 		recall_mode = context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
-		recall_display_islands, sce.io_paper_model_display_islands = sce.io_paper_model_display_islands, False
+		recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 		
-		page_size = M.Vector((0.210, 0.297)) if sce.io_paper_model_limit_by_page else None
+		page_size = M.Vector((0.210, 0.297)) if sce.paper_model.limit_by_page else None
 		self.unfolder = unfolder = Unfolder(context.active_object)
 		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap)
 
@@ -1385,7 +1385,7 @@ class MakeUnfoldable(bpy.types.Operator):
 
 		unfolder.mesh.data.show_edge_seams = True
 		bpy.ops.object.mode_set(mode=recall_mode)
-		sce.io_paper_model_display_islands = recall_display_islands
+		sce.paper_model.display_islands = recall_display_islands
 		return {'FINISHED'}
 
 def page_size_preset_changed(self, context):
@@ -1572,36 +1572,36 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		obj = context.active_object
 		mesh = obj.data if obj and obj.type == 'MESH' else None
 		
-		#layout.prop(sce.paper_model.page_width) FIXME!
 		box = layout.box()
-		box.prop(sce, "io_paper_model_limit_by_page")
-		if sce.io_paper_model_limit_by_page:
-			box.label("Page width: 210mm")
-			box.label("Page height: 297mm")
+		box.prop(sce.paper_model, "limit_by_page")
+		if sce.paper_model.limit_by_page:
+			col = box.column(align=True)
+			col.prop(sce.paper_model, "output_size_x")
+			col.prop(sce.paper_model, "output_size_y")
 		
 		layout.operator("mesh.make_unfoldable")
 		box = layout.box()
 		if mesh and mesh.paper_island_list:
 			box.label(text="{} island(s):".format(len(mesh.paper_island_list)))
-			box.template_list('UI_UL_list', 'io_paper_model_island_list', mesh, 'paper_island_list', mesh, 'paper_island_index', rows=1, maxrows=5)
+			box.template_list('UI_UL_list', 'paper_model_island_list', mesh, 'paper_island_list', mesh, 'paper_island_index', rows=1, maxrows=5)
 			# The first one is the identifier of the registered UIList to use (if you want only the default list,
 			# with no custom draw code, use "UI_UL_list").
 			# layout.template_list("MATERIAL_UL_matslots_example", "", obj, "material_slots", obj, "active_material_index")
 			if mesh.paper_island_index >= 0:
 				list_item = mesh.paper_island_list[mesh.paper_island_index]
 				box.prop(list_item, "label")
-			#layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
-			box.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
+			#layout.prop(sce.paper_model, "display_labels", icon='RESTRICT_VIEW_OFF')
+			box.prop(sce.paper_model, "display_islands", icon='RESTRICT_VIEW_OFF')
 		else:
 			box.label(text="Not unfolded")
 			sub = box.row()
-			sub.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
+			sub.prop(sce.paper_model, "display_islands", icon='RESTRICT_VIEW_OFF')
 			sub.active = False
 		sub = box.row()
-		sub.active = bool(sce.io_paper_model_display_islands and mesh and mesh.paper_island_list)
-		sub.prop(sce, "io_paper_model_islands_alpha", slider=True)
+		sub.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
+		sub.prop(sce.paper_model, "islands_alpha", slider=True)
 		
-		layout.prop(sce, "io_paper_model_display_tabs", icon='RESTRICT_VIEW_OFF')
+		layout.prop(sce.paper_model, "display_tabs", icon='RESTRICT_VIEW_OFF')
 		layout.operator("export_mesh.paper_model")
 	
 def display_islands(self, context):
@@ -1625,7 +1625,7 @@ def display_islands(self, context):
 	bgl.glEnable(bgl.GL_POLYGON_OFFSET_FILL)
 	bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
 	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
-	bgl.glColor4f(1.0, 0.4, 0.0, self.io_paper_model_islands_alpha)
+	bgl.glColor4f(1.0, 0.4, 0.0, self.islands_alpha)
 	island = mesh.paper_island_list[mesh.paper_island_index]
 	for lface in island.faces:
 		face = mesh.polygons[lface.id]
@@ -1641,7 +1641,7 @@ display_islands.handle = None
 
 def display_islands_changed(self, context):
 	"""Switch highlighting islands on/off"""
-	if self.io_paper_model_display_islands:
+	if self.display_islands:
 		if not display_islands.handle:
 			display_islands.handle = bpy.types.SpaceView3D.draw_handler_add(display_islands, (self, context), 'WINDOW', 'POST_VIEW')
 	else:
@@ -1718,7 +1718,7 @@ def display_tabs(self, context):
 display_tabs.handle = None
 
 def display_tabs_changed(self, context):
-	if self.io_paper_model_display_tabs:
+	if self.display_tabs:
 		if not display_tabs.handle:
 			display_tabs.handle = bpy.types.SpaceView3D.draw_handler_add(display_tabs, (self, context), 'WINDOW', 'POST_VIEW')
 	else:
@@ -1726,17 +1726,22 @@ def display_tabs_changed(self, context):
 			bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
 			display_tabs.handle = None
 	
+class PaperModelSettings(bpy.types.PropertyGroup):
+	display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
+	islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
+	display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", update=display_tabs_changed)
+	limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
+	output_size_x = bpy.props.FloatProperty(name="Page Width", description="Maximal width of an island", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+	output_size_y = bpy.props.FloatProperty(name="Page Height", description="Maximal height of an island", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+bpy.utils.register_class(PaperModelSettings)
+
 
 def register():
 	bpy.utils.register_module(__name__)
 
-	bpy.types.Scene.io_paper_model_display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
-	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
+	bpy.types.Scene.paper_model = bpy.props.PointerProperty(type=PaperModelSettings, name="Paper Model", description="Settings of the Export Paper Model script")
 	bpy.types.Mesh.paper_island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
 	bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100)
-	bpy.types.Scene.io_paper_model_display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", update=display_tabs_changed)
-	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
-	bpy.types.Scene.io_paper_model_limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
 	bpy.types.INFO_MT_file_export.append(menu_func)
 
 def unregister():
