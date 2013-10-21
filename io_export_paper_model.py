@@ -64,7 +64,6 @@ priority_effect={
 	'convex':0.5,
 	'concave':1,
 	'length':-0.05}
-highlight_faces = list()
 
 strf="{:.3f}".format
 
@@ -1370,7 +1369,8 @@ class MakeUnfoldable(bpy.types.Operator):
 		self.unfolder = unfolder = Unfolder(context.active_object)
 		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap)
 
-		island_list = context.scene.island_list
+		mesh = context.active_object.data
+		island_list = mesh.paper_island_list
 		island_list.clear() #remove previously defined islands
 		for island in unfolder.mesh.islands:
 			#add islands to UI list and set default descriptions
@@ -1379,10 +1379,9 @@ class MakeUnfoldable(bpy.types.Operator):
 			list_item.island = island
 			#add faces' IDs to the island
 			for uvface in island.faces:
-				face_list_item = list_item.faces.add()
-				face_list_item.id = uvface.face.index
-		sce.island_list_index = -1
-		list_selection_changed(sce, bpy.context)
+				lface = list_item.faces.add()
+				lface.id = uvface.face.index
+		mesh.paper_island_index = -1
 
 		unfolder.mesh.data.show_edge_seams = True
 		bpy.ops.object.mode_set(mode=recall_mode)
@@ -1570,6 +1569,8 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 	def draw(self, context):
 		layout = self.layout
 		sce = context.scene
+		obj = context.active_object
+		mesh = obj.data if obj and obj.type == 'MESH' else None
 		
 		#layout.prop(sce.paper_model.page_width) FIXME!
 		box = layout.box()
@@ -1580,14 +1581,14 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		
 		layout.operator("mesh.make_unfoldable")
 		box = layout.box()
-		if sce.island_list:
-			box.label(text="{} island(s):".format(len(sce.island_list)))
-			box.template_list('UI_UL_list', 'io_paper_model_island_list', sce, 'island_list', sce, 'island_list_index', rows=1, maxrows=5)
+		if mesh and mesh.paper_island_list:
+			box.label(text="{} island(s):".format(len(mesh.paper_island_list)))
+			box.template_list('UI_UL_list', 'io_paper_model_island_list', mesh, 'paper_island_list', mesh, 'paper_island_index', rows=1, maxrows=5)
 			# The first one is the identifier of the registered UIList to use (if you want only the default list,
 			# with no custom draw code, use "UI_UL_list").
 			# layout.template_list("MATERIAL_UL_matslots_example", "", obj, "material_slots", obj, "active_material_index")
-			if sce.island_list_index >= 0:
-				list_item = sce.island_list[sce.island_list_index]
+			if mesh.paper_island_index >= 0:
+				list_item = mesh.paper_island_list[mesh.paper_island_index]
 				box.prop(list_item, "label")
 			#layout.prop(sce, "io_paper_model_display_labels", icon='RESTRICT_VIEW_OFF')
 			box.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
@@ -1597,7 +1598,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 			sub.prop(sce, "io_paper_model_display_islands", icon='RESTRICT_VIEW_OFF')
 			sub.active = False
 		sub = box.row()
-		sub.active = sce.io_paper_model_display_islands and bool(sce.island_list)
+		sub.active = bool(sce.io_paper_model_display_islands and mesh and mesh.paper_island_list)
 		sub.prop(sce, "io_paper_model_islands_alpha", slider=True)
 		
 		layout.prop(sce, "io_paper_model_display_tabs", icon='RESTRICT_VIEW_OFF')
@@ -1605,11 +1606,13 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 	
 def display_islands(self, context):
 	#TODO: save the vertex positions and don't recalculate them always
-	#TODO: don't use active object, but rather save the object itself
-	if context.active_object != display_islands.object:
-		return
 	ob = context.active_object
+	if not ob or ob.type != 'MESH':
+		return
 	mesh = ob.data
+	if not mesh.paper_island_list or mesh.paper_island_index == -1:
+		return
+	
 	bgl.glMatrixMode(bgl.GL_PROJECTION)
 	perspMatrix = context.space_data.region_3d.perspective_matrix
 	perspBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), perspMatrix.transposed())
@@ -1623,9 +1626,9 @@ def display_islands(self, context):
 	bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
 	bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
 	bgl.glColor4f(1.0, 0.4, 0.0, self.io_paper_model_islands_alpha)
-	global highlight_faces
-	for face_id in highlight_faces:
-		face = mesh.polygons[face_id]
+	island = mesh.paper_island_list[mesh.paper_island_index]
+	for lface in island.faces:
+		face = mesh.polygons[lface.id]
 		bgl.glBegin(bgl.GL_POLYGON)
 		for vertex_id in face.vertices:
 			vertex = mesh.vertices[vertex_id]
@@ -1635,7 +1638,6 @@ def display_islands(self, context):
 	bgl.glDisable(bgl.GL_POLYGON_OFFSET_FILL)
 	bgl.glLoadIdentity()
 display_islands.handle = None
-display_islands.object = None
 
 def display_islands_changed(self, context):
 	"""Switch highlighting islands on/off"""
@@ -1646,17 +1648,6 @@ def display_islands_changed(self, context):
 		if display_islands.handle:
 			bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
 			display_islands.handle = None
-
-def list_selection_changed(self, context):
-	"""Update the island highlighted in 3D View"""
-	global highlight_faces
-	if self.island_list_index >= 0:
-		list_item = self.island_list[self.island_list_index]
-		highlight_faces = [face.id for face in list_item.faces]
-		display_islands.object = context.active_object
-	else:
-		highlight_faces = list()
-		display_islands.object = None
 
 def label_changed(self, context):
 	if len(self.abbreviation > 3):
@@ -1741,8 +1732,8 @@ def register():
 
 	bpy.types.Scene.io_paper_model_display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
 	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
-	bpy.types.Scene.island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
-	bpy.types.Scene.island_list_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, update=list_selection_changed)
+	bpy.types.Mesh.paper_island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
+	bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100)
 	bpy.types.Scene.io_paper_model_display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", update=display_tabs_changed)
 	bpy.types.Scene.io_paper_model_islands_alpha = bpy.props.FloatProperty(name="Highlight Alpha", description="Alpha value for island highlighting", min=0.0, max=1.0, default=0.3)
 	bpy.types.Scene.io_paper_model_limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
