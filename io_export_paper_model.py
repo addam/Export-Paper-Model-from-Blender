@@ -1600,10 +1600,10 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		row.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
 		row.prop(sce.paper_model, "islands_alpha", slider=True)
 		
-		sub = box.column(align=True)
-		sub.active = bool(mesh.paper_island_list)
-		sub.prop(sce.paper_model, "display_tabs", icon='RESTRICT_VIEW_OFF')
-		sub.prop(sce.paper_model, "display_tabs_size")
+		#sub = box.column(align=True)
+		#sub.active = bool(mesh.paper_island_list)
+		#sub.prop(sce.paper_model, "display_tabs", icon='RESTRICT_VIEW_OFF')
+		#sub.prop(sce.paper_model, "display_tabs_size")
 		
 		layout.operator("export_mesh.paper_model")
 	
