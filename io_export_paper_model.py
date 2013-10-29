@@ -1243,7 +1243,7 @@ class SVG:
 					outer_width=self.style.outer_width, convex_width=self.style.convex_width, concave_width=self.style.concave_width,
 					sticker_width=self.style.sticker_width, outline=1.5*self.style.outer_width))
 				if page.image_path:
-					f.write("<image transform='matrix(1 0 0 1 0 0)' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x, self.page_size.y, page.image_path))
+					f.write("<image transform='matrix(1 0 0 1 {margin} {margin})' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x-2*self.margin, self.page_size.y-2*self.margin, page.image_path, margin=self.margin))
 				if len(page.islands) > 1:
 					f.write("<g>")
 				for island in page.islands:
