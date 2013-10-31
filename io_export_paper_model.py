@@ -141,15 +141,10 @@ def z_up_matrix(n):
 			(0,         0, 0)))
 
 def create_blank_image(image_name, dimensions, alpha=1):
-	"""BPy API doesn't allow to directly create a transparent image; this hack uses the New Image operator for it"""
+	"""Create a new image and assign white color to all its pixels"""
 	image_name = image_name[:20]
-	obstacle = bpy.data.images.get(image_name)
-	if obstacle:
-		obstacle.name = image_name[0:-1] #when we create the new image, we want it to have *exactly* the name we assign
-	bpy.ops.image.new(name=image_name, width=int(dimensions.x), height=int(dimensions.y), color=(1,1,1,alpha))
-	image = bpy.data.images.get(image_name) #this time it is our new image
-	if not image:
-		print ("papermodel ERROR: could not get image", image_name)
+	image = bpy.data.images.new(image_name, dimensions.x, dimensions.y, alpha=True)
+	image.pixels = [1,1,1,alpha] * int(dimensions.x*dimensions.y)
 	image.file_format = 'PNG'
 	return image
 
@@ -179,7 +174,6 @@ class Unfolder:
 			filepath=filepath[0:-4]
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # page size in meters
 		printable_size = page_size - 2*properties.output_margin*M.Vector((1, 1)) # printable area size in meters
-		print(page_size, printable_size)
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
@@ -197,8 +191,14 @@ class Unfolder:
 			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
 			if not tex:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
+			if tex.active_render:
+				tex.active = True
+				bpy.ops.mesh.uv_texture_remove()
+				raise UnfoldError("Texture bake error. Material of the object is referring to an undefined UV Map.")
 			rd = bpy.context.scene.render
 			recall_selected_to_active, rd.use_bake_selected_to_active = rd.use_bake_selected_to_active, properties.bake_selected_to_active
+			recall_margin, rd.bake_margin = rd.bake_margin, 0
+			recall_clear, rd.use_bake_clear = rd.use_bake_clear, False
 			if properties.image_packing == 'PAGE_LINK':
 				self.mesh.save_image(tex, filepath, printable_size * ppm)
 			elif properties.image_packing == 'ISLAND_LINK':
@@ -206,7 +206,9 @@ class Unfolder:
 			elif properties.image_packing == 'ISLAND_EMBED':
 				self.mesh.save_separate_images(tex, printable_size.y * ppm, do_embed=True)
 			#revoke settings
-			bpy.context.scene.render.use_bake_selected_to_active = recall_selected_to_active
+			rd.use_bake_selected_to_active = recall_selected_to_active
+			rd.bake_margin=recall_margin
+			rd.use_bake_clear=recall_clear
 			if not properties.do_create_uvmap:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
@@ -531,18 +533,10 @@ class Mesh:
 		return tex
 	
 	def save_image(self, tex, filename, page_size_pixels:M.Vector):
-		rd = bpy.context.scene.render
-		recall_margin, rd.bake_margin = rd.bake_margin, 0
-		recall_clear, rd.use_bake_clear = rd.use_bake_clear, False
-
-		tex.active = True
-		loop = self.data.uv_layers[self.data.uv_layers.active_index]
-		aspect_ratio = page_size_pixels.x / page_size_pixels.y
+		texfaces = tex.data
 		for page in self.pages:
-			#image=bpy.data.images.new(name="Unfolded "+self.data.name+" "+page.name, width=int(page_size.x), height=int(page_size.y))
 			image = create_blank_image("{} {} Unfolded".format(self.data.name[:14], page.name), page_size_pixels, alpha=1)
 			image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
-			texfaces=tex.data
 			for island in page.islands:
 				for uvface in island.faces:
 					texfaces[uvface.face.index].image=image
@@ -553,8 +547,6 @@ class Mesh:
 					texfaces[uvface.face.index].image=None
 			image.user_clear()
 			bpy.data.images.remove(image)
-		rd.bake_margin=recall_margin
-		rd.use_bake_clear=recall_clear
 	
 	def save_separate_images(self, tex, scale, filepath=None, do_embed=False):
 		if do_embed:
@@ -573,11 +565,8 @@ class Mesh:
 				raise UnfoldError("This method of image packing is not supported by your system.")
 			except OSError:
 				pass #imagedir already existed
-		rd=bpy.context.scene.render
-		recall_margin=rd.bake_margin; rd.bake_margin=0
-		recall_clear=rd.use_bake_clear; rd.use_bake_clear=False
 		
-		texfaces=tex.data
+		texfaces = tex.data
 		for i, island in enumerate(self.islands, 1):
 			image_name = "unfolder_temp_{}".format(id(island)%100) if do_embed else "{} isl{}".format(self.data.name[:15], i)
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
@@ -597,10 +586,6 @@ class Mesh:
 				remove(image_path)
 			else:
 				island.image_path = image_path
-				
-		
-		rd.bake_margin=recall_margin
-		rd.use_bake_clear=recall_clear
 
 class Vertex:
 	"""BPy Vertex wrapper"""
