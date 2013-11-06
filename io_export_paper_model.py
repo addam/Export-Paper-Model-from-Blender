@@ -33,7 +33,7 @@ bl_info = {
 	"author": "Addam Dominec",
 	"version": (0, 8),
 	"blender": (2, 6, 9),
-	"api": 60841,
+	"api": 60913,
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -144,6 +144,8 @@ def create_blank_image(image_name, dimensions, alpha=1):
 	"""Create a new image and assign white color to all its pixels"""
 	image_name = image_name[:20]
 	image = bpy.data.images.new(image_name, dimensions.x, dimensions.y, alpha=True)
+	if image.users > 0:
+		raise UnfoldError("There is something wrong with the material of the model. Please report this on the BlenderArtists forum. Export failed.")
 	image.pixels = [1,1,1,alpha] * int(dimensions.x*dimensions.y)
 	image.file_format = 'PNG'
 	return image
@@ -534,19 +536,26 @@ class Mesh:
 	
 	def save_image(self, tex, filename, page_size_pixels:M.Vector):
 		texfaces = tex.data
+		# omitting this causes a "Circular reference in texture stack" error
+		for island in self.islands:
+			for uvface in island.faces:
+				texfaces[uvface.face.index].image = None
+		
 		for page in self.pages:
 			image = create_blank_image("{} {} Unfolded".format(self.data.name[:14], page.name), page_size_pixels, alpha=1)
 			image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
 			for island in page.islands:
 				for uvface in island.faces:
 					texfaces[uvface.face.index].image=image
-			bpy.ops.object.bake_image()
-			image.save()
-			for island in page.islands:
-				for uvface in island.faces:
-					texfaces[uvface.face.index].image=None
-			image.user_clear()
-			bpy.data.images.remove(image)
+			try:
+				bpy.ops.object.bake_image()
+				image.save()
+			finally:
+				for island in page.islands:
+					for uvface in island.faces:
+						texfaces[uvface.face.index].image=None
+				image.user_clear()
+				bpy.data.images.remove(image)
 	
 	def save_separate_images(self, tex, scale, filepath=None, do_embed=False):
 		if do_embed:
@@ -567,18 +576,25 @@ class Mesh:
 				pass #imagedir already existed
 		
 		texfaces = tex.data
+		# omitting this causes a "Circular reference in texture stack" error
+		for island in self.islands:
+			for uvface in island.faces:
+				texfaces[uvface.face.index].image = None
+		
 		for i, island in enumerate(self.islands, 1):
 			image_name = "unfolder_temp_{}".format(id(island)%100) if do_embed else "{} isl{}".format(self.data.name[:15], i)
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
 			image.filepath_raw = image_path = "{}.png".format(image_name) if do_embed else "{}/island{}.png".format(imagedir, i)
 			for uvface in island.faces:
 				texfaces[uvface.face.index].image=image
-			bpy.ops.object.bake_image()
-			image.save()
-			for uvface in island.faces:
-				texfaces[uvface.face.index].image = None
-			image.user_clear()
-			bpy.data.images.remove(image)
+			try:
+				bpy.ops.object.bake_image()
+				image.save()
+			finally:
+				for uvface in island.faces:
+					texfaces[uvface.face.index].image = None
+				image.user_clear()
+				bpy.data.images.remove(image)
 			
 			if do_embed:
 				with open(image_path, 'rb') as imgf:
