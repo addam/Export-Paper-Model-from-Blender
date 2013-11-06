@@ -1445,7 +1445,7 @@ class ExportPaperModel(bpy.types.Operator):
 	output_margin = bpy.props.FloatProperty(name="Page Margin", description="Distance from page borders to the printable area", default=0.005, min=0, soft_max=0.1, subtype="UNSIGNED", unit="LENGTH")
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Resolution of images and lines in pixels per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
 	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
-	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=True)
+	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=False)
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
 	do_create_numbers = bpy.props.BoolProperty(name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size", description="Width of gluing tabs and their numbers", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
@@ -1483,7 +1483,6 @@ class ExportPaperModel(bpy.types.Operator):
 		return ratio * self.model_scale * sce.unit_settings.scale_length
 	def invoke(self, context, event):
 		sce=context.scene
-		self.bake_selected_to_active = sce.render.use_bake_selected_to_active
 		
 		self.object = context.active_object
 		self.unfolder = Unfolder(self.object)
