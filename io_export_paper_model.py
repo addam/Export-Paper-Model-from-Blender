@@ -1616,7 +1616,7 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		else:
 			box.label(text="Not unfolded")
 		sub = box.column(align=True)
-		sub.active = bool(mesh.paper_island_list)
+		sub.active = bool(mesh and mesh.paper_island_list)
 		sub.prop(sce.paper_model, "display_islands", icon='RESTRICT_VIEW_OFF')
 		row = sub.row()
 		row.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
