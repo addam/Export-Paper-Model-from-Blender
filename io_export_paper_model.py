@@ -1240,6 +1240,12 @@ class SVG:
 		format_color = lambda vec: "#{:02x}{:02x}{:02x}".format(round(vec[0]*255), round(vec[1]*255), round(vec[2])*255)
 		format_style = {'SOLID':"none", 'DOT':"0.2,4", 'DASH':"4,8", 'LONGDASH':"6,3", 'DASHDOT':"8,4,2,4"}
 		rows = "\n".join
+		
+		styleargs = {name: format_color(getattr(self.style, name)) for name in ("outer_color", "outbg_color", "convex_color", "concave_color", "inbg_color", "sticker_fill", "sticker_color", "text_color")}
+		styleargs.update({name: format_style[getattr(self.style, name)] for name in ("outer_style", "convex_style", "concave_style")})
+		styleargs.update({name: getattr(self.style, attr)[3] for name, attr in (("outer_alpha", "outer_color"), ("outbg_alpha", "outbg_color"), ("convex_alpha", "convex_color"), ("concave_alpha", "concave_color"), ("inbg_alpha", "inbg_color"), ("sticker_alpha", "sticker_fill"), ("text_alpha", "text_color"))})
+		styleargs.update({name: getattr(self.style, name) for name in ("outer_width", "convex_width", "concave_width", "sticker_width")})
+		styleargs.update({"outbg_width": self.style.outer_width*self.style.outbg_width, "convexbg_width": self.style.convex_width*self.style.inbg_width, "concavebg_width": self.style.concave_width*self.style.inbg_width})
 		for num, page in enumerate(mesh.pages):
 			with open(filename+"_"+page.name+".svg", 'w') as f:
 				f.write("<?xml version='1.0' encoding='UTF-8' standalone='no'?>\n")
@@ -1249,20 +1255,15 @@ class SVG:
 					path.outer {{stroke:{outer_color}; stroke-dasharray:{outer_style}; stroke-dashoffset:0; stroke-width:{outer_width:.2}px; stroke-opacity: {outer_alpha:.2}}}
 					path.convex {{stroke:{convex_color}; stroke-dasharray:{convex_style}; stroke-dashoffset:0; stroke-width:{convex_width:.2}px; stroke-opacity: {convex_alpha:.2}}}
 					path.concave {{stroke:{concave_color}; stroke-dasharray:{concave_style}; stroke-dashoffset:0; stroke-width:{concave_width:.2}px; stroke-opacity: {concave_alpha:.2}}}
-					path.background {{stroke:#fff}}
-					path.outer_background {{stroke:#fff; stroke-width:{outline:.2}px}}
+					path.outer_background {{stroke:{outbg_color}; stroke-opacity:{outbg_alpha}; stroke-width:{outbg_width:.2}px}}
+					path.convex_background {{stroke:{inbg_color}; stroke-opacity:{inbg_alpha}; stroke-width:{convexbg_width:.2}px}}
+					path.concave_background {{stroke:{inbg_color}; stroke-opacity:{inbg_alpha}; stroke-width:{concavebg_width:.2}px}}
 					path.sticker {{fill: {sticker_fill}; stroke: {sticker_color}; fill-opacity: {sticker_alpha:.2}; stroke-width:{sticker_width:.2}; stroke-opacity: 1}}
 					path.arrow {{fill: #000;}}
 					text {{font-size: 12px; font-style: normal; fill: {text_color}; fill-opacity: {text_alpha:.2}; stroke: none;}}
 					text.scaled {{font-size: 1px;}}
 					tspan {{text-anchor:middle;}}
-				</style>""".format(outer_color=format_color(self.style.outer_color), outer_alpha=self.style.outer_color[3], outer_style=format_style[self.style.outer_style],
-					convex_color=format_color(self.style.convex_color), convex_alpha=self.style.convex_color[3], convex_style=format_style[self.style.convex_style],
-					concave_color=format_color(self.style.concave_color), concave_alpha=self.style.concave_color[3], concave_style=format_style[self.style.concave_style],
-					sticker_fill=format_color(self.style.sticker_fill), sticker_color=format_color(self.style.sticker_color), sticker_alpha=self.style.sticker_fill[3],
-					text_color=format_color(self.style.text_color), text_alpha=self.style.text_color[3],
-					outer_width=self.style.outer_width, convex_width=self.style.convex_width, concave_width=self.style.concave_width,
-					sticker_width=self.style.sticker_width, outline=1.5*self.style.outer_width))
+				</style>""".format(**styleargs))
 				if page.image_path:
 					f.write("<image transform='matrix(1 0 0 1 {margin} {margin})' width='{}' height='{}' xlink:href='file://{}'/>\n".format(self.page_size.x-2*self.margin, self.page_size.y-2*self.margin, page.image_path, margin=self.margin))
 				if len(page.islands) > 1:
@@ -1294,14 +1295,19 @@ class SVG:
 									data_concave.append(data_uvedge)
 						else:
 							data_outer.append(data_uvedge)
+
+					if data_convex:
+						if not self.pure_net and self.style.use_inbg:
+							f.write("<path class='convex_background' d='" + rows(data_convex) + "'/>")
+						f.write("<path class='convex' d='" + rows(data_convex) + "'/>")
+					if data_concave:
+						if not self.pure_net and self.style.use_inbg:
+							f.write("<path class='concave_background' d='" + rows(data_concave) + "'/>")
+						f.write("<path class='concave' d='" + rows(data_concave) + "'/>")
 					if data_outer:
-						if not self.pure_net:
+						if not self.pure_net and self.style.use_outbg:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
 						f.write("<path class='outer' d='" + rows(data_outer) + "'/>")
-					if not self.pure_net and (data_convex or data_concave):
-						f.write("<path class='background' d='" + rows(data_convex + data_concave) + "'/>")
-					if data_convex: f.write("<path class='convex' d='" + rows(data_convex) + "'/>")
-					if data_concave: f.write("<path class='concave' d='" + rows(data_concave) + "'/>")
 					
 					if island.label:
 						island_label = "^Island: {}^".format(island.label) if island.bounding_box.x*self.scale > 80 else island.label # just a guess of the text width
@@ -1434,12 +1440,20 @@ class PaperModelStyle(bpy.types.PropertyGroup):
 	outer_color = bpy.props.FloatVectorProperty(name="Outer Lines", description="Color of net outline", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
 	outer_style = bpy.props.EnumProperty(name="Outer Lines Drawing Style", description="Drawing style of net outline", default='SOLID', items=line_styles)
 	outer_width = bpy.props.FloatProperty(name="Outer Lines Thickness", description="Thickness of net outline, in pixels", default=1.5, min=0, soft_max=10, precision=1)
+	use_outbg = bpy.props.BoolProperty(name="Highlight Outer Lines", description="Add another line below every line to improve contrast", default=True)
+	outbg_color = bpy.props.FloatVectorProperty(name="Outer Highlight", description="Color of the highlight for outer lines", default=(1.0, 1.0, 1.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+	outbg_width = bpy.props.FloatProperty(name="Outer Highlight Scale", description="Thickness of the highlighting lines as a multiple of the outer line", default=1.5, min=1, soft_max=3, subtype='FACTOR')
+	
 	convex_color = bpy.props.FloatVectorProperty(name="Inner Convex Lines", description="Color of lines to be folded to a convex angle", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
 	convex_style = bpy.props.EnumProperty(name="Convex Lines Drawing Style", description="Drawing style of lines to be folded to a convex angle", default='DASH', items=line_styles)
 	convex_width = bpy.props.FloatProperty(name="Convex Lines Thickness", description="Thickness of concave lines, in pixels", default=1, min=0, soft_max=10, precision=1)
 	concave_color = bpy.props.FloatVectorProperty(name="Inner Concave Lines", description="Color of lines to be folded to a concave angle", default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
 	concave_style = bpy.props.EnumProperty(name="Concave Lines Drawing Style", description="Drawing style of lines to be folded to a concave angle", default='DASHDOT', items=line_styles)
 	concave_width = bpy.props.FloatProperty(name="Concave Lines Thickness", description="Thickness of concave lines, in pixels", default=1, min=0, soft_max=10, precision=1)
+	use_inbg = bpy.props.BoolProperty(name="Highlight Inner Lines", description="Add another line below every line to improve contrast", default=True)
+	inbg_color = bpy.props.FloatVectorProperty(name="Inner Highlight", description="Color of the highlight for inner lines", default=(1.0, 1.0, 1.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+	inbg_width = bpy.props.FloatProperty(name="Inner Highlight Scale", description="Thickness of the highlighting lines as a multiple of the inner line", default=1, min=1, soft_max=3, subtype='FACTOR')
+	
 	sticker_fill = bpy.props.FloatVectorProperty(name="Tabs Fill", description="Fill color of sticking tabs", default=(1.0, 1.0, 1.0, 0.4), min=0, max=1, subtype='COLOR', size=4)
 	sticker_color = bpy.props.FloatVectorProperty(name="Tabs Outline", description="Outline color of sticking tabs", default=(0.0, 0.0, 0.0), min=0, max=1, subtype='COLOR', size=3)
 	sticker_width = bpy.props.FloatProperty(name="Tabs Outline Thickness", description="Thickness of tabs outer line, in pixels", default=1, min=0, soft_max=10, precision=1)
@@ -1553,8 +1567,8 @@ class ExportPaperModel(bpy.types.Operator):
 			col.active = self.output_type != 'NONE'
 			if len(self.object.data.uv_textures) == 8:
 				col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
-			elif context.scene.render.engine != 'BLENDER_INTERNAL' and self.output_type != 'NONE':
-				col.label(text="Blender Internal engine will be used for rendering.", icon='ERROR')
+			elif context.scene.render.engine != 'BLENDER_RENDER' and self.output_type != 'NONE':
+				col.label(text="Blender Internal engine will be used for texture baking.", icon='ERROR')
 			col.prop(self.properties, "image_packing", text="Images")
 		
 		box = layout.box()
@@ -1572,9 +1586,23 @@ class ExportPaperModel(bpy.types.Operator):
 			col.prop(self.style, "convex_width", text="Width (pixels)")
 			col.prop(self.style, "convex_style", text="Style")
 			col = box.column()
+			col.active = self.output_type != 'NONE'
+			col.prop(self.style, "use_outbg", text="Outer Lines Highlight:")
+			sub = col.column()
+			sub.active = self.output_type != 'NONE' and self.style.use_outbg
+			sub.prop(self.style, "outbg_color", text="")
+			sub.prop(self.style, "outbg_width", text="Relative width")
+			col = box.column()
 			col.prop(self.style, "concave_color")
 			col.prop(self.style, "concave_width", text="Width (pixels)")
 			col.prop(self.style, "concave_style", text="Style")
+			col = box.column()
+			col.active = self.output_type != 'NONE'
+			col.prop(self.style, "use_inbg", text="Inner Lines Highlight:")
+			sub = col.column()
+			sub.active = self.output_type != 'NONE' and self.style.use_inbg
+			sub.prop(self.style, "inbg_color", text="")
+			sub.prop(self.style, "inbg_width", text="Relative width")
 			col = box.column()
 			col.active = self.do_create_stickers
 			col.prop(self.style, "sticker_fill")
