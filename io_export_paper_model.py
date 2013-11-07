@@ -200,7 +200,7 @@ class Unfolder:
 			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
 			if not tex:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete an UV Map or export pure net only.")
-			if tex.active_render:
+			if properties.output_type == 'TEXTURE' and tex.active_render:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
 				raise UnfoldError("Texture bake error. Material of the object is referring to an undefined UV Map.")
@@ -1552,7 +1552,9 @@ class ExportPaperModel(bpy.types.Operator):
 			col = box.column()
 			col.active = self.output_type != 'NONE'
 			if len(self.object.data.uv_textures) == 8:
-				col.label(text="No UV slots left, No Texture is the only option.", icon="ERROR")
+				col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
+			elif context.scene.render.engine != 'BLENDER_INTERNAL' and self.output_type != 'NONE':
+				col.label(text="Blender Internal engine will be used for rendering.", icon='ERROR')
 			col.prop(self.properties, "image_packing", text="Images")
 		
 		box = layout.box()
