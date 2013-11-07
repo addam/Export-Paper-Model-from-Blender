@@ -231,6 +231,8 @@ class Unfolder:
 			if properties.output_type == 'TEXTURE':
 				for slot, material in zip(self.ob.material_slots, recall_materials):
 					slot.material = material
+				mat.user_clear()
+				bpy.data.materials.remove(mat)
 			if not properties.do_create_uvmap:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
