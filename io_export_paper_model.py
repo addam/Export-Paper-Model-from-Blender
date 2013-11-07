@@ -150,6 +150,13 @@ def create_blank_image(image_name, dimensions, alpha=1):
 	image.file_format = 'PNG'
 	return image
 
+def create_texface_material(name):
+	"""Create a new material for baking the Face Texture"""
+	mat = bpy.data.materials.new(name)
+	mat.use_shadeless = True
+	mat.use_face_texture = True
+	return mat
+
 class UnfoldError(ValueError):
 	pass
 
@@ -188,7 +195,7 @@ class Unfolder:
 		text_height = 12/(printable_size.y*ppm) if properties.do_create_numbers else 0
 		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, space_at_bottom=text_height) # Scale everything so that page height is 1
 		self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)
-		if not properties.output_pure:
+		if properties.output_type != 'NONE':
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
 			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
 			if not tex:
@@ -198,9 +205,21 @@ class Unfolder:
 				bpy.ops.mesh.uv_texture_remove()
 				raise UnfoldError("Texture bake error. Material of the object is referring to an undefined UV Map.")
 			rd = bpy.context.scene.render
-			recall_selected_to_active, rd.use_bake_selected_to_active = rd.use_bake_selected_to_active, properties.bake_selected_to_active
-			recall_margin, rd.bake_margin = rd.bake_margin, 0
-			recall_clear, rd.use_bake_clear = rd.use_bake_clear, False
+			recall = rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
+			if properties.output_type == 'RENDER':
+				rd.bake_type = 'FULL'
+				rd.use_bake_selected_to_active = False
+			elif properties.output_type == 'TEXTURE':
+				rd.bake_type = 'TEXTURE'
+				rd.use_bake_selected_to_active = False
+				recall_materials = [slot.material for slot in self.ob.material_slots]
+				mat = create_texface_material("unfolder_temp")
+				for slot in self.ob.material_slots:
+					slot.material = mat
+			elif properties.output_type == 'SELECTED_TO_ACTIVE':
+				rd.bake_type = 'FULL'
+				rd.use_bake_selected_to_active = True
+			rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear,  = 0, 0, 0.001, False, False
 			if properties.image_packing == 'PAGE_LINK':
 				self.mesh.save_image(tex, filepath, printable_size * ppm)
 			elif properties.image_packing == 'ISLAND_LINK':
@@ -208,13 +227,14 @@ class Unfolder:
 			elif properties.image_packing == 'ISLAND_EMBED':
 				self.mesh.save_separate_images(tex, printable_size.y * ppm, do_embed=True)
 			#revoke settings
-			rd.use_bake_selected_to_active = recall_selected_to_active
-			rd.bake_margin=recall_margin
-			rd.use_bake_clear=recall_clear
+			rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
+			if properties.output_type == 'TEXTURE':
+				for slot, material in zip(self.ob.material_slots, recall_materials):
+					slot.material = material
 			if not properties.do_create_uvmap:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
-		svg = SVG(page_size * ppm, printable_size.y*ppm, properties.style, properties.output_pure)
+		svg = SVG(page_size * ppm, printable_size.y*ppm, properties.style, properties.output_type=='NONE')
 		svg.do_create_stickers = properties.do_create_stickers
 		svg.margin = properties.output_margin*ppm
 		svg.write(self.mesh, filepath)
@@ -1444,8 +1464,11 @@ class ExportPaperModel(bpy.types.Operator):
 	output_size_y = bpy.props.FloatProperty(name="Page Height", description="Height of the exported document", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
 	output_margin = bpy.props.FloatProperty(name="Page Margin", description="Distance from page borders to the printable area", default=0.005, min=0, soft_max=0.1, subtype="UNSIGNED", unit="LENGTH")
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI", description="Resolution of images and lines in pixels per inch", default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
-	output_pure = bpy.props.BoolProperty(name="Pure Net", description="Do not bake the bitmap", default=True)
-	bake_selected_to_active = bpy.props.BoolProperty(name="Selected to Active", description="Bake selected to active (if not exporting pure net)", default=False)
+	output_type = bpy.props.EnumProperty(name="Textures", description="Source of a texture for the model", default='NONE', items=[
+			('NONE', "No Texture", "Export the net only"),
+			('TEXTURE', "Face Texture", "Export the active texture as it is in the 3D View"),
+			('RENDER', "Full Render", "Render the material of the model, including all illumination"),
+			('SELECTED_TO_ACTIVE', "Selected to Active", "Use the selected surrounding objects as a texture")])
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs", description="Create gluing tabs around the net (useful for paper)", default=True)
 	do_create_numbers = bpy.props.BoolProperty(name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together", default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size", description="Width of gluing tabs and their numbers", default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
@@ -1525,12 +1548,11 @@ class ExportPaperModel(bpy.types.Operator):
 			col.active = self.do_create_stickers or self.do_create_numbers
 			col.prop(self.properties, "sticker_width")
 			
-			box.prop(self.properties, "output_pure")
+			box.prop(self.properties, "output_type")
 			col = box.column()
+			col.active = self.output_type != 'NONE'
 			if len(self.object.data.uv_textures) == 8:
-				col.label(text="No UV slots left, pure net is the only option.", icon="ERROR")
-			col.active = not self.output_pure
-			col.prop(self.properties, "bake_selected_to_active", text="Bake Selected to Active")
+				col.label(text="No UV slots left, No Texture is the only option.", icon="ERROR")
 			col.prop(self.properties, "image_packing", text="Images")
 		
 		box = layout.box()
