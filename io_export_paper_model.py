@@ -157,6 +157,14 @@ def create_texface_material(name):
 	mat.use_face_texture = True
 	return mat
 
+def tempfile_name(suffix, exists):
+	"""Generate a nonexistant filename"""
+	for mod in (10, 100, 1000, 10000):
+		name = str(id(tempfile_name) % mod + 1) + suffix
+		if not exists(name):
+			return name
+	raise UnfoldError("Could not save a temporary file. Export failed.")
+
 class UnfoldError(ValueError):
 	pass
 
@@ -584,6 +592,7 @@ class Mesh:
 			try:
 				from base64 import encodebytes as b64encode
 				from os import remove
+				from os.path import lexists
 			except ImportError:
 				raise UnfoldError("Embedding images is not supported on your system")
 		else:
@@ -604,9 +613,9 @@ class Mesh:
 				texfaces[uvface.face.index].image = None
 		
 		for i, island in enumerate(self.islands, 1):
-			image_name = "unfolder_temp_{}".format(id(island)%100) if do_embed else "{} isl{}".format(self.data.name[:15], i)
+			image_name = tempfile_name(".temp.png", lexists) if do_embed else "{} isl{}".format(self.data.name[:15], i)
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-			image.filepath_raw = image_path = "{}.png".format(image_name) if do_embed else "{}/island{}.png".format(imagedir, i)
+			image.filepath_raw = image_path = image_name if do_embed else "{}/island{}.png".format(imagedir, i)
 			for uvface in island.faces:
 				texfaces[uvface.face.index].image=image
 			try:
