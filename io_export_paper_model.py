@@ -157,11 +157,11 @@ def create_texface_material(name):
 	mat.use_face_texture = True
 	return mat
 
-def tempfile_name(suffix, exists):
+def tempfile_name(directory, suffix, exists):
 	"""Generate a nonexistant filename"""
 	for mod in (10, 100, 1000, 10000):
 		name = str(id(tempfile_name) % mod + 1) + suffix
-		if not exists(name):
+		if not exists("{}/{}".format(directory, name)):
 			return name
 	raise UnfoldError("Could not save a temporary file. Export failed.")
 
@@ -229,11 +229,11 @@ class Unfolder:
 				rd.use_bake_selected_to_active = True
 			rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear,  = 0, 0, 0.001, False, False
 			if properties.image_packing == 'PAGE_LINK':
-				self.mesh.save_image(tex, filepath, printable_size * ppm)
+				self.mesh.save_image(tex, printable_size * ppm, filepath)
 			elif properties.image_packing == 'ISLAND_LINK':
 				self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath)
 			elif properties.image_packing == 'ISLAND_EMBED':
-				self.mesh.save_separate_images(tex, printable_size.y * ppm, do_embed=True)
+				self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath, do_embed=True)
 			#revoke settings
 			rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
 			if properties.output_type == 'TEXTURE':
@@ -564,7 +564,7 @@ class Mesh:
 				island.save_uv(loop, aspect_ratio)
 		return tex
 	
-	def save_image(self, tex, filename, page_size_pixels:M.Vector):
+	def save_image(self, tex, page_size_pixels:M.Vector, filename):
 		texfaces = tex.data
 		# omitting this causes a "Circular reference in texture stack" error
 		for island in self.islands:
@@ -587,24 +587,25 @@ class Mesh:
 				image.user_clear()
 				bpy.data.images.remove(image)
 	
-	def save_separate_images(self, tex, scale, filepath=None, do_embed=False):
+	def save_separate_images(self, tex, scale, filepath, do_embed=False):
 		if do_embed:
 			try:
 				from base64 import encodebytes as b64encode
 				from os import remove
-				from os.path import lexists
+				from os.path import dirname, lexists
 			except ImportError:
 				raise UnfoldError("Embedding images is not supported on your system")
+			image_dir = dirname(filepath)
 		else:
 			try:
 				from os import mkdir
 				from os.path import dirname, basename
-				imagedir = "{path}/{directory}".format(path=dirname(filepath), directory = basename(filepath))
-				mkdir(imagedir)
+				image_dir = "{path}/{directory}".format(path=dirname(filepath), directory=basename(filepath))
+				mkdir(image_dir)
 			except ImportError:
 				raise UnfoldError("This method of image packing is not supported by your system.")
 			except OSError:
-				pass #imagedir already existed
+				pass #image_dir already existed
 		
 		texfaces = tex.data
 		# omitting this causes a "Circular reference in texture stack" error
@@ -613,9 +614,9 @@ class Mesh:
 				texfaces[uvface.face.index].image = None
 		
 		for i, island in enumerate(self.islands, 1):
-			image_name = tempfile_name(".temp.png", lexists) if do_embed else "{} isl{}".format(self.data.name[:15], i)
+			image_name = tempfile_name(image_dir, ".temp.png", lexists) if do_embed else "{} isl{}".format(self.data.name[:15], i)
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-			image.filepath_raw = image_path = image_name if do_embed else "{}/island{}.png".format(imagedir, i)
+			image.filepath_raw = image_path = "{}/{}".format(image_dir, image_name) if do_embed else "{}/island{}.png".format(image_dir, i)
 			for uvface in island.faces:
 				texfaces[uvface.face.index].image=image
 			try:
