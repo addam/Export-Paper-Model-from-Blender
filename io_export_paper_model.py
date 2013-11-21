@@ -32,7 +32,7 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 8),
-	"blender": (2, 6, 9),
+	"blender": (2, 69, 0),
 	"api": 60913,
 	"location": "File > Export > Paper Model",
 	"warning": "",
@@ -60,10 +60,10 @@ try:
 except ImportError:
 	blist = list
 
-priority_effect={
-	'convex':0.5,
-	'concave':1,
-	'length':-0.05}
+default_priority_effect={
+	'CONVEX': 0.5,
+	'CONCAVE': 1,
+	'LENGTH': -0.05}
 
 strf="{:.3f}".format
 
@@ -174,9 +174,9 @@ class Unfolder:
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 		self.tex = None
 
-	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False):
+	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect):
 		"""Something that should be part of the constructor - TODO """
-		self.mesh.generate_cuts(page_size)
+		self.mesh.generate_cuts(page_size, priority_effect)
 		self.mesh.finalize_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
@@ -276,7 +276,7 @@ class Mesh:
 			if edge.main_faces:
 				edge.calculate_angle()
 	
-	def generate_cuts(self, page_size):
+	def generate_cuts(self, page_size, priority_effect):
 		"""Cut the mesh so that it will be unfoldable."""
 		
 		twisted_faces = [face for face in self.faces.values() if face.is_twisted()]
@@ -290,7 +290,7 @@ class Mesh:
 		if edges:
 			average_length = sum(edge.length for edge in edges) / len(edges)
 			for edge in edges:
-				edge.generate_priority(average_length)
+				edge.generate_priority(priority_effect, average_length)
 			edges.sort(key = lambda edge:edge.priority, reverse=False)
 			for edge in edges:
 				if edge.length == 0:
@@ -711,15 +711,14 @@ class Edge:
 			self.angle = face_a.normal.angle(-face_b.normal) # normals are flipped, so we know nothing
 			# but let us be optimistic and treat the angle as convex :)
 
-	def generate_priority(self, average_length=1):
+	def generate_priority(self, priority_effect, average_length):
 		"""Calculate initial priority value."""
 		angle = self.angle
 		if angle > 0:
-			self.priority = (angle/pi)*priority_effect['convex']
+			self.priority = (angle/pi) * priority_effect['CONVEX']
 		else:
-			self.priority = -(angle/pi)*priority_effect['concave']
-		length_effect = (self.length/average_length) * priority_effect['length']
-		self.priority += length_effect
+			self.priority = -(angle/pi) * priority_effect['CONCAVE']
+		self.priority += (self.length/average_length) * priority_effect['LENGTH']
 	
 	def is_cut(self, face=None):
 		"""Optional argument 'face' defines who is asking (useful for edges with more than two faces connected)"""
@@ -1372,9 +1371,9 @@ class MakeUnfoldable(bpy.types.Operator):
 	bl_description = "Mark seams so that the mesh can be exported as a paper model"
 	bl_options = {'REGISTER', 'UNDO'}
 	edit = bpy.props.BoolProperty(name="", description="", default=False, options={'HIDDEN'})
-	priority_effect_convex = bpy.props.FloatProperty(name="Priority Convex", description="Priority effect for edges in convex angles", default=priority_effect["convex"], soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_concave = bpy.props.FloatProperty(name="Priority Concave", description="Priority effect for edges in concave angles", default=priority_effect["concave"], soft_min=-1, soft_max=10, subtype='FACTOR')
-	priority_effect_length = bpy.props.FloatProperty(name="Priority Length", description="Priority effect of edge length", default=priority_effect["length"], soft_min=-10, soft_max=1, subtype='FACTOR')
+	priority_effect_convex = bpy.props.FloatProperty(name="Priority Convex", description="Priority effect for edges in convex angles", default=default_priority_effect['CONVEX'], soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_concave = bpy.props.FloatProperty(name="Priority Concave", description="Priority effect for edges in concave angles", default=default_priority_effect['CONCAVE'], soft_min=-1, soft_max=10, subtype='FACTOR')
+	priority_effect_length = bpy.props.FloatProperty(name="Priority Length", description="Priority effect of edge length", default=default_priority_effect['LENGTH'], soft_min=-10, soft_max=1, subtype='FACTOR')
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
 	unfolder = None
 	
@@ -1395,18 +1394,15 @@ class MakeUnfoldable(bpy.types.Operator):
 		layout.prop(self.properties, "priority_effect_length", text="Edge Length")
 	
 	def execute(self, context):
-		global priority_effect
 		sce = bpy.context.scene
-		priority_effect['convex']=self.priority_effect_convex
-		priority_effect['concave']=self.priority_effect_concave
-		priority_effect['length']=self.priority_effect_length
 		recall_mode = context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
 		recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 		
 		page_size = M.Vector((0.210, 0.297)) if sce.paper_model.limit_by_page else None
+		priority_effect = {'CONVEX': self.priority_effect_convex, 'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
 		self.unfolder = unfolder = Unfolder(context.active_object)
-		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap)
+		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap, priority_effect=priority_effect)
 
 		mesh = context.active_object.data
 		island_list = mesh.paper_island_list
