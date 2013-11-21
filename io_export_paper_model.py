@@ -20,7 +20,6 @@
 #### TODO:
 # change UI 'Model Scale' to be a divisor, not a coefficient
 # split islands bigger than selected page size
-# UI elements to set line thickness and page size conveniently
 # sanitize the constructors so that they don't edit their parent object
 # apply island rotation and position before exporting, to simplify things
 # s/verts/vertices/g
@@ -28,12 +27,16 @@
 # maybe Island would do with a list of points as well, set of vertices makes things more complicated
 # why does UVVertex copy its position in constructor?
 
+# check conflicts in island naming and either:
+#  * append a number to the conflicting names or
+#  * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
+
+
 bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
-	"version": (0, 8),
-	"blender": (2, 69, 0),
-	"api": 60913,
+	"version": (0, 9),
+	"blender": (2, 66, 0),
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -175,13 +178,23 @@ class Unfolder:
 		self.tex = None
 
 	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect):
-		"""Something that should be part of the constructor - TODO """
+		"""Create the islands of the net"""
 		self.mesh.generate_cuts(page_size, priority_effect)
 		self.mesh.finalize_islands()
+		self.mesh.enumerate_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
 		if mark_seams:
 			self.mesh.mark_cuts()
+	
+	def copy_island_names(self, island_list):
+		"""Copy island label and abbreviation from the best matching island in the list"""
+		orig_list = {(frozenset(face.id for face in item.faces), item.label, item.abbreviation) for item in island_list}
+		for island in self.mesh.islands:
+			islfaces = {uvface.face.index for uvface in island.faces}
+			match = max(orig_list, key=lambda item: islfaces.intersection(item[0]))
+			island.label = match[1]
+			island.abbreviation = match[2]
 
 	def save(self, properties):
 		"""Export the document."""
@@ -283,7 +296,8 @@ class Mesh:
 		if twisted_faces:
 			print ("There are {} twisted face(s) with ids: {}".format(len(twisted_faces), ", ".join(str(face.index) for face in twisted_faces)))
 		
-		self.islands = {Island(face) for face in self.faces.values()}
+		# warning: this constructor modifies its parameter (face)
+		islands = {Island(face) for face in self.faces.values()}
 		# check for edges that are cut permanently
 		edges = [edge for edge in self.edges.values() if not edge.force_cut and len(edge.faces) > 1]
 		
@@ -301,8 +315,10 @@ class Mesh:
 					island_a, island_b = island_b, island_a
 				if island_a is not island_b:
 					if island_a.join(island_b, edge, size_limit=page_size):
-						self.islands.remove(island_b)
-			
+						islands.remove(island_b)
+		
+		self.islands = sorted(islands, key=lambda island: len(island.faces), reverse=True)
+		
 		for edge in self.edges.values():
 			# some edges did not know until now whether their angle is convex or concave
 			if edge.main_faces and edge.main_faces[0].uvface.flipped != edge.main_faces[1].uvface.flipped:
@@ -790,6 +806,9 @@ class Island:
 		self.image_path = None
 		self.embedded_image = None
 		
+		self.label = None
+		self.abbreviation = None
+		
 		if face:
 			self.add(UVFace(face, self))
 		
@@ -1022,10 +1041,10 @@ class Island:
 				point *= scale
 	
 	def generate_label(self, label=None, abbreviation=None):
-		abbr = abbreviation or str(self.number)
+		abbr = abbreviation or self.abbreviation or str(self.number)
 		if not set('69NZMWpbqd').isdisjoint(abbr) and set('6890oOxXNZMWIlpbqd').issuperset(abbr):
 			abbr += "."
-		self.label = label or ("{}:Island {}".format(abbreviation, self.number) if abbreviation else "Island: {}".format(self.number))
+		self.label = label or self.label or "Island {}".format(self.number)
 		self.abbreviation = abbr
 	
 	def save_uv(self, tex, aspect_ratio=1):
@@ -1130,7 +1149,6 @@ class UVEdge:
 		return "({} - {})".format(self.va, self.vb)
 	def __repr__(self):
 		return str(self)
-		
 
 class UVFace:
 	"""Face in 2D"""
@@ -1321,7 +1339,7 @@ class SVG:
 						f.write("<path class='outer' d='" + rows(data_outer) + "'/>")
 					
 					if island.label:
-						island_label = "^Island: {}^".format(island.label) if island.bounding_box.x*self.scale > 80 else island.label # just a guess of the text width
+						island_label = "[{}] {}".format(island.abbreviation, island.label)
 						f.write("<text transform='translate({x} {y})'><tspan>{label}</tspan></text>".format(
 							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x) + self.margin, y=self.scale * (1 - island.pos.y) + self.margin,
 							label=island_label))
@@ -1399,23 +1417,31 @@ class MakeUnfoldable(bpy.types.Operator):
 		bpy.ops.object.mode_set(mode='OBJECT')
 		recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 		
+		ob = context.active_object
+		mesh = context.active_object.data
+		
 		page_size = M.Vector((0.210, 0.297)) if sce.paper_model.limit_by_page else None
 		priority_effect = {'CONVEX': self.priority_effect_convex, 'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
-		self.unfolder = unfolder = Unfolder(context.active_object)
+		self.unfolder = unfolder = Unfolder(ob)
 		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap, priority_effect=priority_effect)
+		if mesh.paper_island_list:
+			self.unfolder.copy_island_names(mesh.paper_island_list)
 
-		mesh = context.active_object.data
 		island_list = mesh.paper_island_list
 		island_list.clear() #remove previously defined islands
 		for island in unfolder.mesh.islands:
 			#add islands to UI list and set default descriptions
 			list_item = island_list.add()
-			list_item.name = "{} ({} faces)".format(island.label, len(island.faces))
-			list_item.island = island
+			
 			#add faces' IDs to the island
 			for uvface in island.faces:
 				lface = list_item.faces.add()
 				lface.id = uvface.face.index
+			
+			# name must be set afterwards because it invokes an update callback
+			list_item.abbreviation = island.abbreviation
+			list_item.label = island.label
+			#list_item.name = "{} ({} faces)".format(island.label, len(island.faces))
 		mesh.paper_island_index = -1
 
 		unfolder.mesh.data.show_edge_seams = True
@@ -1513,6 +1539,8 @@ class ExportPaperModel(bpy.types.Operator):
 	
 	def execute(self, context):
 		try:
+			if self.object.data.paper_island_list:
+				self.unfolder.copy_island_names(self.object.data.paper_island_list)
 			self.unfolder.save(self.properties)
 			self.report({'INFO'}, "Saved {}-page document".format(len(self.unfolder.mesh.pages)))
 			return {'FINISHED'}
@@ -1642,14 +1670,16 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		layout.operator("mesh.make_unfoldable")
 		box = layout.box()
 		if mesh and mesh.paper_island_list:
-			box.label(text="{} island(s):".format(len(mesh.paper_island_list)))
+			box.label(text="1 island:" if len(mesh.paper_island_list) == 1 else "{} islands:".format(len(mesh.paper_island_list)))
 			box.template_list('UI_UL_list', 'paper_model_island_list', mesh, 'paper_island_list', mesh, 'paper_island_index', rows=1, maxrows=5)
 			# The first one is the identifier of the registered UIList to use (if you want only the default list,
 			# with no custom draw code, use "UI_UL_list").
 			# layout.template_list("MATERIAL_UL_matslots_example", "", obj, "material_slots", obj, "active_material_index")
 			if mesh.paper_island_index >= 0:
 				list_item = mesh.paper_island_list[mesh.paper_island_index]
-				box.prop(list_item, "label")
+				sub = box.column(align=True)
+				sub.prop(list_item, "label")
+				sub.prop(list_item, "abbreviation")
 			#layout.prop(sce.paper_model, "display_labels", icon='RESTRICT_VIEW_OFF')
 		else:
 			box.label(text="Not unfolded")
@@ -1713,12 +1743,13 @@ def display_islands_changed(self, context):
 			display_islands.handle = None
 
 def label_changed(self, context):
-	if len(self.abbreviation > 3):
+	if len(self.abbreviation) > 3:
 		self.abbreviation = self.abbreviation[:3]
-	self.island.generate_label(self.label, self.abbreviation)
-	self.label = self.island.label
-	self.abbreviation = self.island.abbreviation
-	self.name = "{} ({} faces)".format(self.label, len(self.faces))
+	# wtf? I don't remember the point of this code anymore. Candidate for removal.
+	#self.island.generate_label(self.label, self.abbreviation)
+	#self.label = self.island.label
+	#self.abbreviation = self.island.abbreviation
+	self.name = "[{}] {} ({} {})".format(self.abbreviation, self.label, len(self.faces), "faces" if len(self.faces) > 1 else "face")
 
 class FaceList(bpy.types.PropertyGroup):
 	id = bpy.props.IntProperty(name="Face ID")
@@ -1800,9 +1831,9 @@ def display_tabs_changed(self, context):
 			display_tabs.handle = None
 	
 class PaperModelSettings(bpy.types.PropertyGroup):
-	display_islands = bpy.props.BoolProperty(name="Highlight selected island", update=display_islands_changed)
+	display_islands = bpy.props.BoolProperty(name="Highlight selected island", options={'SKIP_SAVE'}, update=display_islands_changed)
 	islands_alpha = bpy.props.FloatProperty(name="Opacity", description="Opacity of island highlighting", min=0.0, max=1.0, default=0.3)
-	display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", update=display_tabs_changed)
+	display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", options={'SKIP_SAVE'}, update=display_tabs_changed)
 	display_tabs_size = bpy.props.FloatProperty(name="Tab Size", description="Size of the sticker tabs in the 3D View", min=0.0, soft_max=0.2, default=0.05, unit='LENGTH')
 	limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
 	output_size_x = bpy.props.FloatProperty(name="Page Width", description="Maximal width of an island", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
@@ -1813,9 +1844,9 @@ bpy.utils.register_class(PaperModelSettings)
 def register():
 	bpy.utils.register_module(__name__)
 
-	bpy.types.Scene.paper_model = bpy.props.PointerProperty(type=PaperModelSettings, name="Paper Model", description="Settings of the Export Paper Model script")
+	bpy.types.Scene.paper_model = bpy.props.PointerProperty(type=PaperModelSettings, name="Paper Model", description="Settings of the Export Paper Model script", options={'SKIP_SAVE'})
 	bpy.types.Mesh.paper_island_list = bpy.props.CollectionProperty(type=IslandList, name= "Island List", description= "")
-	bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100)
+	bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(name="Island List Index", default= -1, min= -1, max= 100, options={'SKIP_SAVE'})
 	bpy.types.INFO_MT_file_export.append(menu_func)
 
 def unregister():
