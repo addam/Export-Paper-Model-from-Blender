@@ -54,6 +54,8 @@ Additional links:
 """
 import bpy, bgl
 import mathutils as M
+from re import compile as re_compile
+
 try:
 	from math import pi
 except ImportError:
@@ -69,6 +71,8 @@ default_priority_effect={
 	'LENGTH': -0.05}
 
 strf="{:.3f}".format
+first_letters = lambda text: (text[match.start()] for match in first_letters.pattern.finditer(text))
+first_letters.pattern = re_compile("(?<!\w)[\w]")
 
 def sign(a):
 	"""Return -1 for negative numbers, 1 for positive and 0 for zero."""
@@ -207,13 +211,14 @@ class Unfolder:
 		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
+		
 		if properties.do_create_numbers and properties.do_create_stickers:
 			self.mesh.enumerate_islands()
 		if properties.do_create_stickers:
 			self.mesh.generate_stickers(properties.sticker_width * printable_size.y / scale, properties.do_create_numbers)
 		elif properties.do_create_numbers:
 			self.mesh.generate_numbers_alone(properties.sticker_width * printable_size.y / scale)
-		text_height = 12/(printable_size.y*ppm) if properties.do_create_numbers else 0
+		text_height = 12/(printable_size.y*ppm) if properties.do_create_numbers and len(self.mesh.islands) > 1 else 0
 		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, space_at_bottom=text_height) # Scale everything so that page height is 1
 		self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)
 		if properties.output_type != 'NONE':
@@ -406,9 +411,12 @@ class Mesh:
 					uvedge.island.add_marker(NumberAlone(uvedge, index, size))
 	
 	def enumerate_islands(self):
-		for num, island in enumerate(self.islands, 1):
-			island.number = num
-			island.generate_label()
+		if len(self.islands) == 1:
+			self.islands[0].label = None
+		else:
+			for num, island in enumerate(self.islands, 1):
+				island.number = num
+				island.generate_label()
 	
 	def finalize_islands(self, scale_factor=1, space_at_bottom=0, do_enumerate=False):
 		for island in self.islands:
@@ -1042,6 +1050,7 @@ class Island:
 	
 	def generate_label(self, label=None, abbreviation=None):
 		abbr = abbreviation or self.abbreviation or str(self.number)
+		# TODO: dots should be added in the last instant when outputting any text
 		if not set('69NZMWpbqd').isdisjoint(abbr) and set('6890oOxXNZMWIlpbqd').issuperset(abbr):
 			abbr += "."
 		self.label = label or self.label or "Island {}".format(self.number)
@@ -1231,7 +1240,7 @@ class Sticker(Marker):
 		sin, cos = edge.y/edge.length, edge.x/edge.length
 		self.rot = M.Matrix(((cos, -sin), (sin, cos)))
 		self.width = sticker_width * 0.9
-		self.text = "{}:{}".format(target_island.label, index) if index and target_island is not uvedge.island else index or None
+		self.text = "{}:{}".format(target_island.abbreviation, index) if index and target_island is not uvedge.island else index or None
 		self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot*M.Vector((0, self.width*0.2))
 		self.bounds = [v3.co, v4.co, self.center] if v3.co != v4.co else [v3.co, self.center]
 
@@ -1439,7 +1448,7 @@ class MakeUnfoldable(bpy.types.Operator):
 				lface.id = uvface.face.index
 			
 			# name must be set afterwards because it invokes an update callback
-			list_item.abbreviation = island.abbreviation
+			list_item["abbreviation"] = island.abbreviation
 			list_item.label = island.label
 			#list_item.name = "{} ({} faces)".format(island.label, len(island.faces))
 		mesh.paper_island_index = -1
@@ -1679,7 +1688,10 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 				list_item = mesh.paper_island_list[mesh.paper_island_index]
 				sub = box.column(align=True)
 				sub.prop(list_item, "label")
-				sub.prop(list_item, "abbreviation")
+				sub.prop(list_item, "auto_abbrev")
+				row = sub.row()
+				row.active = not list_item.auto_abbrev
+				row.prop(list_item, "abbreviation")
 			#layout.prop(sce.paper_model, "display_labels", icon='RESTRICT_VIEW_OFF')
 		else:
 			box.label(text="Not unfolded")
@@ -1743,12 +1755,13 @@ def display_islands_changed(self, context):
 			display_islands.handle = None
 
 def label_changed(self, context):
-	if len(self.abbreviation) > 3:
-		self.abbreviation = self.abbreviation[:3]
-	# wtf? I don't remember the point of this code anymore. Candidate for removal.
-	#self.island.generate_label(self.label, self.abbreviation)
-	#self.label = self.island.label
-	#self.abbreviation = self.island.abbreviation
+	"""The labelling of an island was changed"""
+	# access the properties via [..] to avoid a recursive call after the update
+	if self.auto_abbrev:
+		self["abbreviation"] = "".join(first_letters(self.label)).upper()
+	elif len(self.abbreviation) > 3:
+		self["abbreviation"] = self.abbreviation[:3]
+		
 	self.name = "[{}] {} ({} {})".format(self.abbreviation, self.label, len(self.faces), "faces" if len(self.faces) > 1 else "face")
 
 class FaceList(bpy.types.PropertyGroup):
@@ -1757,6 +1770,7 @@ class IslandList(bpy.types.PropertyGroup):
 	faces = bpy.props.CollectionProperty(type=FaceList, name="Faces", description="Faces belonging to this island")
 	label = bpy.props.StringProperty(name="Label", description="Label on this island", default="", update=label_changed)
 	abbreviation = bpy.props.StringProperty(name="Abbreviation", description="Three-letter label to use when there is not enough space", default="", update=label_changed)
+	auto_abbrev = bpy.props.BoolProperty(name="Auto Abbreviation", description="Generate the abbreviation automatically", default=True, update=label_changed)
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
