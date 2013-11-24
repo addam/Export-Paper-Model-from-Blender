@@ -181,10 +181,10 @@ class Unfolder:
 		self.mesh=Mesh(ob.data, ob.matrix_world)
 		self.tex = None
 
-	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect):
+	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
 		"""Create the islands of the net"""
 		self.mesh.generate_cuts(page_size, priority_effect)
-		self.mesh.finalize_islands()
+		self.mesh.finalize_islands(scale_factor=scale)
 		self.mesh.enumerate_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
@@ -208,7 +208,7 @@ class Unfolder:
 			filepath=filepath[0:-4]
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # page size in meters
 		printable_size = page_size - 2*properties.output_margin*M.Vector((1, 1)) # printable area size in meters
-		scale = bpy.context.scene.unit_settings.scale_length * properties.model_scale
+		scale = bpy.context.scene.unit_settings.scale_length / properties.scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
 		
@@ -1533,7 +1533,7 @@ class ExportPaperModel(bpy.types.Operator):
 			('PAGE_LINK', "Single Linked", "Bake one image per page of output"),
 			('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
 			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")])
-	model_scale = bpy.props.FloatProperty(name="Scale", description="Coefficient of all dimensions when exporting", default=1, soft_min=0.0001, soft_max=1.0, subtype="FACTOR")
+	scale = bpy.props.FloatProperty(name="Scale", description="Divisor of all dimensions when exporting", default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
 	ui_expanded_document = bpy.props.BoolProperty(name="Show Document Settings Expanded", description="Shows the box 'Document Settings' expanded in user interface", default=True)
 	ui_expanded_style = bpy.props.BoolProperty(name="Show Style Settings Expanded", description="Shows the box 'Colors and Style' expanded in user interface", default=False)
@@ -1558,28 +1558,28 @@ class ExportPaperModel(bpy.types.Operator):
 			return {'CANCELLED'}
 		except:
 			raise
-	def get_scale_ratio(self, sce):
+	def get_scale_ratio(self, sce, margin=0):
 		if min(self.output_size_x, self.output_size_y) <= 2*self.output_margin:
 			return False
-		ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.output_size_x-2*self.output_margin, self.output_size_y-2*self.output_margin)))
-		return ratio * self.model_scale * sce.unit_settings.scale_length
+		ratio = self.unfolder.mesh.largest_island_ratio(M.Vector((self.output_size_x-2*margin, self.output_size_y-2*margin)))
+		return ratio * sce.unit_settings.scale_length / self.scale
 	def invoke(self, context, event):
 		sce=context.scene
 		
+		self.scale = sce.paper_model.scale
 		self.object = context.active_object
 		self.unfolder = Unfolder(self.object)
-		self.unfolder.prepare(create_uvmap=self.do_create_uvmap)
-		scale_ratio = self.get_scale_ratio(sce)
+		self.unfolder.prepare(create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
+		scale_ratio = self.get_scale_ratio(sce, self.output_margin + self.sticker_width + 1e-5)
 		if scale_ratio > 1:
-			self.model_scale = 0.95/scale_ratio
+			self.scale *= scale_ratio
 		wm = context.window_manager
 		wm.fileselect_add(self)
 		return {'RUNNING_MODAL'}
 	
 	def draw(self, context):
 		layout = self.layout
-		layout.label(text="Model scale:")
-		layout.prop(self.properties, "model_scale")
+		layout.prop(self.properties, "scale", text="Scale: 1") # a little hack: prints out, e.g., "Scale: 1: 72"
 		scale_ratio = self.get_scale_ratio(context.scene)
 		if scale_ratio > 1:
 			layout.label(text="An island is "+strf(scale_ratio)+"x bigger than page", icon="ERROR")
@@ -1668,6 +1668,8 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		sce = context.scene
 		obj = context.active_object
 		mesh = obj.data if obj and obj.type == 'MESH' else None
+		
+		layout.prop(sce.paper_model, "scale", text="Scale: 1")
 		
 		box = layout.box()
 		box.prop(sce.paper_model, "limit_by_page")
@@ -1852,6 +1854,7 @@ class PaperModelSettings(bpy.types.PropertyGroup):
 	limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
 	output_size_x = bpy.props.FloatProperty(name="Page Width", description="Maximal width of an island", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
 	output_size_y = bpy.props.FloatProperty(name="Page Height", description="Maximal height of an island", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+	scale = bpy.props.FloatProperty(name="Scale", description="Divisor of all dimensions when exporting", default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
 bpy.utils.register_class(PaperModelSettings)
 
 
