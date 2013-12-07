@@ -212,15 +212,15 @@ class Unfolder:
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
 		
-		if properties.do_create_numbers and properties.do_create_stickers:
-			self.mesh.enumerate_islands()
 		if properties.do_create_stickers:
 			self.mesh.generate_stickers(properties.sticker_width * printable_size.y / scale, properties.do_create_numbers)
 		elif properties.do_create_numbers:
 			self.mesh.generate_numbers_alone(properties.sticker_width * printable_size.y / scale)
-		text_height = 12/(printable_size.y*ppm) if properties.do_create_numbers and len(self.mesh.islands) > 1 else 0
-		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, space_at_bottom=text_height) # Scale everything so that page height is 1
+			
+		text_height = 12/(printable_size.y*ppm) if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
+		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, title_height=text_height) # Scale everything so that page height is 1
 		self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)
+		
 		if properties.output_type != 'NONE':
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
 			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
@@ -411,17 +411,16 @@ class Mesh:
 					uvedge.island.add_marker(NumberAlone(uvedge, index, size))
 	
 	def enumerate_islands(self):
-		if len(self.islands) == 1:
-			self.islands[0].label = None
-		else:
-			for num, island in enumerate(self.islands, 1):
-				island.number = num
-				island.generate_label()
+		for num, island in enumerate(self.islands, 1):
+			island.number = num
+			island.generate_label()
 	
-	def finalize_islands(self, scale_factor=1, space_at_bottom=0, do_enumerate=False):
+	def finalize_islands(self, scale_factor=1, title_height=0):
 		for island in self.islands:
 			island.apply_scale(scale_factor)
-			island.generate_bounding_box(space_at_bottom=space_at_bottom)
+			if title_height:
+				island.title = "[{}] {}".format(island.abbreviation, island.label)
+			island.generate_bounding_box(space_at_bottom = title_height)
 
 	def largest_island_ratio(self, page_size):
 		largest_ratio=0
@@ -816,6 +815,7 @@ class Island:
 		
 		self.label = None
 		self.abbreviation = None
+		self.title = None
 		
 		if face:
 			self.add(UVFace(face, self))
@@ -1347,11 +1347,10 @@ class SVG:
 							f.write("<path class='outer_background' d='" + rows(data_outer) + "'/>")
 						f.write("<path class='outer' d='" + rows(data_outer) + "'/>")
 					
-					if island.label:
-						island_label = "[{}] {}".format(island.abbreviation, island.label)
+					if island.title:
 						f.write("<text transform='translate({x} {y})'><tspan>{label}</tspan></text>".format(
 							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x) + self.margin, y=self.scale * (1 - island.pos.y) + self.margin,
-							label=island_label))
+							label=island.title))
 					data_markers = list()
 					format_matrix = lambda mat: " ".join(" ".join(map(str, col)) for col in mat)
 					for marker in island.markers:
