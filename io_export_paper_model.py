@@ -330,7 +330,7 @@ class Mesh:
 		
 		for edge in self.edges.values():
 			# some edges did not know until now whether their angle is convex or concave
-			if edge.main_faces and edge.main_faces[0].uvface.flipped != edge.main_faces[1].uvface.flipped:
+			if edge.main_faces and (edge.main_faces[0].uvface.flipped or edge.main_faces[1].uvface.flipped):
 				edge.calculate_angle()
 			# ensure that the order of faces corresponds to the order of uvedges
 			if len(edge.uvedges) >= 2:
@@ -343,8 +343,15 @@ class Mesh:
 						reordered.append(uvedge)
 				edge.uvedges = reordered
 
-		# construct a linked list from each island's boundary
 		for island in self.islands:
+			# flip normals so that there are more convex edges than concave ones
+			if any(uvface.flipped for uvface in island.faces): # do nothing to islands that have correct normals
+				island_edges = {uvedge.edge for uvedge in island.edges if not uvedge.edge.is_cut(uvedge.uvface.face)}
+				balance = sum((+1 if edge.angle > 0 else -1) for edge in island_edges)
+				if balance < 0:
+					island.is_inside_out = True
+		
+			# construct a linked list from each island's boundary
 			neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb): uvedge for uvedge in island.boundary_sorted}
 			for uvedge in island.boundary_sorted:
 				uvedge.neighbor_right = neighbor_lookup[uvedge.vb if uvedge.uvface.flipped else uvedge.va]
@@ -718,19 +725,22 @@ class Edge:
 		elif len(self.faces) > 2:
 			# find (with brute force) the pair of indices whose faces have the most similar normals
 			i, j = argmax_pair(self.faces, key=lambda a, b: a.normal.dot(b.normal))
-			self.main_faces = self.faces[i], self.faces[j]		
+			self.main_faces = self.faces[i], self.faces[j]
 	
 	def calculate_angle(self):
 		"""Calculate the angle between the main faces"""
 		face_a, face_b = self.main_faces
 		# correction if normals are flipped
-		a_is_clockwise = ((face_a.verts.index(self.vb) - face_a.verts.index(self.va)) % len(face_a.verts) == 1)
+		a_is_clockwise = ((face_a.verts.index(self.va) - face_a.verts.index(self.vb)) % len(face_a.verts) == 1)
 		b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) == 1)
+		afl_eq_bfl = True
 		if face_a.uvface and face_b.uvface:
 			a_is_clockwise ^= face_a.uvface.flipped
 			b_is_clockwise ^= face_b.uvface.flipped
-		if a_is_clockwise == b_is_clockwise:
-			if a_is_clockwise == (face_a.normal.cross(face_b.normal).dot(self.vect) > 0):
+			afl_eq_bfl = (face_a.uvface.flipped == face_b.uvface.flipped)
+			assert(a_is_clockwise != b_is_clockwise)
+		if a_is_clockwise != b_is_clockwise:
+			if (a_is_clockwise == (face_b.normal.cross(face_a.normal).dot(self.vect) > 0)) == afl_eq_bfl:
 				self.angle = face_a.normal.angle(face_b.normal) # the angle is convex
 			else:
 				self.angle = -face_a.normal.angle(face_b.normal) # the angle is concave
@@ -820,6 +830,7 @@ class Island:
 		self.label = None
 		self.abbreviation = None
 		self.title = None
+		self.is_inside_out = False # swaps concave <-> convex edges
 		
 		if face:
 			self.add(UVFace(face, self))
@@ -1337,7 +1348,9 @@ class SVG:
 									data_concave.append(data_uvedge)
 						else:
 							data_outer.append(data_uvedge)
-
+					if island.is_inside_out:
+						data_convex, data_concave = data_concave, data_convex
+					
 					if data_convex:
 						if not self.pure_net and self.style.use_inbg:
 							f.write("<path class='convex_background' d='" + rows(data_convex) + "'/>")
