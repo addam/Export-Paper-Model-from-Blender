@@ -321,7 +321,6 @@ class Mesh:
 				if island_a is not island_b:
 					if island_a.join(island_b, edge, size_limit=page_size):
 						islands.remove(island_b)
-		print("Done. Remaining islands:", len(islands))
 		
 		self.islands = sorted(islands, key=lambda island: len(island.faces), reverse=True)
 		
@@ -822,7 +821,7 @@ class Island:
 		self.sticker_numbering = 0
 		self.label = None
 
-	def join(self, other, edge:Edge, size_limit=None, epsilon=1e-12) -> bool:
+	def join(self, other, edge:Edge, size_limit=None, epsilon=1e-8) -> bool:
 		"""
 		Try to join other island on given edge
 		Returns False if they would overlap
@@ -832,7 +831,6 @@ class Island:
 			pass
 			
 		def is_below(self: UVEdge, other: UVEdge, cross=cross_product):
-			#TODO? estimate the epsilon based on input vectors
 			if self is other:
 				return False
 			if self.top < other.bottom:
@@ -927,20 +925,31 @@ class Island:
 				# for the time being, just throw this piece away
 				return False
 		
-		# try and merge UVEdges closer than epsilon
-		merged_edges = set()
+		# try and merge UVVertices closer than epsilon
+		partners = dict()
+		for uvvertex in self.verts:
+			if uvvertex.vertex not in partners:
+				partners[uvvertex.vertex] = [uvvertex]
+			else:
+				partners[uvvertex.vertex].append(uvvertex)
+		for uvvertex in other.verts:
+			# TODO@flatareas: optimize
+			for partner in partners.get(uvvertex.vertex, []):
+				if (partner.co - phantoms[uvvertex].co).length_squared < epsilon:
+					phantoms[uvvertex] = partner
+					break
+		merged_uvedges = set()
 		for uvedge in other.boundary_sorted:
-			edge = uvedge.edge
-			my_uvedge = edge.other_uvedge(uvedge)
-			if my_uvedge and my_uvedge.island is self:
-				paired_a, paired_b = (uvedge.va, uvedge.vb) if verts_flipped else (uvedge.vb, uvedge.va)
-				if (my_uvedge.va.co - phantoms[paired_a].co).length_squared < epsilon > (my_uvedge.vb.co - phantoms[paired_b].co).length_squared:
-					# merge the corresponding UVVertices
-					phantoms[paired_a], phantoms[paired_b] = my_uvedge.va, my_uvedge.vb
-					merged_edges.add(edge)
-		assert(merged_edges) # at least one edge must be merged
+			# FIXME@flatareas: take all possibly corresponding UVEdges into account (not only the main one)
+			partner = uvedge.edge.other_uvedge(uvedge)
+			if partner:
+				paired_a, paired_b = (partner.vb, partner.va) if partner.uvface.flipped == uvedge.uvface.flipped else (partner.va, partner.vb)
+				if phantoms[uvedge.va] is paired_a and phantoms[uvedge.vb] is paired_b:
+					merged_uvedges.add(uvedge)
+					merged_uvedges.add(partner)
+		assert(len(merged_uvedges) >= 2)
 		
-		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge.edge not in merged_edges]
+		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge not in merged_uvedges]
 		
 		# check for self-intersections: create event list
 		sweepline = Sweepline()
@@ -957,9 +966,8 @@ class Island:
 			return False
 		
 		# mark all edges that connect the islands as not cut
-		#  TODO: does this work? Maybe it will need is_cut_hidden instead
-		for edge in merged_edges:
-			edge.is_main_cut = False
+		for uvedge in merged_uvedges:
+			uvedge.edge.is_main_cut = False
 		
 		# join other's data on self
 		self.verts.update(phantoms.values())
@@ -979,16 +987,14 @@ class Island:
 			uvface.flipped ^= flipped
 		self.faces.extend(other.faces)
 		
-		self.boundary_sorted = [uvedge for uvedge in chain(self.boundary_sorted, other.boundary_sorted) if uvedge.edge not in merged_edges]
+		self.boundary_sorted = [uvedge for uvedge in chain(self.boundary_sorted, other.boundary_sorted) if uvedge not in merged_uvedges]
 		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup)
 		
-		# DEBUG: boundary consistency check
-		neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb) for uvedge in self.boundary_sorted}
-		for uvedge in self.boundary_sorted:
-			if (uvedge.vb if uvedge.uvface.flipped else uvedge.va) not in neighbor_lookup:
-				print("FAIL.")
-				print("Merged edges:", merged_edges)
-				assert(False)
+		# DEBUG@flatareas: boundary consistency check
+		#neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb) for uvedge in self.boundary_sorted}
+		#for uvedge in self.boundary_sorted:
+			#if (uvedge.vb if uvedge.uvface.flipped else uvedge.va) not in neighbor_lookup:
+				#assert(False)
 		
 		# everything seems to be OK
 		return True
