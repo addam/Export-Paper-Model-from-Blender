@@ -55,6 +55,7 @@ Additional links:
 import bpy, bgl
 import mathutils as M
 from re import compile as re_compile
+from itertools import chain
 
 try:
 	from math import pi
@@ -253,7 +254,6 @@ class Unfolder:
 		printable_size = page_size - 2*properties.output_margin*M.Vector((1, 1)) # printable area size in meters
 		scale = bpy.context.scene.unit_settings.scale_length / properties.scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
-		self.mesh.mark_hidden_cuts((1e-3 if not properties.do_create_stickers else 0.5 * properties.style.outer_width) / (ppm * scale))
 		
 		if properties.do_create_stickers:
 			self.mesh.generate_stickers(properties.sticker_width * printable_size.y / scale, properties.do_create_numbers)
@@ -358,13 +358,6 @@ class Mesh:
 				uvedge.neighbor_right.neighbor_left = uvedge
 		
 		return True
-	
-	def mark_hidden_cuts(self, distance):
-		epsilon = distance**2
-		for edge in self.edges.values():
-			# mark edges of flat polygons that need not be drawn, and also cuts whose uvedges are very close
-			if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.uvedges[0].is_similar(edge.uvedges[1], epsilon):
-				edge.cut_is_hidden = True
 	
 	def mark_cuts(self):
 		"""Mark cut edges in the original mesh so that the user can see"""
@@ -843,7 +836,7 @@ class Island:
 		self.sticker_numbering = 0
 		self.label = None
 
-	def join(self, other, edge:Edge, size_limit=None) -> bool:
+	def join(self, other, edge:Edge, size_limit=None, epsilon=1e-8) -> bool:
 		"""
 		Try to join other island on given edge
 		Returns False if they would overlap
@@ -853,7 +846,6 @@ class Island:
 			pass
 			
 		def is_below(self: UVEdge, other: UVEdge, cross=cross_product):
-			#TODO? estimate the epsilon based on input vectors
 			if self is other:
 				return False
 			if self.top < other.bottom:
@@ -934,9 +926,7 @@ class Island:
 		trans = uvedge_a.vb.co - rot * first_b.co
 		# extract and transform island_b's boundary
 		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
-		assert uvedge_b.va in phantoms and uvedge_b.vb in phantoms
-		phantoms[first_b], phantoms[second_b] = uvedge_a.vb, uvedge_a.va
-		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge is not uvedge_b]
+		assert first_b in phantoms and second_b in phantoms # seems quite obvious, right? TODO: Candidate for removal.
 		
 		# check the size of the resulting island
 		if size_limit:
@@ -950,10 +940,35 @@ class Island:
 				# for the time being, just throw this piece away
 				return False
 		
+		# try and merge UVVertices closer than epsilon
+		partners = dict()
+		for uvvertex in self.verts:
+			if uvvertex.vertex not in partners:
+				partners[uvvertex.vertex] = [uvvertex]
+			else:
+				partners[uvvertex.vertex].append(uvvertex)
+		for uvvertex in other.verts:
+			# TODO@flatareas: optimize
+			for partner in partners.get(uvvertex.vertex, []):
+				if (partner.co - phantoms[uvvertex].co).length_squared < epsilon:
+					phantoms[uvvertex] = partner
+					break
+		merged_uvedges = set()
+		for uvedge in other.boundary_sorted:
+			# FIXME@flatareas: take all possibly corresponding UVEdges into account (not only the main one)
+			partner = uvedge.edge.other_uvedge(uvedge)
+			if partner:
+				paired_a, paired_b = (partner.vb, partner.va) if partner.uvface.flipped == uvedge.uvface.flipped else (partner.va, partner.vb)
+				if phantoms[uvedge.va] is paired_a and phantoms[uvedge.vb] is paired_b:
+					merged_uvedges.add(uvedge)
+					merged_uvedges.add(partner)
+		assert(len(merged_uvedges) >= 2)
+		
+		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge not in merged_uvedges]
+		
 		# check for self-intersections: create event list
 		sweepline = Sweepline()
-		events_add = boundary_other + self.boundary_sorted
-		events_add.remove(uvedge_a)
+		events_add = [uvedge for uvedge in chain(boundary_other, self.boundary_sorted)]
 		events_remove = list(events_add)
 		events_add.sort(key = lambda uvedge: uvedge.min.tup, reverse = True)
 		events_remove.sort(key = lambda uvedge: uvedge.max.tup, reverse = True)
@@ -965,14 +980,14 @@ class Island:
 		except Intersection:
 			return False
 		
-		# remove edge from boundary
-		self.boundary_sorted.remove(uvedge_a)
-		other.boundary_sorted.remove(uvedge_b)
-		edge.is_main_cut = False
-		# apply transformation to the vertices
-
+		# mark all edges that connect the islands as not cut
+		for uvedge in merged_uvedges:
+			uvedge.edge.is_main_cut = False
+		
 		# join other's data on self
 		self.verts.update(phantoms.values())
+		
+		# re-link uvedges and uvfaces to their transformed locations
 		for uvedge in other.edges:
 			uvedge.island = self
 			uvedge.va = phantoms[uvedge.va]
@@ -986,8 +1001,15 @@ class Island:
 			uvface.uvvertex_by_id = {index: phantoms[uvvertex] for index, uvvertex in uvface.uvvertex_by_id.items()}
 			uvface.flipped ^= flipped
 		self.faces.extend(other.faces)
-		self.boundary_sorted.extend(other.boundary_sorted)
+		
+		self.boundary_sorted = [uvedge for uvedge in chain(self.boundary_sorted, other.boundary_sorted) if uvedge not in merged_uvedges]
 		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup)
+		
+		# DEBUG@flatareas: boundary consistency check
+		#neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb) for uvedge in self.boundary_sorted}
+		#for uvedge in self.boundary_sorted:
+			#if (uvedge.vb if uvedge.uvface.flipped else uvedge.va) not in neighbor_lookup:
+				#assert(False)
 		
 		# everything seems to be OK
 		return True
@@ -1160,9 +1182,10 @@ class UVEdge:
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
 	def is_similar(self, other, epsilon = 1e-6):
-		if self.island is not other.island:
-			return False
-		pair_a, pair_b = (other.va, other.vb) if self.uvface.flipped ^ other.uvface.flipped else (other.vb, other.va)
+		pair_a, pair_b = (other.va, other.vb) #if self.uvface.flipped ^ other.uvface.flipped else (other.vb, other.va)\
+		# DEBUG
+		if (self.va - pair_b).length_squared < epsilon and (self.vb - pair_a).length_squared < epsilon:
+			return True
 		return (self.va - pair_a).length_squared < epsilon and (self.vb - pair_b).length_squared < epsilon
 	def __lt__(self, other):
 		return self.min.tup < other.min.tup
@@ -1464,8 +1487,8 @@ class MakeUnfoldable(bpy.types.Operator):
 				lface.id = uvface.face.index
 			
 			# name must be set afterwards because it invokes an update callback
-			list_item["abbreviation"] = island.abbreviation
-			list_item.label = island.label
+			list_item["abbreviation"] = island.abbreviation or "?"
+			list_item.label = island.label or "No Name"
 			#list_item.name = "{} ({} faces)".format(island.label, len(island.faces))
 		mesh.paper_island_index = -1
 
