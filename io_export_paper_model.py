@@ -369,7 +369,7 @@ class Mesh:
 		def uvedge_priority(uvedge):
 			"""Retuns whether it is a good idea to stick something on this edge's face"""
 			#TODO: it should take into account overlaps with faces and with other stickers
-			return uvedge.uvface.face.area / sum((vb-va).length for (va, vb) in pairs(uvedge.uvface.verts))
+			return uvedge.uvface.face.area / sum((vb.co-va.co).length for (va, vb) in pairs(uvedge.uvface.verts))
 		for edge in self.edges.values():
 			if edge.is_main_cut and not edge.cut_is_hidden and len(edge.uvedges) >= 2:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
@@ -826,13 +826,15 @@ class Island:
 		self.is_inside_out = False # swaps concave <-> convex edges
 		
 		if face:
-			self.add(UVFace(face, self))
+			uvface = UVFace(face, self)
+			self.verts.update(uvface.verts)
+			self.faces.append(uvface)
 		
 		# speedup for Island.join
 		self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
 		
 		self.boundary_sorted = list(self.edges)
-		self.boundary_sorted.sort()
+		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup, reverse = True)
 		
 		self.scale = 1
 		self.markers = list()
@@ -859,18 +861,18 @@ class Island:
 				return True
 			if other.max.tup <= self.min.tup:
 				return False
-			self_vector = self.max - self.min
-			min_to_min = other.min - self.min
+			self_vector = self.max.co - self.min.co
+			min_to_min = other.min.co - self.min.co
 			cross_b1 = cross(self_vector, min_to_min)
-			cross_b2 = cross(self_vector, (other.max - self.min))
+			cross_b2 = cross(self_vector, (other.max.co - self.min.co))
 			if cross_b1 != 0 or cross_b2 != 0:
 				if cross_b1 >= 0 and cross_b2 >= 0:
 					return True
 				if cross_b1 <= 0 and cross_b2 <= 0:
 					return False
-			other_vector = other.max - other.min
+			other_vector = other.max.co - other.min.co
 			cross_a1 = cross(other_vector, -min_to_min)
-			cross_a2 = cross(other_vector, (self.max - other.min))
+			cross_a2 = cross(other_vector, (self.max.co - other.min.co))
 			if cross_a1 != 0 or cross_a2 != 0:
 				if cross_a1 <= 0 and cross_a2 <= 0:
 					return True
@@ -923,10 +925,10 @@ class Island:
 		# NOTE: if the edges differ in length, the matrix will involve uniform scaling. May happen in the case of twisted n-gons
 		first_b, second_b = (uvedge_b.va, uvedge_b.vb) if not verts_flipped else (uvedge_b.vb, uvedge_b.va)
 		if not flipped:
-			rot = fitting_matrix(first_b - second_b, uvedge_a.vb - uvedge_a.va)
+			rot = fitting_matrix(first_b.co - second_b.co, uvedge_a.vb.co - uvedge_a.va.co)
 		else:
 			flip = M.Matrix(((-1,0),(0,1)))
-			rot = fitting_matrix(flip * (first_b - second_b), uvedge_a.vb - uvedge_a.va) * flip
+			rot = fitting_matrix(flip * (first_b.co - second_b.co), uvedge_a.vb.co - uvedge_a.va.co) * flip
 		trans = uvedge_a.vb.co - rot * first_b.co
 		# extract and transform island_b's boundary
 		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
@@ -1013,10 +1015,6 @@ class Island:
 		# everything seems to be OK
 		return True
 
-	def add(self, uvface):
-		self.verts.update(uvface.verts)
-		self.faces.append(uvface)
-	
 	def add_marker(self, marker):
 		self.fake_verts.extend(marker.bounds)
 		self.markers.append(marker)
@@ -1141,8 +1139,6 @@ class UVVertex:
 			return self.vertex.index
 		else:
 			return hash(self.co.x) ^ hash(self.co.y) # this is dirty: hash of such UVVertex can change
-	def __sub__(self, other):
-		return self.co - other.co
 	def __str__(self):
 		if self.vertex:
 			return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
@@ -1150,18 +1146,6 @@ class UVVertex:
 			return "UV * ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
 	def __repr__(self):
 		return str(self)
-	def __eq__(self, other):
-		return self is other
-		# originally it was: (self is other) or (self.vertex == other.vertex and self.tup == other.tup)
-		# but that excludes vertices from sets in several very special cases (doubled verts that occur by coincidence)
-	def __ne__(self, other):
-		return not self == other
-	def __lt__(self, other):
-		return self.tup < other.tup
-	def __le__(self, other):
-		return self.tup <= other.tup
-	def __ge__(self, other):
-		return self.tup >= other.tup
 
 class UVEdge:
 	"""Edge in 2D"""
@@ -1177,21 +1161,10 @@ class UVEdge:
 		#Every UVEdge is attached to only one UVFace. UVEdges are doubled as needed, because they both have to point clockwise around their faces
 	def update(self):
 		"""Update data if UVVertices have moved"""
-		self.min, self.max = (self.va, self.vb) if (self.va < self.vb) else (self.vb, self.va)
+		self.min, self.max = (self.va, self.vb) if (self.va.tup < self.vb.tup) else (self.vb, self.va)
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
-	def is_similar(self, other, epsilon = 1e-6):
-		pair_a, pair_b = (other.va, other.vb) #if self.uvface.flipped ^ other.uvface.flipped else (other.vb, other.va)\
-		# DEBUG
-		if (self.va - pair_b).length_squared < epsilon and (self.vb - pair_a).length_squared < epsilon:
-			return True
-		return (self.va - pair_a).length_squared < epsilon and (self.vb - pair_b).length_squared < epsilon
-	def __lt__(self, other):
-		return self.min.tup < other.min.tup
-	def __le__(self, other):
-		return self.min <= other.min
 	def __str__(self):
-		#return "({} - {})".format(self.min, self.max)
 		return "({} - {})".format(self.va, self.vb)
 	def __repr__(self):
 		return str(self)
@@ -1233,7 +1206,7 @@ class Marker:
 class Arrow(Marker):
 	def __init__(self, uvedge, size, index):
 		self.text = str(index)
-		edge = (uvedge.vb - uvedge.va) if not uvedge.uvface.flipped else (uvedge.va - uvedge.vb)
+		edge = (uvedge.vb.co - uvedge.va.co) if not uvedge.uvface.flipped else (uvedge.va.co - uvedge.vb.co)
 		self.center = (uvedge.va.co + uvedge.vb.co) / 2
 		self.size = size
 		sin, cos = edge.y/edge.length, edge.x/edge.length
@@ -1247,12 +1220,12 @@ class Sticker(Marker):
 	def __init__(self, uvedge, default_width=0.005, index=None, target_island=None):
 		"""Sticker is directly attached to the given UVEdge"""
 		first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
-		edge = first_vertex - second_vertex
+		edge = first_vertex.co - second_vertex.co
 		sticker_width=min(default_width, edge.length/2)
 		other=uvedge.edge.other_uvedge(uvedge) #This is the other uvedge - the sticking target
 		
 		other_first, other_second = (other.va, other.vb) if not other.uvface.flipped else (other.vb, other.va)
-		other_edge = other_second - other_first
+		other_edge = other_second.co - other_first.co
 		cos_a=cos_b=0.5 #angle a is at vertex uvedge.va, b is at uvedge.vb
 		sin_a=sin_b=0.75**0.5
 		len_a=len_b=sticker_width/sin_a #len_a is length of the side adjacent to vertex a, len_b similarly
