@@ -828,6 +828,9 @@ class Island:
 		if face:
 			self.add(UVFace(face, self))
 		
+		# speedup for Island.join
+		self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
+		
 		self.boundary_sorted = list(self.edges)
 		self.boundary_sorted.sort()
 		
@@ -917,6 +920,7 @@ class Island:
 		verts_flipped = uvedge_b.va.vertex is uvedge_a.va.vertex
 		flipped = verts_flipped ^ uvedge_a.uvface.flipped ^ uvedge_b.uvface.flipped
 		# determine rotation
+		# NOTE: if the edges differ in length, the matrix will involve uniform scaling. May happen in the case of twisted n-gons
 		first_b, second_b = (uvedge_b.va, uvedge_b.vb) if not verts_flipped else (uvedge_b.vb, uvedge_b.va)
 		if not flipped:
 			rot = fitting_matrix(first_b - second_b, uvedge_a.vb - uvedge_a.va)
@@ -926,7 +930,6 @@ class Island:
 		trans = uvedge_a.vb.co - rot * first_b.co
 		# extract and transform island_b's boundary
 		phantoms = {uvvertex: UVVertex(rot*uvvertex.co+trans, uvvertex.vertex) for uvvertex in other.verts}
-		assert first_b in phantoms and second_b in phantoms # seems quite obvious, right? TODO: Candidate for removal.
 		
 		# check the size of the resulting island
 		if size_limit:
@@ -941,27 +944,22 @@ class Island:
 				return False
 		
 		# try and merge UVVertices closer than epsilon
-		partners = dict()
-		for uvvertex in self.verts:
-			if uvvertex.vertex not in partners:
-				partners[uvvertex.vertex] = [uvvertex]
-			else:
-				partners[uvvertex.vertex].append(uvvertex)
+		empty = tuple()
 		for uvvertex in other.verts:
-			# TODO@flatareas: optimize
-			for partner in partners.get(uvvertex.vertex, []):
+			for partner in self.uvverts_by_id.get(uvvertex.vertex.index, empty):
 				if (partner.co - phantoms[uvvertex].co).length_squared < epsilon:
 					phantoms[uvvertex] = partner
 					break
 		merged_uvedges = set()
 		for uvedge in other.boundary_sorted:
-			# FIXME@flatareas: take all possibly corresponding UVEdges into account (not only the main one)
-			partner = uvedge.edge.other_uvedge(uvedge)
-			if partner:
-				paired_a, paired_b = (partner.vb, partner.va) if partner.uvface.flipped == uvedge.uvface.flipped else (partner.va, partner.vb)
-				if phantoms[uvedge.va] is paired_a and phantoms[uvedge.vb] is paired_b:
-					merged_uvedges.add(uvedge)
-					merged_uvedges.add(partner)
+			for partner in uvedge.edge.uvedges:
+				if partner is not uvedge:
+					paired_a, paired_b = (partner.vb, partner.va) if partner.uvface.flipped == uvedge.uvface.flipped else (partner.va, partner.vb)
+					if phantoms[uvedge.va] is paired_a and phantoms[uvedge.vb] is paired_b:
+						merged_uvedges.add(uvedge)
+						merged_uvedges.add(partner)
+						break
+		# at least the edge used to connect the islands must be merged
 		assert(len(merged_uvedges) >= 2)
 		
 		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge not in merged_uvedges]
@@ -987,6 +985,13 @@ class Island:
 		# join other's data on self
 		self.verts.update(phantoms.values())
 		
+		for uvvertex in phantoms.values():
+			present = self.uvverts_by_id.get(uvvertex.vertex.index)
+			if not present:
+				self.uvverts_by_id[uvvertex.vertex.index] = [uvvertex]
+			else:
+				present.append(uvvertex)
+		
 		# re-link uvedges and uvfaces to their transformed locations
 		for uvedge in other.edges:
 			uvedge.island = self
@@ -1004,12 +1009,6 @@ class Island:
 		
 		self.boundary_sorted = [uvedge for uvedge in chain(self.boundary_sorted, other.boundary_sorted) if uvedge not in merged_uvedges]
 		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup)
-		
-		# DEBUG@flatareas: boundary consistency check
-		#neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb) for uvedge in self.boundary_sorted}
-		#for uvedge in self.boundary_sorted:
-			#if (uvedge.vb if uvedge.uvface.flipped else uvedge.va) not in neighbor_lookup:
-				#assert(False)
 		
 		# everything seems to be OK
 		return True
