@@ -17,15 +17,18 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
+#### FIXME:
+# Island.join: size limit: bounding box: rightmost vertex must be explicitly calculated
+# Island.join: is_below: using assertion to do necessary calculations is illegal
+
 #### TODO:
-# change UI 'Model Scale' to be a divisor, not a coefficient
-# split islands bigger than selected page size
 # sanitize the constructors so that they don't edit their parent object
 # apply island rotation and position before exporting, to simplify things
 # s/verts/vertices/g
 # SVG object doesn't need a 'pure_net' argument in constructor
 # maybe Island would do with a list of points as well, set of vertices makes things more complicated
 # why does UVVertex copy its position in constructor?
+# is it necessary to keep island.boundary_sorted sorted? Could save some time
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -352,11 +355,35 @@ class Mesh:
 					island.is_inside_out = True
 		
 			# construct a linked list from each island's boundary
-			neighbor_lookup = {(uvedge.va if uvedge.uvface.flipped else uvedge.vb): uvedge for uvedge in island.boundary_sorted}
+			# uvedge.neighbor_right is clockwise = forward = via uvedge.vb if not uvface.flipped
+			neighbor_lookup, conflicts = dict(), dict()
 			for uvedge in island.boundary_sorted:
-				uvedge.neighbor_right = neighbor_lookup[uvedge.vb if uvedge.uvface.flipped else uvedge.va]
-				uvedge.neighbor_right.neighbor_left = uvedge
-		
+				uvvertex = uvedge.va if uvedge.uvface.flipped else uvedge.vb
+				if uvvertex not in neighbor_lookup:
+					neighbor_lookup[uvvertex] = uvedge
+				else:
+					if uvvertex not in conflicts:
+						conflicts[uvvertex] = [neighbor_lookup[uvvertex], uvedge]
+					else:
+						conflicts[uvvertex].append(uvedge)
+			
+			for uvedge in island.boundary_sorted:
+				uvvertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
+				if uvvertex not in conflicts:
+					uvedge.neighbor_right = neighbor_lookup[uvvertex]
+					uvedge.neighbor_right.neighbor_left = uvedge
+				else:
+					conflicts[uvvertex].append(uvedge)
+			
+			# solve merged vertices with more boundaries crossing
+			direction_to_float = lambda vector: (1 - vector.x/vector.length) if vector.y > 0 else (vector.x/vector.length - 1)
+			for uvvertex, uvedges in conflicts.items():
+				is_inwards = lambda uvedge: uvedge.uvface.flipped == (uvedge.va is uvvertex)
+				uvedge_sortkey = lambda uvedge: direction_to_float((uvedge.va.co-uvedge.vb.co) if is_inwards(uvedge) else (uvedge.vb.co-uvedge.va.co))
+				uvedges.sort(key=uvedge_sortkey)
+				for right, left in zip(uvedges[:-1:2], uvedges[1::2]) if is_inwards(uvedges[0]) else zip([uvedges[-1]]+uvedges[1::2], uvedges[:-1:2]):
+					left.neighbor_right = right
+					right.neighbor_left = left
 		return True
 	
 	def mark_cuts(self):
@@ -371,7 +398,7 @@ class Mesh:
 			#TODO: it should take into account overlaps with faces and with other stickers
 			return uvedge.uvface.face.area / sum((vb.co-va.co).length for (va, vb) in pairs(uvedge.uvface.verts))
 		for edge in self.edges.values():
-			if edge.is_main_cut and not edge.cut_is_hidden and len(edge.uvedges) >= 2:
+			if edge.is_main_cut and len(edge.uvedges) >= 2:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
 				if uvedge_priority(uvedge_a) < uvedge_priority(uvedge_b):
 					uvedge_a, uvedge_b = uvedge_b, uvedge_a
@@ -405,7 +432,7 @@ class Mesh:
 	def generate_numbers_alone(self, size):
 		global_numbering = 0
 		for edge in self.edges.values():
-			if edge.is_main_cut and not edge.cut_is_hidden and len(edge.uvedges) >= 2:
+			if edge.is_main_cut and len(edge.uvedges) >= 2:
 				global_numbering += 1
 				index = str(global_numbering)
 				if ('6' in index or '9' in index) and set(index) <= {'6','8','9','0'}:
@@ -705,7 +732,6 @@ class Edge:
 		self.force_cut = bool(edge.use_seam) # such edges will always be cut
 		self.main_faces = None # two faces that can be connected in the island
 		self.is_main_cut = True # defines whether the two main faces are connected; all the others will be automatically treated as cut
-		self.cut_is_hidden = False # for cuts inside flat faces that need not actually be drawn as cut
 		self.priority=None
 		self.angle = None
 		self.va.edges.append(self)
@@ -833,7 +859,7 @@ class Island:
 		# speedup for Island.join
 		self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
 		
-		self.boundary_sorted = list(self.edges)
+		self.boundary_sorted = list(self.edges) # UVEdges on the boundary, sorted left to right
 		self.boundary_sorted.sort(key = lambda uvedge: uvedge.min.tup, reverse = True)
 		
 		self.scale = 1
@@ -936,6 +962,7 @@ class Island:
 		# check the size of the resulting island
 		if size_limit:
 			# first check: bounding box
+			# FIXME! this is wrong: self.boundary_sorted[-1].max.co.x need _not_ be the rightmost vertex
 			bbox_width = max(self.boundary_sorted[-1].max.co.x, max(vertex.co.x for vertex in phantoms)) - min(self.boundary_sorted[0].min.co.x, min(vertex.co.x for vertex in phantoms))
 			bbox_height = max(max(seg.top for seg in self.boundary_sorted), max(vertex.co.y for vertex in phantoms)) - min(min(seg.bottom for seg in self.boundary_sorted), min(vertex.co.y for vertex in phantoms))
 			if min(bbox_width, bbox_height)**2 > size_limit.x**2 + size_limit.y**2:
@@ -1335,7 +1362,7 @@ class SVG:
 					for uvedge in island.edges:
 						edge = uvedge.edge
 						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
-						if not edge.is_cut(uvedge.uvface.face) or edge.cut_is_hidden:
+						if not edge.is_cut(uvedge.uvface.face):
 							if uvedge.uvface.flipped ^ (uvedge.va.vertex.index > uvedge.vb.vertex.index): # each uvedge is in two opposite-oriented variants; we want to add each only once
 								if edge.angle > 0.01:
 									data_convex.append(data_uvedge)
