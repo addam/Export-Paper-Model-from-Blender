@@ -29,6 +29,7 @@
 # maybe Island would do with a list of points as well, set of vertices makes things more complicated
 # why does UVVertex copy its position in constructor?
 # is it necessary to keep island.boundary_sorted sorted? Could save some time
+# remember selected objects before baking, except selected to active
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -204,49 +205,6 @@ class Unfolder:
 			island.label = match[1]
 			island.abbreviation = match[2]
 	
-	def save_images(self, properties):
-		""" """
-		use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
-		tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
-		if not tex:
-			raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export pure net only.")
-		if properties.output_type == 'TEXTURE' and tex.active_render:
-			tex.active = True
-			bpy.ops.mesh.uv_texture_remove()
-			raise UnfoldError("Texture bake error. Material of the object is referring to an undefined UV Map.")
-		rd = bpy.context.scene.render
-		recall = rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
-		if properties.output_type == 'RENDER':
-			rd.bake_type = 'FULL'
-			rd.use_bake_selected_to_active = False
-		elif properties.output_type == 'TEXTURE':
-			rd.bake_type = 'TEXTURE'
-			rd.use_bake_selected_to_active = False
-			recall_materials = [slot.material for slot in self.ob.material_slots]
-			mat = create_texface_material("unfolder_temp")
-			for slot in self.ob.material_slots:
-				slot.material = mat
-		elif properties.output_type == 'SELECTED_TO_ACTIVE':
-			rd.bake_type = 'FULL'
-			rd.use_bake_selected_to_active = True
-		rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear  = 0, 0, 0.001, False, False
-		if properties.image_packing == 'PAGE_LINK':
-			self.mesh.save_image(tex, printable_size * ppm, filepath)
-		elif properties.image_packing == 'ISLAND_LINK':
-			self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath)
-		elif properties.image_packing == 'ISLAND_EMBED':
-			self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath, do_embed=True)
-		#revoke settings
-		rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
-		if properties.output_type == 'TEXTURE':
-			for slot, material in zip(self.ob.material_slots, recall_materials):
-				slot.material = material
-			mat.user_clear()
-			bpy.data.materials.remove(mat)
-		if not properties.do_create_uvmap:
-			tex.active = True
-			bpy.ops.mesh.uv_texture_remove()
-
 	def save(self, properties):
 		"""Export the document."""
 		# Note about scale: input is direcly in blender length. finalize_islands multiplies everything by scale/page_size.y, SVG object multiplies everything by page_size.y*ppm.
@@ -254,7 +212,7 @@ class Unfolder:
 		if filepath[-4:]==".svg" or filepath[-4:]==".png":
 			filepath=filepath[0:-4]
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # page size in meters
-		printable_size = page_size - 2*properties.output_margin*M.Vector((1, 1)) # printable area size in meters
+		printable_size = page_size - 2 * properties.output_margin * M.Vector((1, 1)) # printable area size in meters
 		scale = bpy.context.scene.unit_settings.scale_length / properties.scale
 		ppm = properties.output_dpi * 100 / 2.54 # pixels per meter
 		
@@ -268,10 +226,58 @@ class Unfolder:
 		self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)
 		
 		if properties.output_type != 'NONE':
-			self.save_images(properties)
-		svg = SVG(page_size * ppm, printable_size.y*ppm, properties.style, properties.output_type=='NONE')
+			# bake an image and save it as a PNG to disk or into memory
+			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
+			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
+			if not tex:
+				raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
+			if properties.output_type == 'TEXTURE' and tex.active_render:
+				tex.active = True
+				bpy.ops.mesh.uv_texture_remove()
+				raise UnfoldError("Texture bake error. Material of the object is referring to an undefined UV Map.")
+			rd = bpy.context.scene.render
+			recall = rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
+			if properties.output_type == 'RENDER':
+				rd.bake_type = 'FULL'
+				rd.use_bake_selected_to_active = False
+			elif properties.output_type == 'TEXTURE':
+				rd.bake_type = 'TEXTURE'
+				rd.use_bake_selected_to_active = False
+				recall_materials = [slot.material for slot in self.ob.material_slots]
+				print(recall_materials)
+				mat = create_texface_material("unfolder_temp")
+				for slot in self.ob.material_slots:
+					slot.material = mat
+				if not recall_materials:
+					# this is a crazy workaround. I don't get the material system, but I believe nobody does
+					self.ob.data.materials.append(mat)
+			elif properties.output_type == 'SELECTED_TO_ACTIVE':
+				rd.bake_type = 'FULL'
+				rd.use_bake_selected_to_active = True
+			rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
+			if properties.image_packing == 'PAGE_LINK':
+				self.mesh.save_image(tex, printable_size * ppm, filepath)
+			elif properties.image_packing == 'ISLAND_LINK':
+				self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath)
+			elif properties.image_packing == 'ISLAND_EMBED':
+				self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath, do_embed=True)
+			#revoke settings
+			rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
+			if properties.output_type == 'TEXTURE':
+				for slot, material in zip(self.ob.material_slots, recall_materials):
+					slot.material = material
+				if not recall_materials:
+					# another crazy workaround, remove the material slot we have created
+					self.ob.data.materials.pop()
+				mat.user_clear()
+				bpy.data.materials.remove(mat)
+			if not properties.do_create_uvmap:
+				tex.active = True
+				bpy.ops.mesh.uv_texture_remove()
+
+		svg = SVG(page_size * ppm, printable_size.y * ppm, properties.style, (properties.output_type == 'NONE'))
 		svg.do_create_stickers = properties.do_create_stickers
-		svg.margin = properties.output_margin*ppm
+		svg.margin = properties.output_margin * ppm
 		svg.write(self.mesh, filepath)
 
 class Mesh:
