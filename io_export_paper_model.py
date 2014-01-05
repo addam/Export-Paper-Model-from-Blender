@@ -24,7 +24,7 @@
 #### TODO:
 # sanitize the constructors so that they don't edit their parent object
 # apply island rotation and position before exporting, to simplify things
-# s/verts/vertices/g
+# rename verts -> vertices, edge.vect -> edge.vector
 # SVG object doesn't need a 'pure_net' argument in constructor
 # maybe Island would do with a list of points as well, set of vertices makes things more complicated
 # why does UVVertex copy its position in constructor?
@@ -873,7 +873,7 @@ class Island:
 		self.sticker_numbering = 0
 		self.label = None
 
-	def join(self, other, edge:Edge, size_limit=None, epsilon=1e-8) -> bool:
+	def join(self, other, edge:Edge, size_limit=None, epsilon=1e-6) -> bool:
 		"""
 		Try to join other island on given edge
 		Returns False if they would overlap
@@ -941,6 +941,16 @@ class Island:
 					# check for intersection
 					assert not cmp(self.children[index], self.children[index-1])
 		
+		def root_find(value, tree):
+			"""Find the root of a given value in a forest-like dictionary
+			also updates the dictionary using path compression"""
+			parent, relink = tree.get(value), list()
+			while parent is not None:
+				relink.append(value)
+				value, parent = parent, tree.get(parent)
+			tree.update(dict.fromkeys(relink, value))
+			return value
+
 		# find edge in other and in self
 		for uvedge in edge.uvedges:
 			if uvedge in self.edges:
@@ -978,26 +988,52 @@ class Island:
 				# for the time being, just throw this piece away
 				return False
 		
-		# try and merge UVVertices closer than epsilon
+		assert edge.vect.length > 0
+		distance_limit = edge.vect.length * epsilon
+		# try and merge UVVertices closer than sqrt(distance_limit)
 		empty = tuple()
-		for uvvertex in other.verts:
-			for partner in self.uvverts_by_id.get(uvvertex.vertex.index, empty):
-				if (partner.co - phantoms[uvvertex].co).length_squared < epsilon:
-					phantoms[uvvertex] = partner
-					break
 		merged_uvedges = set()
-		for uvedge in other.boundary_sorted:
+		
+		# merge all uvvertices that are close enough using a union-find structure
+		# uvvertices will be merged only in cases other->self and self->self
+		# all resulting groups are merged together to a uvvertex of self
+		is_merged_mine = False
+		shared_vertices = self.uvverts_by_id.keys() & other.uvverts_by_id.keys()
+		for vertex_id in shared_vertices:
+			uvs = self.uvverts_by_id[vertex_id] + other.uvverts_by_id[vertex_id]
+			len_mine = len(self.uvverts_by_id[vertex_id])
+			merged = dict()
+			for i, a in enumerate(uvs[:len_mine]):
+				i = root_find(i, merged)
+				for j, b in enumerate(uvs[i+1:], i+1):
+					b = b if j < len_mine else phantoms[b]
+					j = root_find(j, merged)
+					if i == j:
+						continue
+					i, j = (j, i) if j < i else (i, j)
+					if (a.co - b.co).length_squared < distance_limit:
+						merged[j] = i
+			for source, target in merged.items():
+				target = root_find(target, merged)
+				phantoms[uvs[source]] = uvs[target]
+				is_merged_mine |= (source < len_mine) # remember that a vertex of this island has been merged
+		
+		for uvedge in (chain(self.boundary_sorted, other.boundary_sorted) if is_merged_mine else other.boundary_sorted):
 			for partner in uvedge.edge.uvedges:
 				if partner is not uvedge:
-					paired_a, paired_b = (partner.vb, partner.va) if partner.uvface.flipped == uvedge.uvface.flipped else (partner.va, partner.vb)
-					if phantoms[uvedge.va] is paired_a and phantoms[uvedge.vb] is paired_b:
-						merged_uvedges.add(uvedge)
-						merged_uvedges.add(partner)
+					# TODO: make sure that this code is okay
+					paired_a, paired_b = phantoms.get(partner.vb, partner.vb), phantoms.get(partner.va, partner.va)
+					if partner.uvface.flipped != uvedge.uvface.flipped:
+						paired_a, paired_b = paired_b, paired_a
+					if phantoms.get(uvedge.va, uvedge.va) is paired_a and phantoms.get(uvedge.vb, uvedge.vb) is paired_b:
+						merged_uvedges.update((uvedge, partner))
 						break
-		# at least the edge used to connect the islands must be merged
-		assert(len(merged_uvedges) >= 2)
+		
+		if uvedge_b not in merged_uvedges:
+			raise UnfoldError("Export failed. Please report this error, including the model if you can.")
 		
 		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self) for uvedge in other.boundary_sorted if uvedge not in merged_uvedges]
+		# TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary sorted as well
 		
 		# check for self-intersections: create event list
 		sweepline = Sweepline()
@@ -1017,15 +1053,19 @@ class Island:
 		for uvedge in merged_uvedges:
 			uvedge.edge.is_main_cut = False
 		
-		# join other's data on self
+		# include all trasformed vertices as mine
 		self.verts.update(phantoms.values())
 		
-		for uvvertex in phantoms.values():
-			present = self.uvverts_by_id.get(uvvertex.vertex.index)
+		# update the uvverts_by_id dictionary
+		for source, target in phantoms.items():
+			present = self.uvverts_by_id.get(target.vertex.index)
 			if not present:
-				self.uvverts_by_id[uvvertex.vertex.index] = [uvvertex]
+				self.uvverts_by_id[target.vertex.index] = [target]
 			else:
-				present.append(uvvertex)
+				if target not in present:
+					present.append(target)
+				if source in present:
+					present.remove(source)
 		
 		# re-link uvedges and uvfaces to their transformed locations
 		for uvedge in other.edges:
@@ -1033,6 +1073,10 @@ class Island:
 			uvedge.va = phantoms[uvedge.va]
 			uvedge.vb = phantoms[uvedge.vb]
 			uvedge.update()
+		if is_merged_mine:
+			for uvedge in self.edges:
+				uvedge.va = phantoms.get(uvedge.va, uvedge.va)
+				uvedge.vb = phantoms.get(uvedge.vb, uvedge.vb)
 		self.edges.update(other.edges)
 		
 		for uvface in other.faces:
@@ -1040,6 +1084,11 @@ class Island:
 			uvface.verts = [phantoms[uvvertex] for uvvertex in uvface.verts]
 			uvface.uvvertex_by_id = {index: phantoms[uvvertex] for index, uvvertex in uvface.uvvertex_by_id.items()}
 			uvface.flipped ^= flipped
+		if is_merged_mine:
+			for uvface in self.faces:
+				if any(uvvertex in phantoms for uvvertex in uvface.verts):
+					uvface.verts = [phantoms.get(uvvertex, uvvertex) for uvvertex in uvface.verts]
+					uvface.uvvertex_by_id = {index: phantoms.get(uvvertex, uvvertex) for index, uvvertex in uvface.uvvertex_by_id.items()}
 		self.faces.extend(other.faces)
 		
 		self.boundary_sorted = [uvedge for uvedge in chain(self.boundary_sorted, other.boundary_sorted) if uvedge not in merged_uvedges]
@@ -1167,11 +1216,6 @@ class UVVertex:
 			self.co=(M.Vector(vector)).xy
 			self.vertex=vertex
 		self.tup = tuple(self.co)
-	def __hash__(self):
-		if self.vertex:
-			return self.vertex.index
-		else:
-			return hash(self.co.x) ^ hash(self.co.y) # this is dirty: hash of such UVVertex can change
 	def __str__(self):
 		if self.vertex:
 			return "UV "+str(self.vertex.index)+" ["+strf(self.co.x)+", "+strf(self.co.y)+"]"
