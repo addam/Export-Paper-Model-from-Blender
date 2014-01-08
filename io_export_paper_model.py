@@ -30,6 +30,8 @@
 # why does UVVertex copy its position in constructor?
 # is it necessary to keep island.boundary_sorted sorted? Could save some time
 # remember selected objects before baking, except selected to active
+# islands with default names should be excluded while matching
+# add 'estimated number of pages' to the export UI
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -223,7 +225,8 @@ class Unfolder:
 			
 		text_height = 12/(printable_size.y*ppm) if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
 		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, title_height=text_height) # Scale everything so that page height is 1
-		self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)
+		from cProfile import runctx
+		runctx("self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)", globals(), locals())
 		
 		if properties.output_type != 'NONE':
 			# bake an image and save it as a PNG to disk or into memory
@@ -467,143 +470,55 @@ class Mesh:
 		return largest_ratio
 	
 	def fit_islands(self, aspect_ratio):
-		"""Move islands so that they fit into pages, based on their bounding boxes"""
-		#this algorithm is not optimal, but cool enough
-		#it handles with two basic domains:
-		#list of Points: they describe all sensible free rectangle area available on the page (one rectangle per Point)
-		#Boundaries: linked list of points around the used area and the page - makes many calculations a lot easier
-		page_size=M.Vector((aspect_ratio, 1))
-		class Boundary:
-			"""Generic point in usable boundary defined by rectangles and borders of the page"""
-			def __init__(self, x, y):
-				self.previous=None
-				self.next=None
-				self.point=None
-				self.x=x
-				self.y=y
-			def __rshift__(self, next):
-				"""Connect another Boundary after this one."""
-				if next and next.next and ((next.x<self.x and next.next.x>next.x) or (next.y<self.y and next.next.y>next.y)):
-					self >> next.next
-				elif next is not self:
-					self.next=next
-					if next:
-						next.previous=self
-				return self
-		class Point:
-			"""A point on the boundary we may want to attach a rectangle to"""
-			def __init__(self, boundary, points):
-				self.points=points
-				points.append(self)
-				self.boundary=boundary
-				boundary.point=self
-				self.previous=boundary.previous
-				self.next=boundary.next
-				#if we are an outer corner...
-				if boundary.previous and boundary.previous.y<boundary.y:
-					current=self.previous
-					while current: #go along the boundary to left up
-						if current.y > boundary.y:
-							self.boundary=Boundary(current.x, boundary.y)
-							current.previous >> self.boundary
-							self.boundary >> current
-							break
-						current=current.previous
-				elif boundary.next and boundary.next.x < boundary.x:
-					current=self.next
-					while current: #go along the boundary to right down
-						if current.x > boundary.y:
-							self.boundary=Boundary(boundary.x, current.y)
-							current.previous >> self.boundary
-							self.boundary >> current
-							break
-						current=current.next
-				#calculate the maximal rectangle that can fit here
-				self.area=M.Vector((0,0))
-				current=self.previous
-				while current: #go along the boundary to left up
-					if current.x > self.boundary.x:
-						self.area.y=current.y-self.boundary.y
+		"""Move islands so that they fit onto pages, based on their bounding boxes"""
+		page_size = M.Vector((aspect_ratio, 1))
+		#sort islands by their diagonal... just a guess
+		remaining_islands = sorted(self.islands, reverse=True, key=lambda island: island.bounding_box.length_squared)
+		page_num = 1
+		def try_emplace(island, page, page_size, stops_x, stops_y):
+			obstacles = list(page.islands)
+			bbox_x, bbox_y = island.bounding_box.xy
+			for x in stops_x:
+				if x + bbox_x > page_size.x:
+					break
+				for y in stops_y:
+					if y + bbox_y > page_size.y:
 						break
-					current=current.previous
-				current=self.next
-				while current: #go along the boundary to right down
-					if current.y > self.boundary.y:
-						self.area.x=current.x-self.boundary.x
-						break
-					current=current.next
-				self.niceness=self.area.x*self.area.y
-			def add_island(self, island):
-				"""Attach an island to this point and update all affected neighbourhood."""
-				island.pos = M.Vector((self.boundary.x, self.boundary.y))
-				#you have to draw this if you want to get it
-				a=Boundary(island.pos.x, island.pos.y+island.bounding_box.y)
-				b=Boundary(island.pos.x+island.bounding_box.x, island.pos.y+island.bounding_box.y)
-				c=Boundary(island.pos.x+island.bounding_box.x, island.pos.y)
-				a >> b
-				b >> c
-				if self.previous:
-					self.previous.next >> self.next.previous #note: they don't have to be the same. They are rather the closest obstacles
-					self.previous >> a
-				c >> self.next.previous
-				Point(a, self.points)
-				Point(c, self.points)
-				#update all points whose area overlaps this island
-				current=self.previous
-				while current and current.x<self.boundary.x:
-					if current.point:
-						if current.point.area.x+current.x > self.boundary.x:
-							current.point.area.x=self.boundary.x-current.x
-					current=current.previous
-				current=self.next
-				while current and current.y<self.boundary.y:
-					if current.point:
-						if current.point.area.y+current.y > self.boundary.y:
-							current.point.area.y=self.boundary.y-current.y
-					current=current.next
-				#If we have no reference to the rest of the boundary, let us rest in peace
-				if (not self.previous or self.previous.next is not self) and \
-					(not self.next or self.next.previous is not self):
-						self.points.remove(self)
-			def __str__(self):
-				return "Point at "+str(self.boundary.x)+" "+str(self.boundary.y)+" of available area "+str(self.area)
-		#TODO: at first, it should cut all islands that are too big to fit the page
-		#TODO: there should be a list of points off the boundary that are created from pairs of open edges
-		largest_island_ratio = self.largest_island_ratio(page_size) 
-		if largest_island_ratio > 1:
-			raise UnfoldError("An island is too big to fit to the page size. To make the export possible, scale the object down "+strf(largest_island_ratio)+" times.")
-		islands=list(self.islands)
-		#sort islands by their ugliness (we need an ugly expression to treat ugliness correctly)
-		islands.sort(reverse = True, key = lambda island: island.bounding_box.x**2 + island.bounding_box.y**2 + (island.bounding_box.x-island.bounding_box.y)**2)
-		remaining_count=len(islands)
-		page_num=1
-		while remaining_count > 0:
+					for i, obstacle in enumerate(obstacles):
+						if x + bbox_x > obstacle.pos.x and   \
+						   obstacle.pos.x + obstacle.bounding_box.x > x and \
+						   y + bbox_y > obstacle.pos.y and   \
+						   obstacle.pos.y + obstacle.bounding_box.y > y:
+							if i > 0:
+								# just a stupid guess to make subsequent searches faster
+								obstacles[:i+1] = [obstacles[i]] + obstacles[:i]
+							break
+					else:
+						island.pos.xy = x, y
+						page.islands.add(island)
+						stops_x.append(x + island.bounding_box.x)
+						stops_y.append(y + island.bounding_box.y)
+						return True
+			return False
+		
+		def drop_portion(stops, border, divisor):
+			stops.sort()
+			distances = [right - left for left, right in zip(stops, chain(stops[1:], [border]))]
+			quantile = sorted(distances)[len(distances) // divisor]
+			return [stop for stop, distance in zip(stops, distances) if distance >= quantile]
+		
+		while remaining_islands:
 			#create a new page and try to fit as many islands onto it as possible
-			page=Page(page_num)
-			page_num+=1
-			points=list()
-			#We start with the whole page
-			a=Boundary(page_size.x, page_size.y)
-			b=Boundary(0, page_size.y)
-			c=Boundary(0, 0)
-			d=Boundary(page_size.x, 0)
-			e=Boundary(page_size.x, page_size.y)
-			a >> b
-			b >> c
-			c >> d
-			d >> e
-			Point(c, points)
-			for island in islands:
-				if not island.is_placed:
-					for point in points:
-						#test if it would fit to this point
-						if island.bounding_box.x <= point.area.x and island.bounding_box.y <= point.area.y:
-							point.add_island(island)
-							island.is_placed = True
-							page.add(island)
-							remaining_count -= 1
-							break
-					points.sort(key=lambda point: point.niceness) #ugly points first (to get rid of them)
+			page = Page(page_num)
+			page_num += 1
+			stops_x, stops_y = [0], [0]
+			for island in remaining_islands:
+				try_emplace(island, page, page_size, stops_x, stops_y)
+				if len(stops_x)**2 > 2*len(self.islands) + 100:
+					# if overwhelmed with stops, drop half of them
+					stops_x = drop_portion(stops_x, page_size.x, 4)
+					stops_y = drop_portion(stops_y, page_size.y, 4)
+			remaining_islands = [island for island in remaining_islands if island not in page.islands]	
 			self.pages.append(page)
 	
 	def save_uv(self, aspect_ratio=1, separate_image=False, tex=None): #page_size is in pixels
@@ -1200,11 +1115,9 @@ class Island:
 class Page:
 	"""Container for several Islands"""
 	def __init__(self, num=1):
-		self.islands=list()
-		self.name="page"+str(num)
+		self.islands = set()
+		self.name = "page{}".format(num)
 		self.image_path = None
-	def add(self, island):
-		self.islands.append(island)
 
 class UVVertex:
 	"""Vertex in 2D"""
