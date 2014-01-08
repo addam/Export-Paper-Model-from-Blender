@@ -225,8 +225,7 @@ class Unfolder:
 			
 		text_height = 12/(printable_size.y*ppm) if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
 		self.mesh.finalize_islands(scale_factor=scale / printable_size.y, title_height=text_height) # Scale everything so that page height is 1
-		from cProfile import runctx
-		runctx("self.mesh.fit_islands(aspect_ratio = printable_size.x / printable_size.y)", globals(), locals())
+		self.mesh.fit_islands(aspect_ratio=printable_size.x / printable_size.y)
 		
 		if properties.output_type != 'NONE':
 			# bake an image and save it as a PNG to disk or into memory
@@ -471,51 +470,62 @@ class Mesh:
 	
 	def fit_islands(self, aspect_ratio):
 		"""Move islands so that they fit onto pages, based on their bounding boxes"""
-		page_size = M.Vector((aspect_ratio, 1))
-		#sort islands by their diagonal... just a guess
-		remaining_islands = sorted(self.islands, reverse=True, key=lambda island: island.bounding_box.length_squared)
-		page_num = 1
-		def try_emplace(island, page, page_size, stops_x, stops_y):
-			obstacles = list(page.islands)
+		
+		def try_emplace(island, page_islands, page_size, stops_x, stops_y, occupied_cache):
+			"""Tries to put island to each pair from stops_x, stops_y
+			and checks if it overlaps with any islands present on the page.
+			Returns True and positions the given island on success."""
 			bbox_x, bbox_y = island.bounding_box.xy
 			for x in stops_x:
 				if x + bbox_x > page_size.x:
-					break
+					continue
 				for y in stops_y:
-					if y + bbox_y > page_size.y:
-						break
-					for i, obstacle in enumerate(obstacles):
-						if x + bbox_x > obstacle.pos.x and   \
+					if y + bbox_y > page_size.y or (x, y) in occupied_cache:
+						continue
+					for i, obstacle in enumerate(page_islands):
+						# if this obstacle overlaps with the island, try another stop
+						if x + bbox_x > obstacle.pos.x and \
 						   obstacle.pos.x + obstacle.bounding_box.x > x and \
-						   y + bbox_y > obstacle.pos.y and   \
+						   y + bbox_y > obstacle.pos.y and \
 						   obstacle.pos.y + obstacle.bounding_box.y > y:
+							if x >= obstacle.pos.x and y >= obstacle.pos.y:
+								occupied_cache.add((x, y))
+							# just a stupid heuristic to make subsequent searches faster
 							if i > 0:
-								# just a stupid guess to make subsequent searches faster
-								obstacles[:i+1] = [obstacles[i]] + obstacles[:i]
+								page_islands[1:i+1] = page_islands[:i]
+								page_islands[0] = obstacle
 							break
 					else:
+						# if no obstacle called break, this position is okay
 						island.pos.xy = x, y
-						page.islands.add(island)
-						stops_x.append(x + island.bounding_box.x)
-						stops_y.append(y + island.bounding_box.y)
+						page_islands.append(island)
+						stops_x.append(x + bbox_x)
+						stops_y.append(y + bbox_y)
 						return True
 			return False
 		
 		def drop_portion(stops, border, divisor):
 			stops.sort()
-			distances = [right - left for left, right in zip(stops, chain(stops[1:], [border]))]
+			# distance from left neighbor to the right one, excluding the first stop
+			distances = [right - left for left, right in zip(stops, chain(stops[2:], [border]))]
 			quantile = sorted(distances)[len(distances) // divisor]
-			return [stop for stop, distance in zip(stops, distances) if distance >= quantile]
+			return [stop for stop, distance in zip(stops, chain([quantile], distances)) if distance >= quantile]
+		
+		page_size = M.Vector((aspect_ratio, 1))
+		# sort islands by their diagonal... just a guess
+		remaining_islands = sorted(self.islands, reverse=True, key=lambda island: island.bounding_box.length_squared)
+		page_num = 1
 		
 		while remaining_islands:
-			#create a new page and try to fit as many islands onto it as possible
+			# create a new page and try to fit as many islands onto it as possible
 			page = Page(page_num)
 			page_num += 1
+			occupied_cache = set()
 			stops_x, stops_y = [0], [0]
 			for island in remaining_islands:
-				try_emplace(island, page, page_size, stops_x, stops_y)
-				if len(stops_x)**2 > 2*len(self.islands) + 100:
-					# if overwhelmed with stops, drop half of them
+				try_emplace(island, page.islands, page_size, stops_x, stops_y, occupied_cache)
+				# if overwhelmed with stops, drop a quarter of them
+				if len(stops_x)**2 > 4 * len(self.islands) + 100:
 					stops_x = drop_portion(stops_x, page_size.x, 4)
 					stops_y = drop_portion(stops_y, page_size.y, 4)
 			remaining_islands = [island for island in remaining_islands if island not in page.islands]	
@@ -1115,7 +1125,7 @@ class Island:
 class Page:
 	"""Container for several Islands"""
 	def __init__(self, num=1):
-		self.islands = set()
+		self.islands = list()
 		self.name = "page{}".format(num)
 		self.image_path = None
 
