@@ -948,7 +948,7 @@ class Island:
 				if partner is not uvedge:
 					# TODO: make sure that this code is okay
 					paired_a, paired_b = phantoms.get(partner.vb, partner.vb), phantoms.get(partner.va, partner.va)
-					if partner.uvface.flipped != uvedge.uvface.flipped:
+					if (partner.uvface.flipped ^ flipped) != uvedge.uvface.flipped:
 						paired_a, paired_b = paired_b, paired_a
 					if phantoms.get(uvedge.va, uvedge.va) is paired_a and phantoms.get(uvedge.vb, uvedge.vb) is paired_b:
 						merged_uvedges.update((uvedge, partner))
