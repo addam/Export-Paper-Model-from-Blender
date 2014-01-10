@@ -512,6 +512,8 @@ class Mesh:
 			return [stop for stop, distance in zip(stops, chain([quantile], distances)) if distance >= quantile]
 		
 		page_size = M.Vector((aspect_ratio, 1))
+		if any(island.bounding_box.x > page_size.x or island.bounding_box.y > page_size.y for island in self.islands):
+			raise UnfoldError("An island is too big to fit onto page of the given size. Either downscale the model or find and split that island manually.\nExport failed, sorry.")
 		# sort islands by their diagonal... just a guess
 		remaining_islands = sorted(self.islands, reverse=True, key=lambda island: island.bounding_box.length_squared)
 		page_num = 1
