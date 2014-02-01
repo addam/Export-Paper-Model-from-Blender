@@ -310,7 +310,7 @@ class Mesh:
 				edge.calculate_angle()
 	
 	def generate_cuts(self, page_size, priority_effect):
-		"""Cut the mesh so that it will be unfoldable."""
+		"""Cut the mesh so that it can be unfolded to a flat net."""
 		
 		twisted_faces = [face for face in self.faces.values() if face.is_twisted()]
 		if twisted_faces:
@@ -1404,10 +1404,10 @@ class SVG:
 					f.write("</g>")
 				f.write("</svg>")
 
-class MakeUnfoldable(bpy.types.Operator):
+class Unfold(bpy.types.Operator):
 	"""Blender Operator: unfold the selected object."""
-	bl_idname = "mesh.make_unfoldable"
-	bl_label = "Make Unfoldable"
+	bl_idname = "mesh.unfold"
+	bl_label = "Unfold"
 	bl_description = "Mark seams so that the mesh can be exported as a paper model"
 	bl_options = {'REGISTER', 'UNDO'}
 	edit = bpy.props.BoolProperty(name="", description="", default=False, options={'HIDDEN'})
@@ -1687,7 +1687,7 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
 		
 		col = layout.column(align=True)
 		col.label("Customization:")
-		col.operator("mesh.make_unfoldable")
+		col.operator("mesh.unfold")
 		
 		row = layout.row(align=True)
 		row.operator("mesh.mark_seam", text="Mark Seam").clear = False
@@ -1738,7 +1738,7 @@ class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
 			#layout.prop(sce.paper_model, "display_labels", icon='RESTRICT_VIEW_OFF')
 		else:
 			layout.label(text="Not unfolded")
-			layout.box().label("Use the 'Make Unfoldable' tool")
+			layout.box().label("Use the 'Unfold' tool")
 		sub = layout.column(align=True)
 		sub.active = bool(mesh and mesh.paper_island_list)
 		sub.prop(sce.paper_model, "display_islands", icon='RESTRICT_VIEW_OFF')
