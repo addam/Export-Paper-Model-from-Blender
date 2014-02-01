@@ -1471,6 +1471,26 @@ class Unfold(bpy.types.Operator):
 		sce.paper_model.display_islands = recall_display_islands
 		return {'FINISHED'}
 
+class ClearAllSeams(bpy.types.Operator):
+	"""Blender Operator: clear all seams of the active Mesh and all its unfold data"""
+	bl_idname = "mesh.clear_all_seams"
+	bl_label = "Clear All Seams"
+	bl_description = "Clear all the seams and unfolded islands of the active object"
+
+	@classmethod
+	def poll(cls, context):
+		return context.active_object and context.active_object.type == 'MESH'
+	
+	def execute(self, context):
+		ob = context.active_object
+		mesh = ob.data
+		
+		for edge in mesh.edges:
+			edge.use_seam = False
+		mesh.paper_island_list.clear()
+		
+		return {'FINISHED'}
+	
 def page_size_preset_changed(self, context):
 	"""Update the actual document size to correct values"""
 	if self.page_size_preset == 'A4':
@@ -1689,9 +1709,12 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
 		col.label("Customization:")
 		col.operator("mesh.unfold")
 		
-		row = layout.row(align=True)
-		row.operator("mesh.mark_seam", text="Mark Seam").clear = False
-		row.operator("mesh.mark_seam", text="Clear Seam").clear = True
+		if context.mode == 'EDIT_MESH':
+			row = layout.row(align=True)
+			row.operator("mesh.mark_seam", text="Mark Seam").clear = False
+			row.operator("mesh.mark_seam", text="Clear Seam").clear = True
+		else:
+			layout.operator("mesh.clear_all_seams")
 		
 		layout.prop(sce.paper_model, "scale", text="Model Scale: 1")
 		
