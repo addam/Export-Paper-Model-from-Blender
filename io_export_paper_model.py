@@ -19,7 +19,6 @@
 
 #### FIXME:
 # Island.join: size limit: bounding box: rightmost vertex must be explicitly calculated
-# Island.join: is_below: using assertion to do necessary calculations is illegal
 
 #### TODO:
 # sanitize the constructors so that they don't edit their parent object
@@ -848,7 +847,7 @@ class Island:
 			def __init__(self):
 				self.children = blist()
 			
-			def add(self, item, cmp = is_below):
+			def add(self, item, cmp=is_below):
 				low = 0; high = len(self.children)
 				while low < high:
 					mid = (low + high) // 2
@@ -858,17 +857,20 @@ class Island:
 						high = mid
 				# check for intersections
 				if low > 0:
-					assert cmp(self.children[low-1], item)
+					in_order = cmp(self.children[low-1], item)
+					assert in_order
 				if low < len(self.children):
-					assert not cmp(self.children[low], item)
+					in_order = not cmp(self.children[low], item)
+					assert in_order
 				self.children.insert(low, item)
 			
-			def remove(self, item, cmp = is_below):
+			def remove(self, item, cmp=is_below):
 				index = self.children.index(item)
 				self.children.pop(index)
 				if index > 0 and index < len(self.children):
 					# check for intersection
-					assert not cmp(self.children[index], self.children[index-1])
+					in_order = not cmp(self.children[index], self.children[index-1])
+					assert in_order
 		
 		def root_find(value, tree):
 			"""Find the root of a given value in a forest-like dictionary
