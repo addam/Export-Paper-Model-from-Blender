@@ -62,23 +62,24 @@ import bpy, bgl
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain
+from math import pi
 
-try:
-	from math import pi
-except ImportError:
-	pi = 3.141592653589783
 try:
 	from blist import blist
 except ImportError:
 	blist = list
 
-default_priority_effect={
+default_priority_effect = {
 	'CONVEX': 0.5,
 	'CONCAVE': 1,
 	'LENGTH': -0.05}
 
-strf="{:.3f}".format
-first_letters = lambda text: (text[match.start()] for match in first_letters.pattern.finditer(text))
+strf = "{:.3f}".format
+
+def first_letters(text):
+	"""Iterator over the first letter of each word"""
+	for match in first_letters.pattern.finditer(text):
+		yield text[match.start()]
 first_letters.pattern = re_compile("(?<!\w)[\w]")
 
 def sign(a):
@@ -124,6 +125,7 @@ def pairs(sequence):
 	yield this, first
 
 def argmax_pair(array, key):
+	"""Find an (unordered) pair of indices that maximize the given function"""
 	l = len(array)
 	mi, mj, m = None, None, None
 	for i in range(l):
@@ -134,7 +136,7 @@ def argmax_pair(array, key):
 	return mi, mj
 
 def fitting_matrix(v1, v2):
-	"""Matrix that rotates v1 to the same direction as v2"""
+	"""Get a matrix that rotates v1 to the same direction as v2"""
 	return (1/v1.length_squared)*M.Matrix((
 		(+v1.x*v2.x +v1.y*v2.y, +v1.y*v2.x -v1.x*v2.y),
 		(+v1.x*v2.y -v1.y*v2.x, +v1.x*v2.x +v1.y*v2.y)))
@@ -156,7 +158,7 @@ def z_up_matrix(n):
 
 def create_blank_image(image_name, dimensions, alpha=1):
 	"""Create a new image and assign white color to all its pixels"""
-	image_name = image_name[:20]
+	image_name = image_name[:64]
 	image = bpy.data.images.new(image_name, dimensions.x, dimensions.y, alpha=True)
 	if image.users > 0:
 		raise UnfoldError("There is something wrong with the material of the model. Please report this on the BlenderArtists forum. Export failed.")
@@ -210,9 +212,9 @@ class Unfolder:
 	def save(self, properties):
 		"""Export the document."""
 		# Note about scale: input is direcly in blender length. finalize_islands multiplies everything by scale/page_size.y, SVG object multiplies everything by page_size.y*ppm.
-		filepath=properties.filepath
-		if filepath[-4:]==".svg" or filepath[-4:]==".png":
-			filepath=filepath[0:-4]
+		filepath = properties.filepath
+		if filepath.lower().endswith((".svg", ".png")):
+			filepath = filepath[0:-4]
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # page size in meters
 		printable_size = page_size - 2 * properties.output_margin * M.Vector((1, 1)) # printable area size in meters
 		scale = bpy.context.scene.unit_settings.scale_length / properties.scale
@@ -1795,7 +1797,7 @@ bpy.utils.register_class(IslandList)
 def display_tabs(self, context):
 	if context.active_object.type != 'MESH':
 		return
-	from bmesh import new as BMesh
+	import BMesh()
 	bm = BMesh()
 	ob = context.active_object
 	bm.from_mesh(ob.data)
