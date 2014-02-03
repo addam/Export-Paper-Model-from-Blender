@@ -1719,11 +1719,6 @@ class VIEW3D_PT_paper_model(bpy.types.Panel):
 		row.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
 		row.prop(sce.paper_model, "islands_alpha", slider=True)
 		
-		#sub = box.column(align=True)
-		#sub.active = bool(mesh.paper_island_list)
-		#sub.prop(sce.paper_model, "display_tabs", icon='RESTRICT_VIEW_OFF')
-		#sub.prop(sce.paper_model, "display_tabs_size")
-		
 		layout.operator("export_mesh.paper_model")
 	
 def display_islands(self, context):
@@ -1791,81 +1786,10 @@ class IslandList(bpy.types.PropertyGroup):
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
-#flip = bm.edges.layers.int.new("flip_tab")
-#bmm.edges[0][bmm.edges.layers.int["flip_tab"]]
 
-def display_tabs(self, context):
-	if context.active_object.type != 'MESH':
-		return
-	import BMesh()
-	bm = BMesh()
-	ob = context.active_object
-	bm.from_mesh(ob.data)
-	size = context.scene.paper_model.display_tabs_size
-	
-	# remember the original value
-	polygonMode = bgl.Buffer(bgl.GL_INT, 2)
-	bgl.glGetIntegerv(bgl.GL_POLYGON_MODE, polygonMode)
-	try:
-		bgl.glMatrixMode(bgl.GL_PROJECTION)
-		perspMatrix = context.space_data.region_3d.perspective_matrix
-		perspBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), perspMatrix.transposed())
-		bgl.glLoadMatrixf(perspBuff)
-		bgl.glMatrixMode(bgl.GL_MODELVIEW)
-		bgl.glLoadIdentity()
-		#objectBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), ob.matrix_world.transposed())
-		#bgl.glLoadMatrixf(objectBuff)
-		bgl.glEnable(bgl.GL_POLYGON_OFFSET_LINE)
-		bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
-		bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
-		bgl.glColor3f(1.0, 0.2, 0.0)
-		
-		matworld = ob.matrix_world
-		lin = matworld.to_3x3()
-		inv = lin.inverted()
-		invt = inv.transposed()
-		
-		for edge in bm.edges:
-			# TODO: skip uncut edges whatsoever
-			for loop in edge.link_loops[1:]: # TODO: use custom edge layer to skip the correct one
-				face = loop.face
-				va, vb = loop.vert, loop.link_loop_next.vert
-				
-				# TODO: decrease the size and increase the shear depending on the face's shape
-				shear = lin*(vb.co - va.co)
-				offset = -shear.cross(invt*face.normal)
-				shear = shear * size / shear.length
-				offset = offset * size / offset.length
-				
-				bgl.glBegin(bgl.GL_POLYGON)
-				bgl.glVertex3f(*(matworld*va.co))
-				bgl.glVertex3f(*(matworld*vb.co))
-				bgl.glVertex3f(*(matworld*vb.co + offset - shear))
-				bgl.glVertex3f(*(matworld*va.co + offset + shear))
-				bgl.glEnd()
-	
-	finally:
-		bgl.glPolygonOffset(0.0, 0.0)
-		bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, polygonMode[0])
-		del polygonMode
-		bgl.glDisable(bgl.GL_POLYGON_OFFSET_LINE)
-		bgl.glLoadIdentity()
-display_tabs.handle = None
-
-def display_tabs_changed(self, context):
-	if self.display_tabs:
-		if not display_tabs.handle:
-			display_tabs.handle = bpy.types.SpaceView3D.draw_handler_add(display_tabs, (self, context), 'WINDOW', 'POST_VIEW')
-	else:
-		if display_tabs.handle:
-			bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
-			display_tabs.handle = None
-	
 class PaperModelSettings(bpy.types.PropertyGroup):
 	display_islands = bpy.props.BoolProperty(name="Highlight selected island", options={'SKIP_SAVE'}, update=display_islands_changed)
 	islands_alpha = bpy.props.FloatProperty(name="Opacity", description="Opacity of island highlighting", min=0.0, max=1.0, default=0.3)
-	display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", options={'SKIP_SAVE'}, update=display_tabs_changed)
-	display_tabs_size = bpy.props.FloatProperty(name="Tab Size", description="Size of the sticker tabs in the 3D View", min=0.0, soft_max=0.2, default=0.05, unit='LENGTH')
 	limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Limit island size by page dimensions")
 	output_size_x = bpy.props.FloatProperty(name="Page Width", description="Maximal width of an island", default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
 	output_size_y = bpy.props.FloatProperty(name="Page Height", description="Maximal height of an island", default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
@@ -1887,9 +1811,6 @@ def unregister():
 	if display_islands.handle:
 		bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
 		display_islands.handle = None
-	if display_tabs.handle:
-		bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
-		display_tabs.handle = None
 
 if __name__ == "__main__":
 	register()
