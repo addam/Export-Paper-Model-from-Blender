@@ -42,7 +42,7 @@ bl_info = {
 	"name": "Export Paper Model",
 	"author": "Addam Dominec",
 	"version": (0, 9),
-	"blender": (2, 66, 0),
+	"blender": (2, 70, 0),
 	"location": "File > Export > Paper Model",
 	"warning": "",
 	"description": "Export printable net of the active mesh",
@@ -110,9 +110,6 @@ def angle2d(direction, unit_vector = M.Vector((1,0))):
 		direction = direction.to_2d()
 	angle = unit_vector.angle_signed(direction)
 	return angle
-
-def cross_product(v1, v2):
-	return v1.x*v2.y - v1.y*v2.x
 
 def pairs(sequence):
 	"""Generate consecutive pairs throughout the given sequence; at last, it gives elements last, first."""
@@ -809,7 +806,7 @@ class Island:
 		class Intersection(Exception):
 			pass
 			
-		def is_below(self: UVEdge, other: UVEdge, cross=cross_product):
+		def is_below(self: UVEdge, other: UVEdge):
 			if self is other:
 				return False
 			if self.top < other.bottom:
@@ -822,16 +819,16 @@ class Island:
 				return False
 			self_vector = self.max.co - self.min.co
 			min_to_min = other.min.co - self.min.co
-			cross_b1 = cross(self_vector, min_to_min)
-			cross_b2 = cross(self_vector, (other.max.co - self.min.co))
+			cross_b1 = self_vector.cross(min_to_min)
+			cross_b2 = self_vector.cross(other.max.co - self.min.co)
 			if cross_b1 != 0 or cross_b2 != 0:
 				if cross_b1 >= 0 and cross_b2 >= 0:
 					return True
 				if cross_b1 <= 0 and cross_b2 <= 0:
 					return False
 			other_vector = other.max.co - other.min.co
-			cross_a1 = cross(other_vector, -min_to_min)
-			cross_a2 = cross(other_vector, (self.max.co - other.min.co))
+			cross_a1 = other_vector.cross(-min_to_min)
+			cross_a2 = other_vector.cross(self.max.co - other.min.co)
 			if cross_a1 != 0 or cross_a2 != 0:
 				if cross_a1 <= 0 and cross_a2 <= 0:
 					return True
@@ -839,6 +836,7 @@ class Island:
 					return False
 			if cross_a1 == cross_b1 == cross_a2 == cross_b2 == 0:
 				# an especially ugly special case -- lines lying on top of each other. Try to resolve instead of throwing an intersection:
+				# FIXME: why is here the 'or' clause? It breaks antisymmetry.
 				return self.min.tup < other.min.tup or (self.min.co+self.max.co).to_tuple() < (other.min.co+other.max.co).to_tuple()
 			raise Intersection()
 
@@ -1030,11 +1028,11 @@ class Island:
 	
 	def convex_hull(self) -> list:
 		"""Returns a list of Vectors that forms the best fitting convex polygon."""
-		def make_convex_curve(points, cross=cross_product):
+		def make_convex_curve(points):
 			"""Remove points from given vert list so that the result poly is a convex curve (works for both top and bottom)."""
 			result = list()
 			for point in points:
-				while len(result) >= 2 and cross((point - result[-1]), (result[-1] - result[-2])) >= 0:
+				while len(result) >= 2 and (point - result[-1]).cross(result[-1] - result[-2]) >= 0:
 					result.pop()
 				result.append(point)
 			return result
