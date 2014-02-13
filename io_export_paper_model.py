@@ -168,14 +168,6 @@ def create_texface_material(name):
 	mat.use_face_texture = True
 	return mat
 
-def tempfile_name(directory, suffix, exists):
-	"""Generate a nonexistant filename"""
-	for mod in (10, 100, 1000, 10000):
-		name = str(id(tempfile_name) % mod + 1) + suffix
-		if not exists("{}/{}".format(directory, name)):
-			return name
-	raise UnfoldError("Could not save a temporary file. Export failed.")
-
 class UnfoldError(ValueError):
 	pass
 
@@ -243,7 +235,6 @@ class Unfolder:
 				rd.bake_type = 'TEXTURE'
 				rd.use_bake_selected_to_active = False
 				recall_materials = [slot.material for slot in self.ob.material_slots]
-				print(recall_materials)
 				mat = create_texface_material("unfolder_temp")
 				for slot in self.ob.material_slots:
 					slot.material = mat
@@ -308,10 +299,6 @@ class Mesh:
 	
 	def generate_cuts(self, page_size, priority_effect):
 		"""Cut the mesh so that it can be unfolded to a flat net."""
-		
-		twisted_faces = [face for face in self.faces.values() if face.is_twisted()]
-		if twisted_faces:
-			print ("There are {} twisted face(s) with ids: {}".format(len(twisted_faces), ", ".join(str(face.index) for face in twisted_faces)))
 		
 		# warning: this constructor modifies its parameter (face)
 		islands = {Island(face) for face in self.faces.values()}
@@ -572,37 +559,37 @@ class Mesh:
 				bpy.data.images.remove(image)
 	
 	def save_separate_images(self, tex, scale, filepath, do_embed=False):
+		from os.path import dirname, basename
 		if do_embed:
-			try:
-				from base64 import encodebytes as b64encode
-				from os import remove
-				from os.path import dirname, lexists
-			except ImportError:
-				raise UnfoldError("Embedding images is not supported on your system")
-			image_dir = dirname(filepath)
+			import tempfile
+			import base64
 		else:
+			from os import mkdir
+			image_dir = "{path}/{directory}".format(path=dirname(filepath), directory=basename(filepath))
 			try:
-				from os import mkdir
-				from os.path import dirname, basename
-				image_dir = "{path}/{directory}".format(path=dirname(filepath), directory=basename(filepath))
 				mkdir(image_dir)
-			except ImportError:
-				raise UnfoldError("This method of image packing is not supported by your system.")
 			except OSError:
-				pass #image_dir already existed
+				pass # image_dir already existed
 		
 		texfaces = tex.data
-		# omitting this causes a "Circular reference in texture stack" error
+		# omitting these 3 lines causes a "Circular reference in texture stack" error
 		for island in self.islands:
 			for uvface in island.faces:
 				texfaces[uvface.face.index].image = None
 		
 		for i, island in enumerate(self.islands, 1):
-			image_name = tempfile_name(image_dir, ".temp.png", lexists) if do_embed else "{} isl{}".format(self.data.name[:15], i)
+			if do_embed:
+				tempfile_manager = tempfile.NamedTemporaryFile("rb", suffix=".png")
+				image_path = tempfile_manager.name
+				image_name = basename(tempfile_manager.name)
+			else:
+				image_path = "{}/island{}.png".format(image_dir, i)
+				image_name = "{} isl{}".format(self.data.name[:15], i)
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-			image.filepath_raw = image_path = "{}/{}".format(image_dir, image_name) if do_embed else "{}/island{}.png".format(image_dir, i)
+			image.filepath_raw = image_path
 			for uvface in island.faces:
-				texfaces[uvface.face.index].image=image
+				texfaces[uvface.face.index].image = image
+			
 			try:
 				bpy.ops.object.bake_image()
 				image.save()
@@ -613,9 +600,8 @@ class Mesh:
 				bpy.data.images.remove(image)
 			
 			if do_embed:
-				with open(image_path, 'rb') as imgf:
-					island.embedded_image = b64encode(imgf.read()).decode('ascii')
-				remove(image_path)
+				with tempfile_manager as imgfile:
+					island.embedded_image = base64.encodebytes(imgfile.read()).decode('ascii')
 			else:
 				island.image_path = image_path
 
@@ -657,7 +643,7 @@ class Edge:
 		self.length=self.vect.length
 		self.faces=list()
 		self.uvedges=list() # important: if self.main_faces is set, then self.uvedges[:2] must be the ones corresponding to self.main_faces.
-		                    # It is assured at the time of finishing mesh.generate_cuts
+							# It is assured at the time of finishing mesh.generate_cuts
 		
 		self.force_cut = bool(edge.use_seam) # such edges will always be cut
 		self.main_faces = None # two faces that can be connected in the island
