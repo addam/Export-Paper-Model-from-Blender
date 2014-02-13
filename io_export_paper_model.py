@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 # ##### BEGIN GPL LICENSE BLOCK #####
 #
-#  This program is free software; you can redistribute it and/or
-#  modify it under the terms of the GNU General Public License
-#  as published by the Free Software Foundation; either version 2
-#  of the License, or (at your option) any later version.
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 2 of the License, or
+#  (at your option) any later version.
 #
 #  This program is distributed in the hope that it will be useful,
-#  but WITHOUT ANY WARRANTY; without even the implied warranty of
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  but without any warranty; without even the implied warranty of
+#  merchantability or fitness for a particular purpose.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with this program; if not, write to the Free Software Foundation,
-#  Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 # ##### END GPL LICENSE BLOCK #####
 
 #### FIXME:
 # Island.join: size limit: bounding box: rightmost vertex must be explicitly calculated
-# Island.join: is_below: using assertion to do necessary calculations is illegal
 
 #### TODO:
 # sanitize the constructors so that they don't edit their parent object
@@ -62,23 +60,24 @@ import bpy, bgl
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain
+from math import pi
 
-try:
-	from math import pi
-except ImportError:
-	pi = 3.141592653589783
 try:
 	from blist import blist
 except ImportError:
 	blist = list
 
-default_priority_effect={
+default_priority_effect = {
 	'CONVEX': 0.5,
 	'CONCAVE': 1,
 	'LENGTH': -0.05}
 
-strf="{:.3f}".format
-first_letters = lambda text: (text[match.start()] for match in first_letters.pattern.finditer(text))
+strf = "{:.3f}".format
+
+def first_letters(text):
+	"""Iterator over the first letter of each word"""
+	for match in first_letters.pattern.finditer(text):
+		yield text[match.start()]
 first_letters.pattern = re_compile("(?<!\w)[\w]")
 
 def sign(a):
@@ -121,6 +120,7 @@ def pairs(sequence):
 	yield this, first
 
 def argmax_pair(array, key):
+	"""Find an (unordered) pair of indices that maximize the given function"""
 	l = len(array)
 	mi, mj, m = None, None, None
 	for i in range(l):
@@ -131,7 +131,7 @@ def argmax_pair(array, key):
 	return mi, mj
 
 def fitting_matrix(v1, v2):
-	"""Matrix that rotates v1 to the same direction as v2"""
+	"""Get a matrix that rotates v1 to the same direction as v2"""
 	return (1/v1.length_squared)*M.Matrix((
 		(+v1.x*v2.x +v1.y*v2.y, +v1.y*v2.x -v1.x*v2.y),
 		(+v1.x*v2.y -v1.y*v2.x, +v1.x*v2.x +v1.y*v2.y)))
@@ -153,7 +153,7 @@ def z_up_matrix(n):
 
 def create_blank_image(image_name, dimensions, alpha=1):
 	"""Create a new image and assign white color to all its pixels"""
-	image_name = image_name[:20]
+	image_name = image_name[:64]
 	image = bpy.data.images.new(image_name, dimensions.x, dimensions.y, alpha=True)
 	if image.users > 0:
 		raise UnfoldError("There is something wrong with the material of the model. Please report this on the BlenderArtists forum. Export failed.")
@@ -207,9 +207,9 @@ class Unfolder:
 	def save(self, properties):
 		"""Export the document."""
 		# Note about scale: input is direcly in blender length. finalize_islands multiplies everything by scale/page_size.y, SVG object multiplies everything by page_size.y*ppm.
-		filepath=properties.filepath
-		if filepath[-4:]==".svg" or filepath[-4:]==".png":
-			filepath=filepath[0:-4]
+		filepath = properties.filepath
+		if filepath.lower().endswith((".svg", ".png")):
+			filepath = filepath[0:-4]
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y)) # page size in meters
 		printable_size = page_size - 2 * properties.output_margin * M.Vector((1, 1)) # printable area size in meters
 		scale = bpy.context.scene.unit_settings.scale_length / properties.scale
@@ -844,7 +844,7 @@ class Island:
 			def __init__(self):
 				self.children = blist()
 			
-			def add(self, item, cmp = is_below):
+			def add(self, item, cmp=is_below):
 				low = 0; high = len(self.children)
 				while low < high:
 					mid = (low + high) // 2
@@ -854,17 +854,20 @@ class Island:
 						high = mid
 				# check for intersections
 				if low > 0:
-					assert cmp(self.children[low-1], item)
+					in_order = cmp(self.children[low-1], item)
+					assert in_order
 				if low < len(self.children):
-					assert not cmp(self.children[low], item)
+					in_order = not cmp(self.children[low], item)
+					assert in_order
 				self.children.insert(low, item)
 			
-			def remove(self, item, cmp = is_below):
+			def remove(self, item, cmp=is_below):
 				index = self.children.index(item)
 				self.children.pop(index)
 				if index > 0 and index < len(self.children):
 					# check for intersection
-					assert not cmp(self.children[index], self.children[index-1])
+					in_order = not cmp(self.children[index], self.children[index-1])
+					assert in_order
 		
 		def root_find(value, tree):
 			"""Find the root of a given value in a forest-like dictionary
@@ -1722,12 +1725,6 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
 		sub.active = sce.paper_model.limit_by_page
 		sub.prop(sce.paper_model, "output_size_x")
 		sub.prop(sce.paper_model, "output_size_y")
-		
-		#sub = box.column(align=True)
-		#sub.active = bool(mesh.paper_island_list)
-		#sub.prop(sce.paper_model, "display_tabs", icon='RESTRICT_VIEW_OFF')
-		#sub.prop(sce.paper_model, "display_tabs_size")
-		
 
 
 class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
@@ -1766,7 +1763,6 @@ class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
 		row = sub.row(align=True)
 		row.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
 		row.prop(sce.paper_model, "islands_alpha", slider=True)
-
 
 def display_islands(self, context):
 	#TODO: save the vertex positions and don't recalculate them always
@@ -1833,81 +1829,10 @@ class IslandList(bpy.types.PropertyGroup):
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
-#flip = bm.edges.layers.int.new("flip_tab")
-#bmm.edges[0][bmm.edges.layers.int["flip_tab"]]
 
-def display_tabs(self, context):
-	if context.active_object.type != 'MESH':
-		return
-	from bmesh import new as BMesh
-	bm = BMesh()
-	ob = context.active_object
-	bm.from_mesh(ob.data)
-	size = context.scene.paper_model.display_tabs_size
-	
-	# remember the original value
-	polygonMode = bgl.Buffer(bgl.GL_INT, 2)
-	bgl.glGetIntegerv(bgl.GL_POLYGON_MODE, polygonMode)
-	try:
-		bgl.glMatrixMode(bgl.GL_PROJECTION)
-		perspMatrix = context.space_data.region_3d.perspective_matrix
-		perspBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), perspMatrix.transposed())
-		bgl.glLoadMatrixf(perspBuff)
-		bgl.glMatrixMode(bgl.GL_MODELVIEW)
-		bgl.glLoadIdentity()
-		#objectBuff = bgl.Buffer(bgl.GL_FLOAT, (4,4), ob.matrix_world.transposed())
-		#bgl.glLoadMatrixf(objectBuff)
-		bgl.glEnable(bgl.GL_POLYGON_OFFSET_LINE)
-		bgl.glPolygonOffset(0, -10) #offset in Zbuffer to remove flicker
-		bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
-		bgl.glColor3f(1.0, 0.2, 0.0)
-		
-		matworld = ob.matrix_world
-		lin = matworld.to_3x3()
-		inv = lin.inverted()
-		invt = inv.transposed()
-		
-		for edge in bm.edges:
-			# TODO: skip uncut edges whatsoever
-			for loop in edge.link_loops[1:]: # TODO: use custom edge layer to skip the correct one
-				face = loop.face
-				va, vb = loop.vert, loop.link_loop_next.vert
-				
-				# TODO: decrease the size and increase the shear depending on the face's shape
-				shear = lin*(vb.co - va.co)
-				offset = -shear.cross(invt*face.normal)
-				shear = shear * size / shear.length
-				offset = offset * size / offset.length
-				
-				bgl.glBegin(bgl.GL_POLYGON)
-				bgl.glVertex3f(*(matworld*va.co))
-				bgl.glVertex3f(*(matworld*vb.co))
-				bgl.glVertex3f(*(matworld*vb.co + offset - shear))
-				bgl.glVertex3f(*(matworld*va.co + offset + shear))
-				bgl.glEnd()
-	
-	finally:
-		bgl.glPolygonOffset(0.0, 0.0)
-		bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, polygonMode[0])
-		del polygonMode
-		bgl.glDisable(bgl.GL_POLYGON_OFFSET_LINE)
-		bgl.glLoadIdentity()
-display_tabs.handle = None
-
-def display_tabs_changed(self, context):
-	if self.display_tabs:
-		if not display_tabs.handle:
-			display_tabs.handle = bpy.types.SpaceView3D.draw_handler_add(display_tabs, (self, context), 'WINDOW', 'POST_VIEW')
-	else:
-		if display_tabs.handle:
-			bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
-			display_tabs.handle = None
-	
 class PaperModelSettings(bpy.types.PropertyGroup):
 	display_islands = bpy.props.BoolProperty(name="Highlight selected island", options={'SKIP_SAVE'}, update=display_islands_changed)
 	islands_alpha = bpy.props.FloatProperty(name="Opacity", description="Opacity of island highlighting", min=0.0, max=1.0, default=0.3)
-	display_tabs = bpy.props.BoolProperty(name="Display sticking tabs", options={'SKIP_SAVE'}, update=display_tabs_changed)
-	display_tabs_size = bpy.props.FloatProperty(name="Tab Size", description="Size of the sticker tabs in the 3D View", min=0.0, soft_max=0.2, default=0.05, unit='LENGTH')
 	limit_by_page = bpy.props.BoolProperty(name="Limit Island Size", description="Do not create islands larger than given dimensions")
 	output_size_x = bpy.props.FloatProperty(name="Width", description="Maximal width of an island", default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
 	output_size_y = bpy.props.FloatProperty(name="Height", description="Maximal height of an island", default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
@@ -1929,9 +1854,6 @@ def unregister():
 	if display_islands.handle:
 		bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
 		display_islands.handle = None
-	if display_tabs.handle:
-		bpy.types.SpaceView3D.draw_handler_remove(display_tabs.handle, 'WINDOW')
-		display_tabs.handle = None
 
 if __name__ == "__main__":
 	register()
