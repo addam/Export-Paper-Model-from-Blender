@@ -134,11 +134,12 @@ def z_up_matrix(n):
 def create_blank_image(image_name, dimensions, alpha=1):
 	"""Create a new image and assign white color to all its pixels"""
 	image_name = image_name[:64]
-	image = bpy.data.images.new(image_name, dimensions.x, dimensions.y, alpha=True)
+	width, height = int(dimensions.x), int(dimensions.y)
+	image = bpy.data.images.new(image_name, width, height, alpha=True)
 	if image.users > 0:
 		raise UnfoldError("There is something wrong with the material of the model. "
 			"Please report this on the BlenderArtists forum. Export failed.")
-	image.pixels = [1, 1, 1, alpha] * int(dimensions.x * dimensions.y)
+	image.pixels = [1, 1, 1, alpha] * (width * height)
 	image.file_format = 'PNG'
 	return image
 
@@ -718,7 +719,7 @@ class Face:
 		# calculate the face normal explicitly
 		if len(self.verts) == 3:
 			# normal of a triangle can be calculated directly
-			self.normal = (self.verts[1] - self.verts[0]).cross(self.verts[2] - self.verts[0]).normalized()
+			self.normal = (self.verts[1].co - self.verts[0].co).cross(self.verts[2].co - self.verts[0].co).normalized()
 		else:
 			# Newell's method
 			nor = M.Vector((0, 0, 0))
@@ -978,7 +979,9 @@ class Island:
 			if not present:
 				self.uvverts_by_id[target.vertex.index] = [target]
 			else:
-				present.discard(source)
+				# emulation of set behavior... sorry, it is faster
+				if source in present:
+					present.remove(source)
 				if target not in present:
 					present.append(target)
 		
