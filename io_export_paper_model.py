@@ -825,7 +825,7 @@ class Island:
 			if cross_a1 == cross_b1 == cross_a2 == cross_b2 == 0:
 				# an especially ugly special case -- lines lying on top of each other
 				# Try to resolve instead of throwing an intersection:
-				return self.min.tup < other.min.tup or (self.min.tep == other.min.tup and
+				return self.min.tup < other.min.tup or (self.min.tup == other.min.tup and
 					self.max.tup < other.max.tup)
 			raise Intersection()
 
