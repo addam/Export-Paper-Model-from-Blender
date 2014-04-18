@@ -659,6 +659,9 @@ class Edge:
 	def calculate_angle(self):
 		"""Calculate the angle between the main faces"""
 		face_a, face_b = self.main_faces
+		if face_a.normal.length_squared == 0 or face_b.normal.length_squared == 0:
+			self.angle = -3 # just a very sharp angle
+			return
 		# correction if normals are flipped
 		a_is_clockwise = ((face_a.verts.index(self.va) - face_a.verts.index(self.vb)) % len(face_a.verts) == 1)
 		b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) == 1)
