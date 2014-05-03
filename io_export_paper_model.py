@@ -26,7 +26,7 @@
 # SVG object doesn't need a 'pure_net' argument in constructor
 # maybe Island would do with a list of points as well, set of vertices makes things more complicated
 # why does UVVertex copy its position in constructor?
-# is it necessary to keep island.boundary_sorted sorted? Could save some time
+# is it necessary to keep island.boundary sorted? Could save some time
 # remember selected objects before baking, except selected to active
 # islands with default names should be excluded while matching
 # add 'estimated number of pages' to the export UI
@@ -338,7 +338,7 @@ class Mesh:
 			# construct a linked list from each island's boundary
 			# uvedge.neighbor_right is clockwise = forward = via uvedge.vb if not uvface.flipped
 			neighbor_lookup, conflicts = dict(), dict()
-			for uvedge in island.boundary_sorted:
+			for uvedge in island.boundary:
 				uvvertex = uvedge.va if uvedge.uvface.flipped else uvedge.vb
 				if uvvertex not in neighbor_lookup:
 					neighbor_lookup[uvvertex] = uvedge
@@ -348,7 +348,7 @@ class Mesh:
 					else:
 						conflicts[uvvertex].append(uvedge)
 			
-			for uvedge in island.boundary_sorted:
+			for uvedge in island.boundary:
 				uvvertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
 				if uvvertex not in conflicts:
 					uvedge.neighbor_right = neighbor_lookup[uvvertex]
@@ -780,8 +780,7 @@ class Island:
 		# speedup for Island.join
 		self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
 		# UVEdges on the boundary, sorted left to right
-		self.boundary_sorted = list(self.edges)
-		self.boundary_sorted.sort(reverse=True, key=lambda uvedge: uvedge.min.tup)
+		self.boundary = list(self.edges)
 		
 		self.scale = 1
 		self.markers = list()
@@ -897,13 +896,12 @@ class Island:
 		# check the size of the resulting island
 		if size_limit:
 			# first check: bounding box
-			# FIXME! this is wrong: self.boundary_sorted[-1].max.co.x need _not_ be the rightmost vertex
-			bbox_width = max(self.boundary_sorted[-1].max.co.x, max(vertex.co.x for vertex in phantoms)) - min(self.boundary_sorted[0].min.co.x, min(vertex.co.x for vertex in phantoms))
-			bbox_height = max(max(seg.top for seg in self.boundary_sorted), max(vertex.co.y for vertex in phantoms)) - min(min(seg.bottom for seg in self.boundary_sorted), min(vertex.co.y for vertex in phantoms))
+			bbox_width = max(max(seg.max.co.x for seg in self.boundary), max(vertex.co.x for vertex in phantoms)) - min(min(seg.min.co.x for seg in self.boundary), min(vertex.co.x for vertex in phantoms))
+			bbox_height = max(max(seg.top for seg in self.boundary), max(vertex.co.y for vertex in phantoms)) - min(min(seg.bottom for seg in self.boundary), min(vertex.co.y for vertex in phantoms))
 			if min(bbox_width, bbox_height)**2 > size_limit.x**2 + size_limit.y**2:
 				return False
 			if (bbox_width > size_limit.x or bbox_height > size_limit.y) and (bbox_height > size_limit.x or bbox_width > size_limit.y):
-				# further checks (FIXME!)
+				# further checks (TODO!)
 				# for the time being, just throw this piece away
 				return False
 		
@@ -937,7 +935,7 @@ class Island:
 				phantoms[uvs[source]] = uvs[target]
 				is_merged_mine |= (source < len_mine)  # remember that a vertex of this island has been merged
 		
-		for uvedge in (chain(self.boundary_sorted, other.boundary_sorted) if is_merged_mine else other.boundary_sorted):
+		for uvedge in (chain(self.boundary, other.boundary) if is_merged_mine else other.boundary):
 			for partner in uvedge.edge.uvedges:
 				if partner is not uvedge:
 					# TODO: make sure that this code is okay
@@ -952,12 +950,12 @@ class Island:
 			raise UnfoldError("Export failed. Please report this error, including the model if you can.")
 		
 		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self)
-			for uvedge in other.boundary_sorted if uvedge not in merged_uvedges]
+			for uvedge in other.boundary if uvedge not in merged_uvedges]
 		# TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary sorted as well
 		
 		# check for self-intersections: create event list
 		sweepline = Sweepline()
-		events_add = [uvedge for uvedge in chain(boundary_other, self.boundary_sorted)]
+		events_add = [uvedge for uvedge in chain(boundary_other, self.boundary)]
 		events_remove = list(events_add)
 		events_add.sort(reverse=True, key=lambda uvedge: uvedge.min.tup)
 		events_remove.sort(reverse=True, key=lambda uvedge: uvedge.max.tup)
@@ -1015,9 +1013,8 @@ class Island:
 						for index, uvvertex in uvface.uvvertex_by_id.items()}
 		self.faces.extend(other.faces)
 		
-		self.boundary_sorted = [uvedge for uvedge in
-			chain(self.boundary_sorted, other.boundary_sorted) if uvedge not in merged_uvedges]
-		self.boundary_sorted.sort(key=lambda uvedge: uvedge.min.tup)
+		self.boundary = [uvedge for uvedge in
+			chain(self.boundary, other.boundary) if uvedge not in merged_uvedges]
 		
 		# everything seems to be OK
 		return True
