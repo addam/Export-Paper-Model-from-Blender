@@ -16,9 +16,6 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
-#### FIXME:
-# Island.join: size limit: bounding box: rightmost vertex must be explicitly calculated
-
 #### TODO:
 # sanitize the constructors so that they don't edit their parent object
 # apply island rotation and position before exporting, to simplify things
@@ -156,8 +153,9 @@ class Unfolder:
 
 	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
 		"""Create the islands of the net"""
+		page_size = page_size / scale if page_size else None
 		self.mesh.generate_cuts(page_size, priority_effect)
-		self.mesh.finalize_islands(scale_factor=scale)
+		self.mesh.finalize_islands(scale_factor=scale, aspect_ratio = 210/297)
 		self.mesh.enumerate_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
@@ -194,9 +192,10 @@ class Unfolder:
 			self.mesh.generate_numbers_alone(properties.sticker_width * printable_size.y / scale)
 			
 		text_height = 12 / (printable_size.y*ppm) if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
+		aspect_ratio = printable_size.x / printable_size.y
 		# finalizing islands will scale everything so that the page height is 1
-		self.mesh.finalize_islands(scale_factor=scale/printable_size.y, title_height=text_height)
-		self.mesh.fit_islands(aspect_ratio=printable_size.x / printable_size.y)
+		self.mesh.finalize_islands(scale_factor=scale/printable_size.y, title_height=text_height, aspect_ratio=aspect_ratio)
+		self.mesh.fit_islands(aspect_ratio=aspect_ratio)
 		
 		if properties.output_type != 'NONE':
 			# bake an image and save it as a PNG to disk or into memory
@@ -437,12 +436,12 @@ class Mesh:
 			island.number = num
 			island.generate_label()
 	
-	def finalize_islands(self, scale_factor=1, title_height=0):
+	def finalize_islands(self, scale_factor=1, title_height=0, aspect_ratio=1):
 		for island in self.islands:
 			island.apply_scale(scale_factor)
 			if title_height:
 				island.title = "[{}] {}".format(island.abbreviation, island.label)
-			island.generate_bounding_box(space_at_bottom=title_height)
+			island.generate_bounding_box(space_at_bottom=title_height, aspect_ratio=aspect_ratio)
 
 	def largest_island_ratio(self, page_size):
 		return max(max(island.bounding_box.x / page_size.x, island.bounding_box.y / page_size.y) for island in self.islands)
@@ -492,7 +491,7 @@ class Mesh:
 		
 		page_size = M.Vector((aspect_ratio, 1))
 		if any(island.bounding_box.x > page_size.x or island.bounding_box.y > page_size.y for island in self.islands):
-			raise UnfoldError("An island is too big to fit onto page of the given size."
+			raise UnfoldError("An island is too big to fit onto page of the given size. "
 				"Either downscale the model or find and split that island manually.\n"
 				"Export failed, sorry.")
 		# sort islands by their diagonal... just a guess
@@ -1041,11 +1040,11 @@ class Island:
 		# remove left and right ends and concatenate the lists to form a polygon in the correct order
 		return points_top[:-1] + points_bottom[:-1]
 	
-	def generate_bounding_box(self, space_at_bottom=0):
-		"""Find the rotation for the optimal bounding box and calculate its dimensions."""
+	def generate_bounding_box(self, space_at_bottom=0, aspect_ratio=1):
+		"""Calculate the rotation for a quite good bounding box"""
 		def bounding_box_score(size):
 			"""Calculate the score - the bigger result, the better box."""
-			return 1 / (size.x*size.y)
+			return 1/max(size.x, size.y * aspect_ratio)
 		points_convex = self.convex_hull()
 		if not points_convex:
 			raise UnfoldError("Topology error. Try to remove doubled vertices and faces.")
@@ -1069,11 +1068,6 @@ class Island:
 				best_box = angle, box, bottom_left
 				best_score = score
 		angle, box, offset = best_box
-		# switch the box so that it is taller than wider
-		if box.x > box.y:
-			angle += pi / 2
-			offset = M.Vector((-offset.y - box.y, offset.x))
-			box = box.yx
 		box.y += space_at_bottom
 		offset.y -= space_at_bottom
 		self.angle = angle
@@ -1559,6 +1553,7 @@ class Unfold(bpy.types.Operator):
 	
 	def execute(self, context):
 		sce = bpy.context.scene
+		settings = sce.paper_model
 		recall_mode = context.object.mode
 		bpy.ops.object.mode_set(mode='OBJECT')
 		recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
@@ -1566,10 +1561,10 @@ class Unfold(bpy.types.Operator):
 		ob = context.active_object
 		mesh = context.active_object.data
 		
-		page_size = M.Vector((0.210, 0.297)) if sce.paper_model.limit_by_page else None
+		page_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
 		priority_effect = {'CONVEX': self.priority_effect_convex,'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
 		self.unfolder = unfolder = Unfolder(ob)
-		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap, priority_effect=priority_effect)
+		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
 		if mesh.paper_island_list:
 			self.unfolder.copy_island_names(mesh.paper_island_list)
 
@@ -1793,8 +1788,9 @@ class ExportPaperModel(bpy.types.Operator):
 		except:
 			raise
 	
-	def get_scale_ratio(self, sce, margin=0):
-		if min(self.output_size_x, self.output_size_y) <= 2 * self.output_margin:
+	def get_scale_ratio(self, sce):
+		margin = self.output_margin + self.sticker_width + 1e-5
+		if min(self.output_size_x, self.output_size_y) <= 2 * margin:
 			return False
 		output_inner_size = M.Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin))
 		ratio = self.unfolder.mesh.largest_island_ratio(output_inner_size)
@@ -1807,7 +1803,7 @@ class ExportPaperModel(bpy.types.Operator):
 		self.object = context.active_object
 		self.unfolder = Unfolder(self.object)
 		self.unfolder.prepare(create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
-		scale_ratio = self.get_scale_ratio(sce, self.output_margin + self.sticker_width + 1e-5)
+		scale_ratio = self.get_scale_ratio(sce)
 		if scale_ratio > 1:
 			self.scale *= scale_ratio
 		wm = context.window_manager
@@ -1820,9 +1816,9 @@ class ExportPaperModel(bpy.types.Operator):
 		layout.prop(self.properties, "scale", text="Scale: 1")
 		scale_ratio = self.get_scale_ratio(context.scene)
 		if scale_ratio > 1:
-			layout.label(text="An island is {:.3f}x bigger than page".format(scale_ratio), icon="ERROR")
+			layout.label(text="An island is roughly {:.1f}x bigger than page".format(scale_ratio), icon="ERROR")
 		elif scale_ratio > 0:
-			layout.label(text="Largest island is 1/{:.3f}".format(1 / scale_ratio))
+			layout.label(text="Largest island is roughly 1/{:.1f} of page".format(1 / scale_ratio))
 		layout.prop(self.properties, "do_create_uvmap")
 
 		box = layout.box()
