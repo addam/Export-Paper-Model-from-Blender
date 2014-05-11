@@ -612,7 +612,7 @@ class Vertex:
 	def __init__(self, bpy_vertex, mesh=None, matrix=1):
 		self.data = bpy_vertex
 		self.index = bpy_vertex.index
-		self.co = bpy_vertex.co * matrix
+		self.co = matrix * bpy_vertex.co
 		self.edges = list()
 		self.uvs = list()
 	
