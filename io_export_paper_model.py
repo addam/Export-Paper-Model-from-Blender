@@ -262,6 +262,7 @@ class Unfolder:
 
 class Mesh:
 	"""Wrapper for Bpy Mesh"""
+	
 	def __init__(self, mesh, matrix):
 		self.verts = dict()
 		self.edges = dict()
@@ -376,8 +377,9 @@ class Mesh:
 	
 	def mark_cuts(self):
 		"""Mark cut edges in the original mesh so that the user can see"""
-		for edge in self.edges.values():
-			edge.data.use_seam = len(edge.uvedges) > 1 and edge.is_main_cut
+		for bpy_edge in self.data.edges:
+			edge = self.edges[bpy_edge.index]
+			bpy_edge.use_seam = len(edge.uvedges) > 1 and edge.is_main_cut
 	
 	def generate_stickers(self, default_width, do_create_numbers=True):
 		"""Add sticker faces where they are needed."""
@@ -609,8 +611,9 @@ class Mesh:
 
 class Vertex:
 	"""BPy Vertex wrapper"""
+	__slots__ = ('index', 'co', 'edges', 'uvs')
+
 	def __init__(self, bpy_vertex, mesh=None, matrix=1):
-		self.data = bpy_vertex
 		self.index = bpy_vertex.index
 		self.co = matrix * bpy_vertex.co
 		self.edges = list()
@@ -625,8 +628,11 @@ class Vertex:
 
 class Edge:
 	"""Wrapper for BPy Edge"""
+	__slots__ = ('va', 'vb', 'faces', 'main_faces', 'uvedges',
+		'vect', 'length', 'angle',
+		'is_main_cut', 'force_cut', 'priority')
+
 	def __init__(self, edge, mesh, matrix=1):
-		self.data = edge
 		self.va = mesh.verts[edge.vertices[0]]
 		self.vb = mesh.verts[edge.vertices[1]]
 		self.vect = self.vb.co - self.va.co
@@ -709,8 +715,10 @@ class Edge:
 
 class Face:
 	"""Wrapper for BPy Face"""
+	__slots__ = ('index', 'edges', 'verts', 'uvface',
+		'loop_start', 'area', 'normal')
+
 	def __init__(self, bpy_face, mesh, matrix=1):
-		self.data = bpy_face
 		self.index = bpy_face.index
 		self.edges = list()
 		self.verts = [mesh.verts[i] for i in bpy_face.vertices]
@@ -751,6 +759,14 @@ class Face:
 
 
 class Island:
+	"""Part of the net to be exported"""
+	__slots__ = ('faces', 'edges', 'verts', 'fake_verts',
+		'uvverts_by_id', 'boundary',
+		'pos', 'offset', 'angle', 'is_placed', 'bounding_box',
+		'image_path', 'embedded_image',
+		'number', 'label', 'abbreviation', 'title', 'is_inside_out',
+		'scale', 'markers', 'sticker_numbering')
+	
 	def __init__(self, face=None):
 		"""Create an Island from a single Face"""
 		self.faces = list()
@@ -1120,6 +1136,8 @@ class Island:
 
 class Page:
 	"""Container for several Islands"""
+	__slots__ = ('islands', 'name', 'image_path')
+
 	def __init__(self, num=1):
 		self.islands = list()
 		self.name = "page{}".format(num)
@@ -1128,6 +1146,8 @@ class Page:
 
 class UVVertex:
 	"""Vertex in 2D"""
+	__slots__ = ('co', 'vertex', 'tup')
+
 	def __init__(self, vector, vertex=None):
 		if isinstance(vector, UVVertex):
 			# Copy constructor
@@ -1151,6 +1171,10 @@ class UVEdge:
 	"""Edge in 2D"""
 	# Every UVEdge is attached to only one UVFace
 	# UVEdges are doubled as needed because they both have to point clockwise around their faces
+	__slots__ = ('va', 'vb', 'island', 'uvface', 'edge',
+		'min', 'max', 'bottom', 'top',
+		'neighbor_left', 'neighbor_right')
+
 	def __init__(self, vertex1: UVVertex, vertex2: UVVertex, island: Island, uvface=None, edge=None):
 		self.va = vertex1
 		self.vb = vertex2
@@ -1175,6 +1199,8 @@ class UVEdge:
 
 class UVFace:
 	"""Face in 2D"""
+	__slots__ = ('verts', 'edges', 'face', 'island', 'flipped', 'uvvertex_by_id')
+
 	def __init__(self, face: Face, island: Island):
 		"""Creace an UVFace from a Face and a fixed edge.
 		face: Face to take coordinates from
@@ -1205,11 +1231,13 @@ class UVFace:
 
 class Marker:
 	"""Various graphical elements linked to the net, but not being parts of the mesh"""
-	def __init__(self):
-		self.bounds = list()
+	pass
 
 
 class Arrow(Marker):
+	"""Arrow denoting the number of the edge it points to"""
+	__slots__ = ('bounds', 'center', 'rot', 'text', 'size')
+
 	def __init__(self, uvedge, size, index):
 		self.text = str(index)
 		edge = (uvedge.vb.co - uvedge.va.co) if not uvedge.uvface.flipped else (uvedge.va.co - uvedge.vb.co)
@@ -1224,6 +1252,8 @@ class Arrow(Marker):
 
 class Sticker(Marker):
 	"""Sticker face"""
+	__slots__ = ('bounds', 'center', 'rot', 'text', 'width', 'vertices')
+
 	def __init__(self, uvedge, default_width=0.005, index=None, target_island=None):
 		"""Sticker is directly attached to the given UVEdge"""
 		first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
@@ -1269,6 +1299,8 @@ class Sticker(Marker):
 
 class NumberAlone(Marker):
 	"""Numbering inside the island describing edges to be sticked"""
+	__slots__ = ('bounds', 'center', 'rot', 'text', 'size')
+
 	def __init__(self, uvedge, index, default_size=0.005):
 		"""Sticker is directly attached to the given UVEdge"""
 		edge = (uvedge.va - uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb - uvedge.va)
@@ -1283,6 +1315,7 @@ class NumberAlone(Marker):
 
 class SVG:
 	"""Simple SVG exporter"""
+
 	def __init__(self, page_size_pixels: M.Vector, scale, style, pure_net=True):
 		"""Initialize document settings.
 		page_size_pixels: document dimensions in pixels
@@ -1517,6 +1550,7 @@ class SVG:
 
 class Unfold(bpy.types.Operator):
 	"""Blender Operator: unfold the selected object."""
+
 	bl_idname = "mesh.unfold"
 	bl_label = "Unfold"
 	bl_description = "Mark seams so that the mesh can be exported as a paper model"
@@ -1593,6 +1627,7 @@ class Unfold(bpy.types.Operator):
 
 class ClearAllSeams(bpy.types.Operator):
 	"""Blender Operator: clear all seams of the active Mesh and all its unfold data"""
+
 	bl_idname = "mesh.clear_all_seams"
 	bl_label = "Clear All Seams"
 	bl_description = "Clear all the seams and unfolded islands of the active object"
@@ -1700,6 +1735,7 @@ bpy.utils.register_class(PaperModelStyle)
 
 class ExportPaperModel(bpy.types.Operator):
 	"""Blender Operator: save the selected object's net and optionally bake its texture"""
+
 	bl_idname = "export_mesh.paper_model"
 	bl_label = "Export Paper Model"
 	bl_description = "Export the selected object's net and optionally bake its texture"
