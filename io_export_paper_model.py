@@ -62,6 +62,11 @@ from itertools import chain
 from math import pi
 
 try:
+	import os.path as os_path
+except ImportError:
+	os_path = None
+
+try:
 	from blist import blist
 except ImportError:
 	blist = list
@@ -559,13 +564,13 @@ class Mesh:
 				bpy.data.images.remove(image)
 	
 	def save_separate_images(self, tex, scale, filepath, do_embed=False):
-		from os.path import dirname, basename
+		assert(os_path)  # check the module was imported
 		if do_embed:
 			import tempfile
 			import base64
 		else:
 			from os import mkdir
-			image_dir = "{path}/{directory}".format(path=dirname(filepath), directory=basename(filepath))
+			image_dir = filepath
 			try:
 				mkdir(image_dir)
 			except OSError:
@@ -582,11 +587,11 @@ class Mesh:
 			if do_embed:
 				tempfile_manager = tempfile.NamedTemporaryFile("rb", suffix=".png")
 				image_path = tempfile_manager.name
-				image_name = basename(tempfile_manager.name)
+				image_name = os_path.basename(tempfile_manager.name)
 				# note: image_path exists by now and Blender will overwrite it;
 				# we will read later from the same file
 			else:
-				image_path = "{}/island{}.png".format(image_dir, i)
+				image_path = os_path.join(image_dir, "island{}.png".format(i))
 				image_name = "{} isl{}".format(self.data.name[:15], i)
 			image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
 			image.filepath_raw = image_path
@@ -1343,6 +1348,13 @@ class SVG:
 		def format_matrix(matrix):
 			return " ".join(" ".join(map(str, column)) for column in matrix)
 		
+		def path_convert(string, relto=os_path.dirname(filename)):
+			assert(os_path)  # check the module was imported
+			string = os_path.relpath(string, relto)
+			if os_path.sep != '/':
+				string = string.replace(os_path.sep, '/')
+			return string
+		
 		styleargs = {name: format_color(getattr(self.style, name)) for name in
 			("outer_color", "outbg_color", "convex_color", "concave_color",
 			"inbg_color", "sticker_fill", "sticker_color", "text_color")}
@@ -1366,7 +1378,8 @@ class SVG:
 					print(self.image_linked_tag.format(
 						pos="{0} {0}".format(self.margin),
 						width=self.page_size.x - 2*self.margin,
-						height=self.page_size.y - 2*self.margin, path=page.image_path),
+						height=self.page_size.y - 2*self.margin,
+						path=path_convert(page.image_path)),
 						file=f)
 				if len(page.islands) > 1:
 					print("<g>", file=f)
@@ -1377,7 +1390,7 @@ class SVG:
 							pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))),
 							width=island.bounding_box.x*self.scale,
 							height=island.bounding_box.y*self.scale,
-							path=island.image_path),
+							path=path_convert(island.image_path)),
 							file=f)
 					elif island.embedded_image:
 						print(self.image_embedded_tag.format(
@@ -1466,7 +1479,7 @@ class SVG:
 					print("</g>", file=f)
 				print("</svg>", file=f)
 	
-	image_linked_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='file://{path}'/>"
+	image_linked_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='{path}'/>"
 	image_embedded_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='data:image/png;base64,"
 	text_tag = "<text transform='translate({x} {y})'><tspan>{label}</tspan></text>"
 	text_scaled_tag = "<text class='scaled' transform='matrix({mat} {pos})'><tspan>{label}</tspan></text>"
