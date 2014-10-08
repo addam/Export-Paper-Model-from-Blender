@@ -160,7 +160,7 @@ class Unfolder:
 		"""Create the islands of the net"""
 		page_size = page_size / scale if page_size else None
 		self.mesh.generate_cuts(page_size, priority_effect)
-		self.mesh.finalize_islands(scale_factor=scale, aspect_ratio = 210/297)
+		self.mesh.finalize_islands(scale_factor=scale, aspect_ratio=210/297) #TODO wtf? should be based on page_size
 		self.mesh.enumerate_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
@@ -356,7 +356,8 @@ class Mesh:
 			for uvedge in island.boundary:
 				uvvertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
 				if uvvertex not in conflicts:
-					uvedge.neighbor_right = neighbor_lookup[uvvertex]
+					# using the 'get' method so as to handle single-connected vertices properly
+					uvedge.neighbor_right = neighbor_lookup.get(uvvertex, uvedge)
 					uvedge.neighbor_right.neighbor_left = uvedge
 				else:
 					conflicts[uvvertex].append(uvedge)
@@ -766,7 +767,7 @@ class Face:
 class Island:
 	"""Part of the net to be exported"""
 	__slots__ = ('faces', 'edges', 'verts', 'fake_verts',
-		'uvverts_by_id', 'boundary',
+		'uvverts_by_id', 'boundary', 'has_safe_geometry',
 		'pos', 'offset', 'angle', 'is_placed', 'bounding_box',
 		'image_path', 'embedded_image',
 		'number', 'label', 'abbreviation', 'title', 'is_inside_out',
@@ -801,6 +802,7 @@ class Island:
 		self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
 		# UVEdges on the boundary, sorted left to right
 		self.boundary = list(self.edges)
+		self.has_safe_geometry = True
 		
 		self.scale = 1
 		self.markers = list()
@@ -815,8 +817,11 @@ class Island:
 		
 		class Intersection(Exception):
 			pass
-			
-		def is_below(self: UVEdge, other: UVEdge):
+		
+		class GeometryError(Exception):
+			pass
+		
+		def is_below(self, other, correct_geometry=True):
 			if self is other:
 				return False
 			if self.top < other.bottom:
@@ -831,27 +836,32 @@ class Island:
 			min_to_min = other.min.co - self.min.co
 			cross_b1 = self_vector.cross(min_to_min)
 			cross_b2 = self_vector.cross(other.max.co - self.min.co)
-			if cross_b1 != 0 or cross_b2 != 0:
-				if cross_b1 >= 0 and cross_b2 >= 0:
-					return True
-				if cross_b1 <= 0 and cross_b2 <= 0:
-					return False
+			if cross_b2 < cross_b1:
+				cross_b1, cross_b2 = cross_b2, cross_b1
+			if cross_b2 > 0 and (cross_b1 > 0 or cross_b1 == 0 and self.is_uvface_upwards()):
+				return True
+			if cross_b1 < 0 and (cross_b2 < 0 or cross_b2 == 0 and not self.is_uvface_upwards()):
+				return False
 			other_vector = other.max.co - other.min.co
 			cross_a1 = other_vector.cross(-min_to_min)
 			cross_a2 = other_vector.cross(self.max.co - other.min.co)
-			if cross_a1 != 0 or cross_a2 != 0:
-				if cross_a1 <= 0 and cross_a2 <= 0:
-					return True
-				if cross_a1 >= 0 and cross_a2 >= 0:
-					return False
+			if cross_a2 < cross_a1:
+				cross_a1, cross_a2 = cross_a2, cross_a1
+			if cross_a2 > 0 and (cross_a1 > 0 or cross_a1 == 0 and other.is_uvface_upwards()):
+				return False
+			if cross_a1 < 0 and (cross_a2 < 0 or cross_a2 == 0 and not other.is_uvface_upwards()):
+				return True
 			if cross_a1 == cross_b1 == cross_a2 == cross_b2 == 0:
-				# an especially ugly special case -- lines lying on top of each other
-				# Try to resolve instead of throwing an intersection:
-				return self.min.tup < other.min.tup or (self.min.tup == other.min.tup and
-					self.max.tup < other.max.tup)
-			raise Intersection()
+				if correct_geometry:
+					raise GeometryError
+				elif self.is_uvface_upwards() == other.is_uvface_upwards():
+					raise Intersection
+			if self.min.tup == other.min.tup or self.max.tup == other.max.tup:
+				return cross_a2 > cross_b1
+			raise Intersection
 
-		class Sweepline:
+		class QuickSweepline:
+			"""Efficient sweepline based on binary search, checking neighbors only"""
 			def __init__(self):
 				self.children = blist()
 			
@@ -865,11 +875,11 @@ class Island:
 						high = mid
 				# check for intersections
 				if low > 0:
-					in_order = cmp(self.children[low-1], item)
-					assert in_order
+					if not cmp(self.children[low-1], item):
+						raise GeometryError
 				if low < len(self.children):
-					in_order = not cmp(self.children[low], item)
-					assert in_order
+					if cmp(self.children[low], item):
+						raise GeometryError
 				self.children.insert(low, item)
 			
 			def remove(self, item, cmp=is_below):
@@ -877,9 +887,33 @@ class Island:
 				self.children.pop(index)
 				if index > 0 and index < len(self.children):
 					# check for intersection
-					in_order = not cmp(self.children[index], self.children[index-1])
-					assert in_order
+					if cmp(self.children[index], self.children[index-1]):
+						raise GeometryError
+
+		class BruteSweepline:
+			"""Safe sweepline which checks all its members pairwise"""
+			def __init__(self):
+				self.children = set()
+			
+			def add(self, item, cmp=is_below):
+				for child in self.children:
+					cmp(item, child, False)
+				self.children.add(item)
+			
+			def remove(self, item, cmp=is_below):
+				self.children.remove(item)
 		
+		def sweep(sweepline, segments):
+			"""Sweep across the segments and raise an exception if necessary"""
+			events_add = list(segments)
+			events_remove = list(events_add)
+			events_add.sort(reverse=True, key=lambda uvedge: uvedge.min.tup)
+			events_remove.sort(reverse=True, key=lambda uvedge: uvedge.max.tup)
+			while events_remove:
+				while events_add and events_add[-1].min.tup <= events_remove[-1].max.tup:
+					sweepline.add(events_add.pop())
+				sweepline.remove(events_remove.pop())
+
 		def root_find(value, tree):
 			"""Find the root of a given value in a forest-like dictionary
 			also updates the dictionary using path compression"""
@@ -928,7 +962,6 @@ class Island:
 		assert edge.vect.length > 0
 		distance_limit = edge.vect.length * epsilon
 		# try and merge UVVertices closer than sqrt(distance_limit)
-		empty = tuple()
 		merged_uvedges = set()
 		
 		# merge all uvvertices that are close enough using a union-find structure
@@ -967,23 +1000,22 @@ class Island:
 						break
 		
 		if uvedge_b not in merged_uvedges:
-			raise UnfoldError("Export failed. Please report this error, including the model if you can.")
+			print("DEBUG: edge {}-{} not merged".format(uvedge_b.edge.va.index, uvedge_b.edge.vb.index))
+			#raise UnfoldError("Export failed. Please report this error, including the model if you can.")
 		
-		boundary_other = [UVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], self)
+		boundary_other = [PhantomUVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], uvedge.uvface.flipped ^ flipped)
 			for uvedge in other.boundary if uvedge not in merged_uvedges]
-		# TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary sorted as well
+		# TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary as well
 		
-		# check for self-intersections: create event list
-		sweepline = Sweepline()
-		events_add = [uvedge for uvedge in chain(boundary_other, self.boundary)]
-		events_remove = list(events_add)
-		events_add.sort(reverse=True, key=lambda uvedge: uvedge.min.tup)
-		events_remove.sort(reverse=True, key=lambda uvedge: uvedge.max.tup)
+		# check for self-intersections
 		try:
-			while events_remove:
-				while events_add and events_add[-1].min.tup <= events_remove[-1].max.tup:
-					sweepline.add(events_add.pop())
-				sweepline.remove(events_remove.pop())
+			try:
+				sweepline = QuickSweepline() if self.has_safe_geometry and other.has_safe_geometry else BruteSweepline()
+				sweep(sweepline, (uvedge for uvedge in chain(boundary_other, self.boundary)))
+				self.has_safe_geometry &= other.has_safe_geometry
+			except GeometryError:
+				sweep(BruteSweepline(), (uvedge for uvedge in chain(boundary_other, self.boundary)))
+				self.has_safe_geometry = False
 		except Intersection:
 			return False
 		
@@ -1180,7 +1212,7 @@ class UVEdge:
 		'min', 'max', 'bottom', 'top',
 		'neighbor_left', 'neighbor_right')
 
-	def __init__(self, vertex1: UVVertex, vertex2: UVVertex, island: Island, uvface=None, edge=None):
+	def __init__(self, vertex1: UVVertex, vertex2: UVVertex, island: Island, uvface, edge):
 		self.va = vertex1
 		self.vb = vertex2
 		self.update()
@@ -1196,10 +1228,29 @@ class UVEdge:
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
 	
+	def is_uvface_upwards(self):
+		return (self.va.tup < self.vb.tup) ^ self.uvface.flipped
+	
 	def __str__(self):
 		return "({} - {})".format(self.va, self.vb)
 	
 	__repr__ = __str__
+
+
+class PhantomUVEdge:
+	"""Temporary 2D Segment for calculations"""
+	__slots__ = ('va', 'vb', 'min', 'max', 'bottom', 'top', 'uvface_upwards')
+
+	def __init__(self, vertex1: UVVertex, vertex2: UVVertex, flip):
+		self.va = vertex1
+		self.vb = vertex2
+		self.min, self.max = (self.va, self.vb) if (self.va.tup < self.vb.tup) else (self.vb, self.va)
+		y1, y2 = self.va.co.y, self.vb.co.y
+		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
+		self.uvface_upwards = (self.va.tup < self.vb.tup) ^ flip
+	
+	def is_uvface_upwards(self):
+		return self.uvface_upwards
 
 
 class UVFace:
@@ -2100,7 +2151,7 @@ class PaperModelSettings(bpy.types.PropertyGroup):
 	islands_alpha = bpy.props.FloatProperty(name="Opacity",
 		description="Opacity of island highlighting", min=0.0, max=1.0, default=0.3)
 	limit_by_page = bpy.props.BoolProperty(name="Limit Island Size",
-		description="Do not create islands larger than given dimensions")
+		description="Do not create islands larger than given dimensions", default=False)
 	output_size_x = bpy.props.FloatProperty(name="Width",
 		description="Maximal width of an island",
 		default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
@@ -2110,6 +2161,8 @@ class PaperModelSettings(bpy.types.PropertyGroup):
 	scale = bpy.props.FloatProperty(name="Scale",
 		description="Divisor of all dimensions when exporting",
 		default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
+	do_ignore_errors = bpy.props.BoolProperty(name="Ignore Errors",
+		description="In case of geometry errors, take a less cautious approach. May produce incorrect output", default=False)
 bpy.utils.register_class(PaperModelSettings)
 
 
