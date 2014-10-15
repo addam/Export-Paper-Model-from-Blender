@@ -28,6 +28,7 @@
 # islands with default names should be excluded while matching
 # add 'estimated number of pages' to the export UI
 # profile QuickSweepline vs. BruteSweepline with/without blist: for which nets is it faster?
+# rotate islands to minimize area -- and change that only if necessary to fill the page size
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -665,7 +666,7 @@ class Edge:
 			self.main_faces = self.faces
 		elif len(self.faces) > 2:
 			# find (with brute force) the pair of indices whose faces have the most similar normals
-			i, j = argmax_pair(self.faces, key=lambda a, b: a.normal.dot(b.normal)) #FIXME: abs(...)
+			i, j = argmax_pair(self.faces, key=lambda a, b: abs(a.normal.dot(b.normal)))
 			self.main_faces = [self.faces[i], self.faces[j]]
 	
 	def calculate_angle(self):
@@ -682,7 +683,7 @@ class Edge:
 			a_is_clockwise ^= face_a.uvface.flipped
 			b_is_clockwise ^= face_b.uvface.flipped
 			is_equal_flip = (face_a.uvface.flipped == face_b.uvface.flipped)
-			# FIXME: this need not be true in _really_ ugly cases: assert(a_is_clockwise != b_is_clockwise)
+			# TODO: maybe this need not be true in _really_ ugly cases: assert(a_is_clockwise != b_is_clockwise)
 		if a_is_clockwise != b_is_clockwise:
 			if (a_is_clockwise == (face_b.normal.cross(face_a.normal).dot(self.vect) > 0)) == is_equal_flip:
 				# the angle is convex
@@ -875,14 +876,6 @@ class Island:
 						low = mid + 1
 					else:
 						high = mid
-				# check for intersections
-				if low > 0:
-					# FIXME: ain't this pointless?
-					if not cmp(self.children[low-1], item):
-						raise GeometryError
-				if low < len(self.children):
-					if cmp(self.children[low], item):
-						raise GeometryError
 				self.children.insert(low, item)
 			
 			def remove(self, item, cmp=is_below):
@@ -973,7 +966,6 @@ class Island:
 				# for the time being, just throw this piece away
 				return False
 		
-		assert edge.vect.length_squared > 0  # FIXME: delete me
 		distance_limit = edge.vect.length_squared * epsilon
 		# try and merge UVVertices closer than sqrt(distance_limit)
 		merged_uvedges = set()
@@ -1023,13 +1015,15 @@ class Island:
 		# TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary as well
 		
 		incidence = {vertex.tup for vertex in phantoms.values()}.intersection(vertex.tup for vertex in self.verts)
-		incidence = {position: list() for position in incidence}  # this is nicer than a defaultdict, in my opinion
+		incidence = {position: list() for position in incidence}  # from now on, 'incidence' is a dict
 		for uvedge in chain(boundary_other, self.boundary):
 			for vertex in (uvedge.va, uvedge.vb):
 				site = incidence.get(vertex.tup)
 				if site is not None:
 					site.append(uvedge)
 		for position, segments in incidence.items():
+			if len(segments) <= 2:
+				continue
 			segments.sort(key=slope_from(position))
 			for right, left in pairs(segments):
 				is_left_ccw = left.is_uvface_upwards() ^ (left.max.tup == position)
@@ -1265,7 +1259,8 @@ class UVEdge:
 	def is_uvface_upwards(self):
 		return (self.va.tup < self.vb.tup) ^ self.uvface.flipped
 	
-	__repr__ = "({0.va} - {0.vb})".format
+	def __repr__(self):
+		return "({0.va} - {0.vb})".format(self)
 
 
 class PhantomUVEdge:
@@ -1281,7 +1276,8 @@ class PhantomUVEdge:
 	def is_uvface_upwards(self):
 		return self.va.tup < self.vb.tup
 
-	__repr__ = "[{0.va} - {0.vb}]".format
+	def __repr__(self):
+		return "[{0.va} - {0.vb}]".format(self)
 
 
 class UVFace:
