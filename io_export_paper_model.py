@@ -27,6 +27,7 @@
 # remember selected objects before baking, except selected to active
 # islands with default names should be excluded while matching
 # add 'estimated number of pages' to the export UI
+# profile QuickSweepline vs. BruteSweepline with/without blist: for which nets is it faster?
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -309,9 +310,9 @@ class Mesh:
 					continue
 				face_a, face_b = edge.main_faces
 				island_a, island_b = face_a.uvface.island, face_b.uvface.island
-				if len(island_b.faces) > len(island_a.faces):
-					island_a, island_b = island_b, island_a
 				if island_a is not island_b:
+					if len(island_b.faces) > len(island_a.faces):
+						island_a, island_b = island_b, island_a
 					if island_a.join(island_b, edge, size_limit=page_size):
 						islands.remove(island_b)
 		
@@ -664,8 +665,8 @@ class Edge:
 			self.main_faces = self.faces
 		elif len(self.faces) > 2:
 			# find (with brute force) the pair of indices whose faces have the most similar normals
-			i, j = argmax_pair(self.faces, key=lambda a, b: a.normal.dot(b.normal))
-			self.main_faces = self.faces[i], self.faces[j]
+			i, j = argmax_pair(self.faces, key=lambda a, b: a.normal.dot(b.normal)) #FIXME: abs(...)
+			self.main_faces = [self.faces[i], self.faces[j]]
 	
 	def calculate_angle(self):
 		"""Calculate the angle between the main faces"""
@@ -681,7 +682,7 @@ class Edge:
 			a_is_clockwise ^= face_a.uvface.flipped
 			b_is_clockwise ^= face_b.uvface.flipped
 			is_equal_flip = (face_a.uvface.flipped == face_b.uvface.flipped)
-			assert(a_is_clockwise != b_is_clockwise)
+			# FIXME: this need not be true in _really_ ugly cases: assert(a_is_clockwise != b_is_clockwise)
 		if a_is_clockwise != b_is_clockwise:
 			if (a_is_clockwise == (face_b.normal.cross(face_a.normal).dot(self.vect) > 0)) == is_equal_flip:
 				# the angle is convex
@@ -800,7 +801,7 @@ class Island:
 		
 		# speedup for Island.join
 		self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
-		# UVEdges on the boundary, sorted left to right
+		# UVEdges on the boundary
 		self.boundary = list(self.edges)
 		self.has_safe_geometry = True
 		
@@ -838,26 +839,27 @@ class Island:
 			cross_b2 = self_vector.cross(other.max.co - self.min.co)
 			if cross_b2 < cross_b1:
 				cross_b1, cross_b2 = cross_b2, cross_b1
-			if cross_b2 > 0 and (cross_b1 > 0 or cross_b1 == 0 and self.is_uvface_upwards()):
+			if cross_b2 > 0 and (cross_b1 > 0 or (cross_b1 == 0 and not self.is_uvface_upwards())):
 				return True
-			if cross_b1 < 0 and (cross_b2 < 0 or cross_b2 == 0 and not self.is_uvface_upwards()):
+			if cross_b1 < 0 and (cross_b2 < 0 or (cross_b2 == 0 and self.is_uvface_upwards())):
 				return False
 			other_vector = other.max.co - other.min.co
 			cross_a1 = other_vector.cross(-min_to_min)
 			cross_a2 = other_vector.cross(self.max.co - other.min.co)
 			if cross_a2 < cross_a1:
 				cross_a1, cross_a2 = cross_a2, cross_a1
-			if cross_a2 > 0 and (cross_a1 > 0 or cross_a1 == 0 and other.is_uvface_upwards()):
+			if cross_a2 > 0 and (cross_a1 > 0 or (cross_a1 == 0 and not other.is_uvface_upwards())):
 				return False
-			if cross_a1 < 0 and (cross_a2 < 0 or cross_a2 == 0 and not other.is_uvface_upwards()):
+			if cross_a1 < 0 and (cross_a2 < 0 or (cross_a2 == 0 and other.is_uvface_upwards())):
 				return True
 			if cross_a1 == cross_b1 == cross_a2 == cross_b2 == 0:
 				if correct_geometry:
 					raise GeometryError
 				elif self.is_uvface_upwards() == other.is_uvface_upwards():
 					raise Intersection
+				return False
 			if self.min.tup == other.min.tup or self.max.tup == other.max.tup:
-				return cross_a2 > cross_b1
+				return cross_a2 > cross_b2
 			raise Intersection
 
 		class QuickSweepline:
@@ -875,6 +877,7 @@ class Island:
 						high = mid
 				# check for intersections
 				if low > 0:
+					# FIXME: ain't this pointless?
 					if not cmp(self.children[low-1], item):
 						raise GeometryError
 				if low < len(self.children):
@@ -894,21 +897,23 @@ class Island:
 			"""Safe sweepline which checks all its members pairwise"""
 			def __init__(self):
 				self.children = set()
+				self.last_min = None, []
+				self.last_max = None, []
 			
 			def add(self, item, cmp=is_below):
 				for child in self.children:
-					cmp(item, child, False)
+					if child.min is not item.min and child.max is not item.max:
+						cmp(item, child, False)
 				self.children.add(item)
 			
-			def remove(self, item, cmp=is_below):
+			def remove(self, item):
 				self.children.remove(item)
-		
+			
 		def sweep(sweepline, segments):
 			"""Sweep across the segments and raise an exception if necessary"""
-			events_add = list(segments)
-			events_remove = list(events_add)
-			events_add.sort(reverse=True, key=lambda uvedge: uvedge.min.tup)
-			events_remove.sort(reverse=True, key=lambda uvedge: uvedge.max.tup)
+			# careful, 'segments' may be a use-once iterator
+			events_add = sorted(segments, reverse=True, key=lambda uvedge: uvedge.min.tup)
+			events_remove = sorted(events_add, reverse=True, key=lambda uvedge: uvedge.max.tup)
 			while events_remove:
 				while events_add and events_add[-1].min.tup <= events_remove[-1].max.tup:
 					sweepline.add(events_add.pop())
@@ -924,12 +929,21 @@ class Island:
 			tree.update(dict.fromkeys(relink, value))
 			return value
 
+		def slope_from(position):
+			def slope(uvedge):
+				vec = (uvedge.vb.co - uvedge.va.co) if uvedge.va.tup == position else (uvedge.va.co - uvedge.vb.co)
+				return (vec.y / vec.length + 1) if ((vec.x, vec.y) > (0, 0)) else (-1 - vec.y / vec.length)
+			return slope
+		
 		# find edge in other and in self
 		for uvedge in edge.uvedges:
-			if uvedge in self.edges:
-				uvedge_a = uvedge
-			elif uvedge in other.edges:
-				uvedge_b = uvedge
+			if uvedge.uvface.face in uvedge.edge.main_faces:
+				if uvedge.uvface.island is self and uvedge in self.boundary:
+					uvedge_a = uvedge
+				elif uvedge.uvface.island is other and uvedge in other.boundary:
+					uvedge_b = uvedge
+				else:
+					return False
 		
 		# check if vertices and normals are aligned correctly
 		verts_flipped = uvedge_b.va.vertex is uvedge_a.va.vertex
@@ -959,10 +973,11 @@ class Island:
 				# for the time being, just throw this piece away
 				return False
 		
-		assert edge.vect.length > 0
-		distance_limit = edge.vect.length * epsilon
+		assert edge.vect.length_squared > 0  # FIXME: delete me
+		distance_limit = edge.vect.length_squared * epsilon
 		# try and merge UVVertices closer than sqrt(distance_limit)
 		merged_uvedges = set()
+		merged_uvedge_pairs = list()
 		
 		# merge all uvvertices that are close enough using a union-find structure
 		# uvvertices will be merged only in cases other->self and self->self
@@ -991,22 +1006,39 @@ class Island:
 		for uvedge in (chain(self.boundary, other.boundary) if is_merged_mine else other.boundary):
 			for partner in uvedge.edge.uvedges:
 				if partner is not uvedge:
-					# TODO: make sure that this code is okay
 					paired_a, paired_b = phantoms.get(partner.vb, partner.vb), phantoms.get(partner.va, partner.va)
 					if (partner.uvface.flipped ^ flipped) != uvedge.uvface.flipped:
 						paired_a, paired_b = paired_b, paired_a
 					if phantoms.get(uvedge.va, uvedge.va) is paired_a and phantoms.get(uvedge.vb, uvedge.vb) is paired_b:
+						# if these two edges will get merged, add them both to the set
 						merged_uvedges.update((uvedge, partner))
+						merged_uvedge_pairs.append((uvedge, partner))
 						break
 		
 		if uvedge_b not in merged_uvedges:
-			print("DEBUG: edge {}-{} not merged".format(uvedge_b.edge.va.index, uvedge_b.edge.vb.index))
-			#raise UnfoldError("Export failed. Please report this error, including the model if you can.")
+			raise UnfoldError("Export failed. Please report this error, including the model if you can.")
 		
-		boundary_other = [PhantomUVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], uvedge.uvface.flipped ^ flipped)
+		boundary_other = [PhantomUVEdge(phantoms[uvedge.va], phantoms[uvedge.vb], flipped ^ uvedge.uvface.flipped)
 			for uvedge in other.boundary if uvedge not in merged_uvedges]
 		# TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary as well
 		
+		incidence = {vertex.tup for vertex in phantoms.values()}.intersection(vertex.tup for vertex in self.verts)
+		incidence = {position: list() for position in incidence}  # this is nicer than a defaultdict, in my opinion
+		for uvedge in chain(boundary_other, self.boundary):
+			for vertex in (uvedge.va, uvedge.vb):
+				site = incidence.get(vertex.tup)
+				if site is not None:
+					site.append(uvedge)
+		for position, segments in incidence.items():
+			segments.sort(key=slope_from(position))
+			for right, left in pairs(segments):
+				is_left_ccw = left.is_uvface_upwards() ^ (left.max.tup == position)
+				is_right_ccw = right.is_uvface_upwards() ^ (right.max.tup == position)
+				if is_right_ccw and not is_left_ccw and type(right) is not type(left) and right not in merged_uvedges and left not in merged_uvedges:
+					return False
+				if (not is_right_ccw and right not in merged_uvedges) ^ (is_left_ccw and left not in merged_uvedges):
+					return False
+			
 		# check for self-intersections
 		try:
 			try:
@@ -1067,6 +1099,10 @@ class Island:
 		
 		self.boundary = [uvedge for uvedge in
 			chain(self.boundary, other.boundary) if uvedge not in merged_uvedges]
+		
+		for uvedge, partner in merged_uvedge_pairs:
+			# make sure that main faces are the ones actually merged (this changes nothing in most cases)
+			uvedge.edge.main_faces[:] = uvedge.uvface.face, partner.uvface.face
 		
 		# everything seems to be OK
 		return True
@@ -1195,13 +1231,11 @@ class UVVertex:
 			self.vertex = vertex
 		self.tup = tuple(self.co)
 	
-	def __str__(self):
+	def __repr__(self):
 		if self.vertex:
 			return "UV {} [{:.3f}, {:.3f}]".format(self.vertex.index, self.co.x, self.co.y)
 		else:
 			return "UV * [{:.3f}, {:.3f}]".format(self.co.x, self.co.y)
-	
-	__repr__ = __str__
 
 
 class UVEdge:
@@ -1231,26 +1265,23 @@ class UVEdge:
 	def is_uvface_upwards(self):
 		return (self.va.tup < self.vb.tup) ^ self.uvface.flipped
 	
-	def __str__(self):
-		return "({} - {})".format(self.va, self.vb)
-	
-	__repr__ = __str__
+	__repr__ = "({0.va} - {0.vb})".format
 
 
 class PhantomUVEdge:
 	"""Temporary 2D Segment for calculations"""
-	__slots__ = ('va', 'vb', 'min', 'max', 'bottom', 'top', 'uvface_upwards')
+	__slots__ = ('va', 'vb', 'min', 'max', 'bottom', 'top')
 
 	def __init__(self, vertex1: UVVertex, vertex2: UVVertex, flip):
-		self.va = vertex1
-		self.vb = vertex2
+		self.va, self.vb = (vertex2, vertex1) if flip else (vertex1, vertex2)
 		self.min, self.max = (self.va, self.vb) if (self.va.tup < self.vb.tup) else (self.vb, self.va)
 		y1, y2 = self.va.co.y, self.vb.co.y
 		self.bottom, self.top = (y1, y2) if y1 < y2 else (y2, y1)
-		self.uvface_upwards = (self.va.tup < self.vb.tup) ^ flip
 	
 	def is_uvface_upwards(self):
-		return self.uvface_upwards
+		return self.va.tup < self.vb.tup
+
+	__repr__ = "[{0.va} - {0.vb}]".format
 
 
 class UVFace:
