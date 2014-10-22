@@ -1391,7 +1391,7 @@ class NumberAlone(Marker):
 
 	def __init__(self, uvedge, index, default_size=0.005):
 		"""Sticker is directly attached to the given UVEdge"""
-		edge = (uvedge.va - uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb - uvedge.va)
+		edge = (uvedge.va.co - uvedge.vb.co) if not uvedge.uvface.flipped else (uvedge.vb.co - uvedge.va.co)
 
 		self.size = default_size
 		sin, cos = edge.y / edge.length, edge.x / edge.length
@@ -1541,8 +1541,7 @@ class SVG:
 						uvedge = outer_edges.pop()
 						while 1:
 							if uvedge.sticker:
-								vertices = uvedge.sticker.vertices[-1::-1] if uvedge.uvface.flipped else uvedge.sticker.vertices[1:]
-								data_loop.extend(self.format_vertex(vertex.co, rot, pos) for vertex in vertices)
+								data_loop.extend(self.format_vertex(vertex.co, rot, pos) for vertex in uvedge.sticker.vertices[1:])
 							else:
 								vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
 								data_loop.append(self.format_vertex(vertex.co, rot, pos))
