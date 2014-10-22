@@ -396,6 +396,10 @@ class Mesh:
 			# TODO: it should take into account overlaps with faces and with other stickers
 			return uvedge.uvface.face.area / sum((vb.co - va.co).length for (va, vb) in pairs(uvedge.uvface.verts))
 		
+		def add_sticker(uvedge, index, target_island):
+			uvedge.sticker = Sticker(uvedge, default_width, index, target_island)
+			uvedge.island.add_marker(uvedge.sticker)
+		
 		for edge in self.edges.values():
 			if edge.is_main_cut and len(edge.uvedges) >= 2:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
@@ -421,13 +425,13 @@ class Mesh:
 						index = None
 				else:
 					index = None
-				uvedge_b.island.add_marker(Sticker(uvedge_b, default_width, index, target_island))
+				add_sticker(uvedge_b, index, target_island)
 			elif len(edge.uvedges) > 2:
 				index = None
 				target_island = edge.uvedges[0].island
 			if len(edge.uvedges) > 2:
 				for uvedge in edge.uvedges[2:]:
-					uvedge.island.add_marker(Sticker(uvedge, default_width, index, target_island))
+					add_sticker(uvedge, index, target_island)
 	
 	def generate_numbers_alone(self, size):
 		global_numbering = 0
@@ -1238,7 +1242,7 @@ class UVEdge:
 	# UVEdges are doubled as needed because they both have to point clockwise around their faces
 	__slots__ = ('va', 'vb', 'island', 'uvface', 'edge',
 		'min', 'max', 'bottom', 'top',
-		'neighbor_left', 'neighbor_right')
+		'neighbor_left', 'neighbor_right', 'sticker')
 
 	def __init__(self, vertex1: UVVertex, vertex2: UVVertex, island: Island, uvface, edge):
 		self.va = vertex1
@@ -1246,6 +1250,7 @@ class UVEdge:
 		self.update()
 		self.island = island
 		self.uvface = uvface
+		self.sticker = None
 		if edge:
 			self.edge = edge
 			edge.uvedges.append(self)
@@ -1435,7 +1440,7 @@ class SVG:
 		
 		styleargs = {name: format_color(getattr(self.style, name)) for name in
 			("outer_color", "outbg_color", "convex_color", "concave_color",
-			"inbg_color", "sticker_fill", "sticker_color", "text_color")}
+			"inbg_color", "sticker_fill", "text_color")}
 		styleargs.update({name: format_style[getattr(self.style, name)] for name in 
 			("outer_style", "convex_style", "concave_style")})
 		styleargs.update({name: getattr(self.style, attr)[3] for name, attr in
@@ -1444,7 +1449,7 @@ class SVG:
 			("inbg_alpha", "inbg_color"), ("sticker_alpha", "sticker_fill"),
 			("text_alpha", "text_color"))})
 		styleargs.update({name: getattr(self.style, name) for name in
-			("outer_width", "convex_width", "concave_width", "sticker_width")})
+			("outer_width", "convex_width", "concave_width")})
 		styleargs.update({"outbg_width": self.style.outer_width * self.style.outbg_width,
 			"convexbg_width": self.style.convex_width * self.style.inbg_width,
 			"concavebg_width": self.style.concave_width * self.style.inbg_width})
@@ -1482,35 +1487,6 @@ class SVG:
 					rot = M.Matrix.Rotation(island.angle, 2)
 					pos = island.pos + island.offset
 					
-					data_outer, data_convex, data_concave = list(), list(), list()
-					for uvedge in island.edges:
-						edge = uvedge.edge
-						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
-						if not edge.is_cut(uvedge.uvface.face):
-							# each uvedge is in two opposite-oriented variants; we want to add each only once
-							if uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
-								if edge.angle > 0.01:
-									data_convex.append(data_uvedge)
-								elif edge.angle < -0.01:
-									data_concave.append(data_uvedge)
-						else:
-							data_outer.append(data_uvedge)
-					if island.is_inside_out:
-						data_convex, data_concave = data_concave, data_convex
-					
-					if data_convex:
-						if not self.pure_net and self.style.use_inbg:
-							print("<path class='convex_background' d='", rows(data_convex), "'/>", file=f)
-						print("<path class='convex' d='", rows(data_convex), "'/>", file=f)
-					if data_concave:
-						if not self.pure_net and self.style.use_inbg:
-							print("<path class='concave_background' d='", rows(data_concave), "'/>", file=f)
-						print("<path class='concave' d='", rows(data_concave), "'/>", file=f)
-					if data_outer:
-						if not self.pure_net and self.style.use_outbg:
-							print("<path class='outer_background' d='", rows(data_outer), "'/>", file=f)
-						print("<path class='outer' d='", rows(data_outer), "'/>", file=f)
-					
 					if island.title:
 						print(self.text_tag.format(
 							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x) + self.margin,
@@ -1520,19 +1496,24 @@ class SVG:
 					
 					for marker in island.markers:
 						if isinstance(marker, Sticker):
-							if self.do_create_stickers:
-								text = self.text_scaled_tag.format(
-									label=marker.text,
-									pos=self.format_vertex(marker.center, rot, pos),
-									mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)) if marker.text else ""
-								data_markers.append("<g><path class='sticker' d='M {data} Z'/>{text}</g>".format(
-									data=line_through((self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)),
-									text=text))
-							elif marker.text:
+							if not self.do_create_stickers:
+								continue # TODO does this have any purpose?
+							text = self.text_scaled_tag.format(
+								label=marker.text,
+								pos=self.format_vertex(marker.center, rot, pos),
+								mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)) if marker.text else ""
+							if self.style.sticker_fill[3] == 0: # transparent stickers, no fill
+								if not marker.text:
+									continue
+								data_markers.append(text)
+							else:
 								data_markers.append(self.text_scaled_tag.format(
 									label=marker.text,
 									pos=self.format_vertex(marker.center, rot, pos),
 									mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)))
+								data_markers.append("<g><path class='sticker' d='M {data} Z'/>{text}</g>".format(
+									data=line_through((self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)),
+									text=text))
 						elif isinstance(marker, Arrow):
 							size = marker.size * island.scale * self.scale
 							position = marker.center + marker.rot*marker.size*island.scale*M.Vector((0, -0.9))
@@ -1553,6 +1534,52 @@ class SVG:
 						print("<g>", rows(data_markers), "</g>", file=f)
 					print("</g>", file=f)
 				
+					data_outer, data_convex, data_concave = list(), list(), list()
+					outer_edges = set(island.boundary)
+					while outer_edges:
+						data_loop = list()
+						uvedge = outer_edges.pop()
+						while 1:
+							if uvedge.sticker:
+								vertices = uvedge.sticker.vertices[-1::-1] if uvedge.uvface.flipped else uvedge.sticker.vertices[1:]
+								data_loop.extend(self.format_vertex(vertex.co, rot, pos) for vertex in vertices)
+							else:
+								vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
+								data_loop.append(self.format_vertex(vertex.co, rot, pos))
+							uvedge = uvedge.neighbor_right
+							try:
+								outer_edges.remove(uvedge)
+							except KeyError:
+								break
+						data_outer.append("M" + line_through(data_loop) + "Z")
+					
+					for uvedge in island.edges:
+						edge = uvedge.edge
+						if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
+							continue
+						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
+						# each uvedge is in two opposite-oriented variants; we want to add each only once
+						if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
+							if edge.angle > 0.01:
+								data_convex.append(data_uvedge)
+							elif edge.angle < -0.01:
+								data_concave.append(data_uvedge)
+					if island.is_inside_out:
+						data_convex, data_concave = data_concave, data_convex
+					
+					if data_convex:
+						if not self.pure_net and self.style.use_inbg:
+							print("<path class='convex_background' d='", rows(data_convex), "'/>", file=f)
+						print("<path class='convex' d='", rows(data_convex), "'/>", file=f)
+					if data_concave:
+						if not self.pure_net and self.style.use_inbg:
+							print("<path class='concave_background' d='", rows(data_concave), "'/>", file=f)
+						print("<path class='concave' d='", rows(data_concave), "'/>", file=f)
+					if data_outer:
+						if not self.pure_net and self.style.use_outbg:
+							print("<path class='outer_background' d='", rows(data_outer), "'/>", file=f)
+						print("<path class='outer' d='", rows(data_outer), "'/>", file=f)
+					
 				if len(page.islands) > 1:
 					print("</g>", file=f)
 				print("</svg>", file=f)
@@ -1614,10 +1641,8 @@ class SVG:
 	}}
 	path.sticker {{
 		fill: {sticker_fill};
-		stroke: {sticker_color};
+		stroke: none;
 		fill-opacity: {sticker_alpha:.2};
-		stroke-width:{sticker_width:.2};
-		stroke-opacity: 1
 	}}
 	path.arrow {{
 		fill: #000;
@@ -1811,13 +1836,7 @@ class PaperModelStyle(bpy.types.PropertyGroup):
 	
 	sticker_fill = bpy.props.FloatVectorProperty(name="Tabs Fill",
 		description="Fill color of sticking tabs",
-		default=(1.0, 1.0, 1.0, 0.4), min=0, max=1, subtype='COLOR', size=4)
-	sticker_color = bpy.props.FloatVectorProperty(name="Tabs Outline",
-		description="Outline color of sticking tabs",
-		default=(0.0, 0.0, 0.0), min=0, max=1, subtype='COLOR', size=3)
-	sticker_width = bpy.props.FloatProperty(name="Tabs Outline Thickness",
-		description="Thickness of tabs outer line, in pixels",
-		default=1, min=0, soft_max=10, precision=1)
+		default=(0.9, 0.9, 0.9, 1.0), min=0, max=1, subtype='COLOR', size=4)
 	text_color = bpy.props.FloatVectorProperty(name="Text Color",
 		description="Color of all text used in the document",
 		default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
@@ -2014,8 +2033,6 @@ class ExportPaperModel(bpy.types.Operator):
 			col = box.column()
 			col.active = self.do_create_stickers
 			col.prop(self.style, "sticker_fill")
-			col.prop(self.style, "sticker_color")
-			col.prop(self.style, "sticker_width", text="Outline width (pixels)")
 			box.prop(self.style, "text_color")
 
 
