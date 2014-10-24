@@ -1492,28 +1492,18 @@ class SVG:
 							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x) + self.margin,
 							y=self.scale * (1 - island.pos.y) + self.margin,
 							label=island.title), file=f)
+
 					data_markers = list()
-					
+					data_stickerfill = list()
 					for marker in island.markers:
 						if isinstance(marker, Sticker):
-							if not self.do_create_stickers:
-								continue # TODO does this have any purpose?
-							text = self.text_scaled_tag.format(
+							data_stickerfill.append("M {} Z".format(
+								line_through(self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)))
+							if marker.text:
+								data_markers.append(self.text_scaled_tag.format(
 								label=marker.text,
 								pos=self.format_vertex(marker.center, rot, pos),
-								mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)) if marker.text else ""
-							if self.style.sticker_fill[3] == 0: # transparent stickers, no fill
-								if not marker.text:
-									continue
-								data_markers.append(text)
-							else:
-								data_markers.append(self.text_scaled_tag.format(
-									label=marker.text,
-									pos=self.format_vertex(marker.center, rot, pos),
-									mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)))
-								data_markers.append("<g><path class='sticker' d='M {data} Z'/>{text}</g>".format(
-									data=line_through((self.format_vertex(vertex.co, rot, pos) for vertex in marker.vertices)),
-									text=text))
+								mat=format_matrix(marker.width * island.scale * self.scale * rot * marker.rot)))
 						elif isinstance(marker, Arrow):
 							size = marker.size * island.scale * self.scale
 							position = marker.center + marker.rot*marker.size*island.scale*M.Vector((0, -0.9))
@@ -1529,11 +1519,9 @@ class SVG:
 								label=marker.text,
 								pos=self.format_vertex(marker.center, rot, pos),
 								mat=format_matrix(size * rot * marker.rot)))
-					if data_markers:
-						# Stickers are separate paths in one group
-						print("<g>", rows(data_markers), "</g>", file=f)
-					print("</g>", file=f)
-				
+					if data_stickerfill and self.style.sticker_fill[3] > 0:
+						print("<path class='sticker' d='", rows(data_stickerfill), "'/>", file=f)
+					
 					data_outer, data_convex, data_concave = list(), list(), list()
 					outer_edges = set(island.boundary)
 					while outer_edges:
@@ -1550,13 +1538,14 @@ class SVG:
 								outer_edges.remove(uvedge)
 							except KeyError:
 								break
-						data_outer.append("M" + line_through(data_loop) + "Z")
+						data_outer.append("M {} Z".format(line_through(data_loop)))
 					
 					for uvedge in island.edges:
 						edge = uvedge.edge
 						if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
 							continue
-						data_uvedge = "M " + line_through((self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
+						data_uvedge = "M {}".format(
+							line_through(self.format_vertex(vertex.co, rot, pos) for vertex in (uvedge.va, uvedge.vb)))
 						# each uvedge is in two opposite-oriented variants; we want to add each only once
 						if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
 							if edge.angle > 0.01:
@@ -1578,7 +1567,11 @@ class SVG:
 						if not self.pure_net and self.style.use_outbg:
 							print("<path class='outer_background' d='", rows(data_outer), "'/>", file=f)
 						print("<path class='outer' d='", rows(data_outer), "'/>", file=f)
-					
+					if data_markers:
+						print(rows(data_markers), file=f)
+					print("</g>", file=f)
+				
+				
 				if len(page.islands) > 1:
 					print("</g>", file=f)
 				print("</svg>", file=f)
