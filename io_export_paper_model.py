@@ -18,15 +18,14 @@
 
 #### TODO:
 # sanitize the constructors so that they don't edit their parent object
-# apply island rotation and position before exporting, to simplify things
 # rename verts -> vertices, edge.vect -> edge.vector
 # SVG object doesn't need a 'pure_net' argument in constructor
-# maybe Island would do with a list of points as well, set of vertices makes things more complicated
 # remember selected objects before baking, except selected to active
 # islands with default names should be excluded while matching
 # add 'estimated number of pages' to the export UI
 # profile QuickSweepline vs. BruteSweepline with/without blist: for which nets is it faster?
 # rotate islands to minimize area -- and change that only if necessary to fill the page size
+# Sticker.vertices should be of type Vector
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -155,11 +154,10 @@ class Unfolder:
 		self.mesh = Mesh(ob.data, ob.matrix_world)
 		self.tex = None
 
-	def prepare(self, page_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
+	def prepare(self, cage_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
 		"""Create the islands of the net"""
-		page_size = page_size / scale if page_size else None
-		self.mesh.generate_cuts(page_size, priority_effect)
-		self.mesh.finalize_islands(scale_factor=scale)
+		self.mesh.generate_cuts(cage_size / scale if cage_size else None, priority_effect)
+		self.mesh.finalize_islands()
 		self.mesh.enumerate_islands()
 		if create_uvmap:
 			self.tex = self.mesh.save_uv()
@@ -177,9 +175,9 @@ class Unfolder:
 	
 	def save(self, properties):
 		"""Export the document"""
-		# Note about scale: input is direcly in blender length.
-		# finalize_islands multiplies everything by scale/printable_size.y
-		# SVG object multiplies everything by printable_size.y*ppm.
+		# Note about scale: input is direcly in blender length
+		# Island.apply_scale multiplies everything by a user-defined ratio
+		# SVG object multiplies everything by ppm (output in pixels)
 		filepath = properties.filepath
 		if filepath.lower().endswith((".svg", ".png")):
 			filepath = filepath[0:-4]
@@ -187,24 +185,26 @@ class Unfolder:
 		page_size = M.Vector((properties.output_size_x, properties.output_size_y))
 		# printable area size in meters
 		printable_size = page_size - 2 * properties.output_margin * M.Vector((1, 1))
-		scale = bpy.context.scene.unit_settings.scale_length / properties.scale
+		unit_scale = bpy.context.scene.unit_settings.scale_length
 		ppm = properties.output_dpi * 100 / 2.54  # pixels per meter
 		
+		# after this call, all dimensions will be in meters
+		self.mesh.scale_islands(unit_scale/properties.scale)
 		if properties.do_create_stickers:
-			self.mesh.generate_stickers(properties.sticker_width * printable_size.y / scale, properties.do_create_numbers)
+			self.mesh.generate_stickers(properties.sticker_width, properties.do_create_numbers)
 		elif properties.do_create_numbers:
-			self.mesh.generate_numbers_alone(properties.sticker_width * printable_size.y / scale)
+			self.mesh.generate_numbers_alone(properties.sticker_width)
 			
-		text_height = 12 / (printable_size.y*ppm) if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
+		text_height = properties.sticker_width if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
 		aspect_ratio = printable_size.x / printable_size.y
 		# finalizing islands will scale everything so that the page height is 1
-		self.mesh.finalize_islands(scale_factor=scale/printable_size.y, title_height=text_height)
-		self.mesh.fit_islands(aspect_ratio=aspect_ratio)
+		self.mesh.finalize_islands(title_height=text_height)
+		self.mesh.fit_islands(cage_size=printable_size)
 		
 		if properties.output_type != 'NONE':
 			# bake an image and save it as a PNG to disk or into memory
 			use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
-			tex = self.mesh.save_uv(aspect_ratio=printable_size.x/printable_size.y, separate_image=use_separate_images, tex=self.tex)
+			tex = self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images, tex=self.tex)
 			if not tex:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
 			if properties.output_type == 'TEXTURE' and tex.active_render:
@@ -258,9 +258,10 @@ class Unfolder:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
 
-		svg = SVG(page_size * ppm, printable_size.y * ppm, properties.style, (properties.output_type == 'NONE'))
+		svg = SVG(page_size, ppm, properties.style, (properties.output_type == 'NONE'))
 		svg.do_create_stickers = properties.do_create_stickers
-		svg.margin = properties.output_margin * ppm
+		svg.margin = properties.output_margin
+		svg.text_size = properties.sticker_width
 		svg.write(self.mesh, filepath)
 
 
@@ -447,16 +448,23 @@ class Mesh:
 			island.number = num
 			island.generate_label()
 	
-	def finalize_islands(self, scale_factor=1, title_height=0):
+	def scale_islands(self, scale):
+		for island in self.islands:
+			for point in chain((vertex.co for vertex in island.verts), island.fake_verts):
+				point *= scale
+
+	def finalize_islands(self, title_height=0):
 		for island in self.islands:
 			if title_height:
 				island.title = "[{}] {}".format(island.abbreviation, island.label)
 			points = list(vertex.co for vertex in island.verts) + island.fake_verts
 			angle = M.geometry.box_fit_2d(points)
-			scaled_rotation = scale_factor * M.Matrix.Rotation(angle, 2)
+			rot = M.Matrix.Rotation(angle, 2)
 			for point in points:
 				# note: we need an in-place operation, and Vector.rotate() seems to work for 3d vectors only
-				point[:] = scaled_rotation * point
+				point[:] = rot * point
+			for marker in island.markers:
+				marker.rot = rot * marker.rot
 			bottom_left = M.Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
 			for point in points:
 				point -= bottom_left
@@ -465,19 +473,19 @@ class Mesh:
 	def largest_island_ratio(self, page_size):
 		return max(max(island.bounding_box.x / page_size.x, island.bounding_box.y / page_size.y) for island in self.islands)
 	
-	def fit_islands(self, aspect_ratio):
+	def fit_islands(self, cage_size):
 		"""Move islands so that they fit onto pages, based on their bounding boxes"""
 		
-		def try_emplace(island, page_islands, page_size, stops_x, stops_y, occupied_cache):
+		def try_emplace(island, page_islands, cage_size, stops_x, stops_y, occupied_cache):
 			"""Tries to put island to each pair from stops_x, stops_y
 			and checks if it overlaps with any islands present on the page.
 			Returns True and positions the given island on success."""
 			bbox_x, bbox_y = island.bounding_box.xy
 			for x in stops_x:
-				if x + bbox_x > page_size.x:
+				if x + bbox_x > cage_size.x:
 					continue
 				for y in stops_y:
-					if y + bbox_y > page_size.y or (x, y) in occupied_cache:
+					if y + bbox_y > cage_size.y or (x, y) in occupied_cache:
 						continue
 					for i, obstacle in enumerate(page_islands):
 						# if this obstacle overlaps with the island, try another stop
@@ -508,8 +516,7 @@ class Mesh:
 			quantile = sorted(distances)[len(distances) // divisor]
 			return [stop for stop, distance in zip(stops, chain([quantile], distances)) if distance >= quantile]
 		
-		page_size = M.Vector((aspect_ratio, 1))
-		if any(island.bounding_box.x > page_size.x or island.bounding_box.y > page_size.y for island in self.islands):
+		if any(island.bounding_box.x > cage_size.x or island.bounding_box.y > cage_size.y for island in self.islands):
 			raise UnfoldError("An island is too big to fit onto page of the given size. "
 				"Either downscale the model or find and split that island manually.\n"
 				"Export failed, sorry.")
@@ -524,15 +531,15 @@ class Mesh:
 			occupied_cache = set()
 			stops_x, stops_y = [0], [0]
 			for island in remaining_islands:
-				try_emplace(island, page.islands, page_size, stops_x, stops_y, occupied_cache)
+				try_emplace(island, page.islands, cage_size, stops_x, stops_y, occupied_cache)
 				# if overwhelmed with stops, drop a quarter of them
 				if len(stops_x)**2 > 4 * len(self.islands) + 100:
-					stops_x = drop_portion(stops_x, page_size.x, 4)
-					stops_y = drop_portion(stops_y, page_size.y, 4)
+					stops_x = drop_portion(stops_x, cage_size.x, 4)
+					stops_y = drop_portion(stops_y, cage_size.y, 4)
 			remaining_islands = [island for island in remaining_islands if island not in page.islands]
 			self.pages.append(page)
 	
-	def save_uv(self, aspect_ratio=1, separate_image=False, tex=None):
+	def save_uv(self, cage_size=M.Vector((1, 1)), separate_image=False, tex=None):
 		# TODO: mode switching should be handled by higher-level code
 		bpy.ops.object.mode_set()
 		# note: assuming that the active object's data is self.mesh
@@ -549,7 +556,7 @@ class Mesh:
 				island.save_uv_separate(loop)
 		else:
 			for island in self.islands:
-				island.save_uv(loop, aspect_ratio)
+				island.save_uv(loop, cage_size)
 		return tex
 	
 	def save_image(self, tex, page_size_pixels: M.Vector, filename):
@@ -1114,17 +1121,16 @@ class Island:
 		self.label = label or self.label or "Island {}".format(self.number)
 		self.abbreviation = abbr
 	
-	def save_uv(self, tex, aspect_ratio=1):
+	def save_uv(self, tex, cage_size):
 		"""Save UV Coordinates of all UVFaces to a given UV texture
 		tex: UV Texture layer to use (BPy MeshUVLoopLayer struct)
 		page_size: size of the page in pixels (vector)"""
 		texface = tex.data
 		for uvface in self.faces:
-			rot = M.Matrix.Rotation(self.angle, 2)
 			for i, uvvertex in enumerate(uvface.verts):
-				uv = rot * uvvertex.co + self.pos
-				texface[uvface.face.loop_start + i].uv[0] = uv.x / aspect_ratio
-				texface[uvface.face.loop_start + i].uv[1] = uv.y
+				uv = uvvertex.co + self.pos
+				texface[uvface.face.loop_start + i].uv[0] = uv.x / cage_size.x
+				texface[uvface.face.loop_start + i].uv[1] = uv.y / cage_size.y
 	
 	def save_uv_separate(self, tex):
 		"""Save UV Coordinates of all UVFaces to a given UV texture, spanning from 0 to 1
@@ -1133,11 +1139,9 @@ class Island:
 		texface = tex.data
 		scale_x, scale_y = 1 / self.bounding_box.x, 1 / self.bounding_box.y
 		for uvface in self.faces:
-			rot = M.Matrix.Rotation(self.angle, 2)
 			for i, uvvertex in enumerate(uvface.verts):
-				uv = rot * uvvertex.co
-				texface[uvface.face.loop_start + i].uv[0] = uv.x * scale_x
-				texface[uvface.face.loop_start + i].uv[1] = uv.y * scale_y
+				texface[uvface.face.loop_start + i].uv[0] = uvvertex.co.x * scale_x
+				texface[uvface.face.loop_start + i].uv[1] = uvvertex.co.y * scale_y
 
 
 class Page:
@@ -1330,20 +1334,21 @@ class NumberAlone:
 class SVG:
 	"""Simple SVG exporter"""
 
-	def __init__(self, page_size_pixels: M.Vector, scale, style, pure_net=True):
+	def __init__(self, page_size: M.Vector, ppm, style, pure_net=True):
 		"""Initialize document settings.
-		page_size_pixels: document dimensions in pixels
+		page_size: document dimensions in meters
 		pure_net: if True, do not use image"""
-		self.page_size = page_size_pixels
-		self.scale = scale
+		self.page_size = page_size
+		self.ppm = ppm
 		self.pure_net = pure_net
 		self.style = style
 		self.margin = 0
+		self.text_size = 12
 	
 	def format_vertex(self, vector, pos=M.Vector((0, 0))):
 		"""Return a string with both coordinates of the given vertex."""
 		x, y = vector + pos
-		return "{:.6f} {:.6f}".format(x * self.scale + self.margin, (1 - y) * self.scale + self.margin)
+		return "{:.6f} {:.6f}".format((x + self.margin) * self.ppm, (self.page_size.y - y - self.margin) * self.ppm)
 	
 	def write(self, mesh, filename):
 		"""Write data to a file given by its name."""
@@ -1355,7 +1360,7 @@ class SVG:
 			return "#{:02x}{:02x}{:02x}".format(round(vec[0] * 255), round(vec[1] * 255), round(vec[2] * 255))
 
 		def format_matrix(matrix):
-			return " ".join(" ".join(map(str, column)) for column in matrix)
+			return " ".join(str(cell) for column in matrix for cell in column)
 		
 		def path_convert(string, relto=os_path.dirname(filename)):
 			assert(os_path)  # check the module was imported
@@ -1379,15 +1384,17 @@ class SVG:
 		styleargs.update({"outbg_width": self.style.outer_width * self.style.outbg_width,
 			"convexbg_width": self.style.convex_width * self.style.inbg_width,
 			"concavebg_width": self.style.concave_width * self.style.inbg_width})
+		page_size_pixels = self.page_size * self.ppm
+		margin_pixels = self.margin * self.ppm
 		for num, page in enumerate(mesh.pages):
 			with open("{}_{}.svg".format(filename, page.name), 'w') as f:
-				print(self.svg_base.format(width=self.page_size.x, height=self.page_size.y), file=f)
+				print(self.svg_base.format(width=page_size_pixels.x, height=page_size_pixels.y), file=f)
 				print(self.css_base.format(**styleargs), file=f)
 				if page.image_path:
 					print(self.image_linked_tag.format(
-						pos="{0} {0}".format(self.margin),
-						width=self.page_size.x - 2*self.margin,
-						height=self.page_size.y - 2*self.margin,
+						pos="{0} {0}".format(margin_pixels),
+						width=page_size_pixels.x - 2 * margin_pixels,
+						height=page_size_pixels.y - 2 * margin_pixels,
 						path=path_convert(page.image_path)),
 						file=f)
 				if len(page.islands) > 1:
@@ -1398,22 +1405,23 @@ class SVG:
 					if island.image_path:
 						print(self.image_linked_tag.format(
 							pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))),
-							width=island.bounding_box.x*self.scale,
-							height=island.bounding_box.y*self.scale,
+							width=island.bounding_box.x*self.ppm,
+							height=island.bounding_box.y*self.ppm,
 							path=path_convert(island.image_path)),
 							file=f)
 					elif island.embedded_image:
 						print(self.image_embedded_tag.format(
 								pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))),
-								width=island.bounding_box.x*self.scale,
-								height=island.bounding_box.y*self.scale,
+								width=island.bounding_box.x*self.ppm,
+								height=island.bounding_box.y*self.ppm,
 								path=island.image_path),
 							island.embedded_image, "'/>",
 							file=f, sep="")
 					if island.title:
 						print(self.text_tag.format(
-							x=self.scale * (island.bounding_box.x*0.5 + island.pos.x) + self.margin,
-							y=self.scale * (1 - island.pos.y) + self.margin,
+							size=self.ppm * self.text_size,
+							x=self.ppm * (island.bounding_box.x*0.5 + island.pos.x + self.margin),
+							y=self.ppm * (self.page_size.y - island.pos.y - self.margin),
 							label=island.title), file=f)
 
 					data_markers, data_stickerfill, data_outer, data_convex, data_concave = (list() for i in range(5))
@@ -1422,22 +1430,22 @@ class SVG:
 							data_stickerfill.append("M {} Z".format(
 								line_through(self.format_vertex(vertex.co, island.pos) for vertex in marker.vertices)))
 							if marker.text:
-								data_markers.append(self.text_scaled_tag.format(
-								label=marker.text,
-								pos=self.format_vertex(marker.center, island.pos),
-								mat=format_matrix(marker.width * self.scale * marker.rot)))  #FIXME: * island.scale
+								data_markers.append(self.text_transformed_tag.format(
+									label=marker.text,
+									pos=self.format_vertex(marker.center, island.pos),
+									mat=format_matrix(marker.width * self.ppm * marker.rot)))
 						elif isinstance(marker, Arrow):
-							size = marker.size * self.scale  #FIXME: * island.scale
-							position = marker.center + marker.rot*marker.size*M.Vector((0, -0.9))  #FIXME: *island.scale
+							size = marker.size * self.ppm
+							position = marker.center + marker.rot*marker.size*M.Vector((0, -0.9))
 							data_markers.append(self.arrow_marker_tag.format(
 								index=marker.text,
 								arrow_pos=self.format_vertex(marker.center, island.pos),
 								scale=size,
-								pos=self.format_vertex(position, island.pos - marker.size*M.Vector((0, 0.4))),  #FIXME: *island.scale
+								pos=self.format_vertex(position, island.pos - marker.size*M.Vector((0, 0.4))),
 								mat=format_matrix(size * marker.rot)))
 						elif isinstance(marker, NumberAlone):
-							size = marker.size * self.scale  #FIXME: * island.scale
-							data_markers.append(self.text_scaled_tag.format(
+							size = marker.size * self.ppm
+							data_markers.append(self.text_transformed_tag.format(
 								label=marker.text,
 								pos=self.format_vertex(marker.center, island.pos),
 								mat=format_matrix(size * marker.rot)))
@@ -1498,8 +1506,8 @@ class SVG:
 	
 	image_linked_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='{path}'/>"
 	image_embedded_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='data:image/png;base64,"
-	text_tag = "<text transform='translate({x} {y})'><tspan>{label}</tspan></text>"
-	text_scaled_tag = "<text class='scaled' transform='matrix({mat} {pos})'><tspan>{label}</tspan></text>"
+	text_tag = "<text transform='translate({x} {y}) scale({size})'><tspan>{label}</tspan></text>"
+	text_transformed_tag = "<text transform='matrix({mat} {pos})'><tspan>{label}</tspan></text>"
 	arrow_marker_tag = "<g><path transform='matrix({mat} {arrow_pos})' class='arrow' d='M 0 0 L 1 1 L 0 0.25 L -1 1 Z'/>" \
 		"<text class='scaled' transform='matrix({scale} 0 0 {scale} {pos})'><tspan>{index}</tspan></text></g>"
 	
@@ -1560,14 +1568,11 @@ class SVG:
 		fill: #000;
 	}}
 	text {{
-		font-size: 12px;
+		font-size: 1px;
 		font-style: normal;
 		fill: {text_color};
 		fill-opacity: {text_alpha:.2};
 		stroke: none;
-	}}
-	text.scaled {{
-		font-size: 1px;
 	}}
 	tspan {{
 		text-anchor:middle;
@@ -1595,6 +1600,7 @@ class Unfold(bpy.types.Operator):
 		default=default_priority_effect['LENGTH'], soft_min=-10, soft_max=1, subtype='FACTOR')
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap",
 		description="Create a new UV Map showing the islands and page layout", default=False)
+	object = None
 	
 	@classmethod
 	def poll(cls, context):
@@ -1603,7 +1609,7 @@ class Unfold(bpy.types.Operator):
 	def draw(self, context):
 		layout = self.layout
 		col = layout.column()
-		col.active = not self.unfolder or len(self.unfolder.mesh.data.uv_textures) < 8
+		col.active = not self.object or len(self.object.data.uv_textures) < 8
 		col.prop(self.properties, "do_create_uvmap")
 		layout.label(text="Edge Cutting Factors:")
 		col = layout.column(align=True)
@@ -1619,15 +1625,15 @@ class Unfold(bpy.types.Operator):
 		bpy.ops.object.mode_set(mode='OBJECT')
 		recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 		
-		ob = context.active_object
-		mesh = ob.data
+		self.object = context.active_object
+		mesh = self.object.data
 		
-		page_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
+		cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
 		priority_effect = {'CONVEX': self.priority_effect_convex,'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
-		unfolder = Unfolder(ob)
-		unfolder.prepare(page_size=page_size, mark_seams=True, create_uvmap=self.do_create_uvmap, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
+		unfolder = Unfolder(self.object)
+		unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
 		if mesh.paper_island_list:
-			self.unfolder.copy_island_names(mesh.paper_island_list)
+			unfolder.copy_island_names(mesh.paper_island_list)
 
 		island_list = mesh.paper_island_list
 		island_list.clear()  # remove previously defined islands
@@ -1782,7 +1788,7 @@ class ExportPaperModel(bpy.types.Operator):
 		default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
 	output_margin = bpy.props.FloatProperty(name="Page Margin",
 		description="Distance from page borders to the printable area",
-		default=0.005, min=0, soft_max=0.1, subtype="UNSIGNED", unit="LENGTH")
+		default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH")
 	output_dpi = bpy.props.FloatProperty(name="Unfolder DPI",
 		description="Resolution of images and lines in pixels per inch",
 		default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
@@ -1802,7 +1808,7 @@ class ExportPaperModel(bpy.types.Operator):
 		default=True)
 	sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size",
 		description="Width of gluing tabs and their numbers",
-		default=0.005, soft_min=0, soft_max=0.05, subtype="UNSIGNED", unit="LENGTH")
+		default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
 	image_packing = bpy.props.EnumProperty(name="Image Packing Method",
 		description="Method of attaching baked image(s) to the SVG",
 		default='PAGE_LINK', items=[
@@ -1812,7 +1818,7 @@ class ExportPaperModel(bpy.types.Operator):
 		])
 	scale = bpy.props.FloatProperty(name="Scale",
 		description="Divisor of all dimensions when exporting",
-		default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
+		default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=0)
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap",
 		description="Create a new UV Map showing the islands and page layout",
 		default=False)
@@ -1858,7 +1864,8 @@ class ExportPaperModel(bpy.types.Operator):
 		self.scale = sce.paper_model.scale
 		self.object = context.active_object
 		self.unfolder = Unfolder(self.object)
-		self.unfolder.prepare(create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
+		cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
+		self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
 		scale_ratio = self.get_scale_ratio(sce)
 		if scale_ratio > 1:
 			self.scale *= scale_ratio
