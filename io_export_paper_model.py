@@ -286,8 +286,7 @@ class Mesh:
 		for bpy_face in mesh.polygons:
 			face = Face(bpy_face, self)
 			self.faces[bpy_face.index] = face
-		for index in self.edges:
-			edge = self.edges[index]
+		for edge in self.edges.values():
 			edge.choose_main_faces()
 			if edge.main_faces:
 				edge.calculate_angle()
@@ -322,7 +321,7 @@ class Mesh:
 			if edge.main_faces and (edge.main_faces[0].uvface.flipped or edge.main_faces[1].uvface.flipped):
 				edge.calculate_angle()
 			# ensure that the order of faces corresponds to the order of uvedges
-			if len(edge.uvedges) >= 2:
+			if edge.main_faces:
 				reordered = [None, None]
 				for uvedge in edge.uvedges:
 					try:
@@ -1185,9 +1184,7 @@ class UVEdge:
 		self.island = island
 		self.uvface = uvface
 		self.sticker = None
-		if edge:
-			self.edge = edge
-			edge.uvedges.append(self)  #FIXME: editing foreign attribute
+		self.edge = edge
 	
 	def update(self):
 		"""Update data if UVVertices have moved"""
