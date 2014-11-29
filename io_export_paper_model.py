@@ -53,6 +53,7 @@ Additional links:
 
 """
 import bpy
+import bl_operators
 import bgl
 import mathutils as M
 from re import compile as re_compile
@@ -1763,11 +1764,11 @@ class ExportPaperModel(bpy.types.Operator):
 	bl_label = "Export Paper Model"
 	bl_description = "Export the selected object's net and optionally bake its texture"
 	filepath = bpy.props.StringProperty(name="File Path",
-		description="Target file to save the SVG")
+		description="Target file to save the SVG", options={'SKIP_SAVE'})
 	filename = bpy.props.StringProperty(name="File Name",
-		description="Name of the file")
+		description="Name of the file", options={'SKIP_SAVE'})
 	directory = bpy.props.StringProperty(name="Directory",
-		description="Directory of the file")
+		description="Directory of the file", options={'SKIP_SAVE'})
 	page_size_preset = bpy.props.EnumProperty(name="Page Size",
 		description="Size of the exported document",
 		default='A4', update=page_size_preset_changed, items=[
@@ -1818,13 +1819,13 @@ class ExportPaperModel(bpy.types.Operator):
 		default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=0)
 	do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap",
 		description="Create a new UV Map showing the islands and page layout",
-		default=False)
+		default=False, options={'SKIP_SAVE'})
 	ui_expanded_document = bpy.props.BoolProperty(name="Show Document Settings Expanded",
 		description="Shows the box 'Document Settings' expanded in user interface",
-		default=True)
+		default=True, options={'SKIP_SAVE'})
 	ui_expanded_style = bpy.props.BoolProperty(name="Show Style Settings Expanded",
 		description="Shows the box 'Colors and Style' expanded in user interface",
-		default=False)
+		default=False, options={'SKIP_SAVE'})
 	style = bpy.props.PointerProperty(type=PaperModelStyle)
 	
 	unfolder = None
@@ -1872,6 +1873,7 @@ class ExportPaperModel(bpy.types.Operator):
 	
 	def draw(self, context):
 		layout = self.layout
+		
 		# a little hack: this prints out something like "Scale: 1: 72"
 		layout.prop(self.properties, "scale", text="Scale: 1")
 		scale_ratio = self.get_scale_ratio(context.scene)
@@ -1879,7 +1881,13 @@ class ExportPaperModel(bpy.types.Operator):
 			layout.label(text="An island is roughly {:.1f}x bigger than page".format(scale_ratio), icon="ERROR")
 		elif scale_ratio > 0:
 			layout.label(text="Largest island is roughly 1/{:.1f} of page".format(1 / scale_ratio))
+
 		layout.prop(self.properties, "do_create_uvmap")
+
+		row = layout.row(align=True)
+		row.menu("VIEW3D_MT_paper_model_presets", text=bpy.types.VIEW3D_MT_paper_model_presets.bl_label)
+		row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMIN')
+		row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMOUT').remove_active = True
 
 		box = layout.box()
 		row = box.row(align=True)
@@ -1952,6 +1960,39 @@ class ExportPaperModel(bpy.types.Operator):
 
 def menu_func(self, context):
 	self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
+
+
+class VIEW3D_MT_paper_model_presets(bpy.types.Menu):
+	bl_label = "Paper Model Presets"
+	preset_subdir = "export_mesh"
+	preset_operator = "script.execute_preset"
+	draw = bpy.types.Menu.draw_preset
+
+
+class AddPresetPaperModel(bl_operators.presets.AddPresetBase, bpy.types.Operator):
+	"""Add or remove a Paper Model Preset"""
+	bl_idname = "export_mesh.paper_model_preset_add"
+	bl_label = "Add Paper Model Preset"
+	preset_menu = "VIEW3D_MT_paper_model_presets"
+	preset_subdir = "export_mesh"
+
+	preset_defines = ["op = bpy.context.active_operator"]
+
+	@property
+	def preset_values(self):
+		op = bpy.ops.export_mesh.paper_model
+		operator_rna = op.get_rna().bl_rna
+		del op
+
+		ret = []
+		properties_blacklist = {"scale"}.union(bpy.types.Operator.bl_rna.properties.keys())
+		for prop_id, prop in operator_rna.properties.items():
+			if not (prop.is_hidden or prop.is_skip_save):
+				if prop_id not in properties_blacklist:
+					ret.append("op.%s" % prop_id)
+
+		print(ret)
+		return ret
 
 
 class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
@@ -2119,8 +2160,6 @@ class PaperModelSettings(bpy.types.PropertyGroup):
 	scale = bpy.props.FloatProperty(name="Scale",
 		description="Divisor of all dimensions when exporting",
 		default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
-	do_ignore_errors = bpy.props.BoolProperty(name="Ignore Errors",
-		description="In case of geometry errors, take a less cautious approach. May produce incorrect output", default=False)
 bpy.utils.register_class(PaperModelSettings)
 
 
