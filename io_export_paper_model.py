@@ -1873,6 +1873,13 @@ class ExportPaperModel(bpy.types.Operator):
 	
 	def draw(self, context):
 		layout = self.layout
+
+		layout.prop(self.properties, "do_create_uvmap")
+
+		row = layout.row(align=True)
+		row.menu("VIEW3D_MT_paper_model_presets", text=bpy.types.VIEW3D_MT_paper_model_presets.bl_label)
+		row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMIN')
+		row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMOUT').remove_active = True
 		
 		# a little hack: this prints out something like "Scale: 1: 72"
 		layout.prop(self.properties, "scale", text="Scale: 1")
@@ -1881,13 +1888,6 @@ class ExportPaperModel(bpy.types.Operator):
 			layout.label(text="An island is roughly {:.1f}x bigger than page".format(scale_ratio), icon="ERROR")
 		elif scale_ratio > 0:
 			layout.label(text="Largest island is roughly 1/{:.1f} of page".format(1 / scale_ratio))
-
-		layout.prop(self.properties, "do_create_uvmap")
-
-		row = layout.row(align=True)
-		row.menu("VIEW3D_MT_paper_model_presets", text=bpy.types.VIEW3D_MT_paper_model_presets.bl_label)
-		row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMIN')
-		row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMOUT').remove_active = True
 
 		box = layout.box()
 		row = box.row(align=True)
@@ -1975,24 +1975,15 @@ class AddPresetPaperModel(bl_operators.presets.AddPresetBase, bpy.types.Operator
 	bl_label = "Add Paper Model Preset"
 	preset_menu = "VIEW3D_MT_paper_model_presets"
 	preset_subdir = "export_mesh"
-
 	preset_defines = ["op = bpy.context.active_operator"]
 
 	@property
 	def preset_values(self):
 		op = bpy.ops.export_mesh.paper_model
-		operator_rna = op.get_rna().bl_rna
-		del op
-
-		ret = []
-		properties_blacklist = {"scale"}.union(bpy.types.Operator.bl_rna.properties.keys())
-		for prop_id, prop in operator_rna.properties.items():
-			if not (prop.is_hidden or prop.is_skip_save):
-				if prop_id not in properties_blacklist:
-					ret.append("op.%s" % prop_id)
-
-		print(ret)
-		return ret
+		properties = op.get_rna().bl_rna.properties.items()
+		blacklist = bpy.types.Operator.bl_rna.properties.keys()
+		return ["op.{}".format(prop_id) for (prop_id, prop) in properties
+			if not (prop.is_hidden or prop.is_skip_save or prop_id in blacklist)]
 
 
 class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
