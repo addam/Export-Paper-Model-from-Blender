@@ -1627,7 +1627,7 @@ class Unfold(bpy.types.Operator):
 		mesh = self.object.data
 		
 		cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
-		priority_effect = {'CONVEX': self.priority_effect_convex,'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
+		priority_effect = {'CONVEX': self.priority_effect_convex, 'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
 		unfolder = Unfolder(self.object)
 		unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
 		if mesh.paper_island_list:
@@ -1858,6 +1858,8 @@ class ExportPaperModel(bpy.types.Operator):
 	
 	def invoke(self, context, event):
 		sce = context.scene
+		recall_mode = context.object.mode
+		bpy.ops.object.mode_set(mode='OBJECT')
 		
 		self.scale = sce.paper_model.scale
 		self.object = context.active_object
@@ -1869,6 +1871,8 @@ class ExportPaperModel(bpy.types.Operator):
 			self.scale *= scale_ratio
 		wm = context.window_manager
 		wm.fileselect_add(self)
+
+		bpy.ops.object.mode_set(mode=recall_mode)
 		return {'RUNNING_MODAL'}
 	
 	def draw(self, context):
@@ -1912,13 +1916,13 @@ class ExportPaperModel(bpy.types.Operator):
 			
 			box.prop(self.properties, "output_type")
 			col = box.column()
-			col.active = self.output_type != 'NONE'
+			col.active = (self.output_type != 'NONE')
 			if len(self.object.data.uv_textures) == 8:
 				col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
 			elif context.scene.render.engine != 'BLENDER_RENDER' and self.output_type != 'NONE':
 				col.label(text="Blender Internal engine will be used for texture baking.", icon='ERROR')
 			col.prop(self.properties, "image_packing", text="Images")
-		
+
 		box = layout.box()
 		row = box.row(align=True)
 		row.prop(self.properties, "ui_expanded_style", text="",
