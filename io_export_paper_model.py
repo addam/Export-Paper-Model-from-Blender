@@ -208,34 +208,11 @@ class Unfolder:
 			tex = self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images, tex=self.tex)
 			if not tex:
 				raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
-			if properties.output_type == 'TEXTURE' and tex.active_render:
-				tex.active = True
-				bpy.ops.mesh.uv_texture_remove()
-				raise UnfoldError("Texture bake error. Probably a UV Map is missing.")
 			rd = bpy.context.scene.render
 			recall = rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
 			
-			if properties.output_type == 'RENDER':
-				rd.bake_type = 'FULL'
-				rd.use_bake_selected_to_active = False
-			
-			elif properties.output_type == 'TEXTURE':
-				rd.bake_type = 'TEXTURE'
-				rd.use_bake_selected_to_active = False
-				recall_materials = [slot.material for slot in self.ob.material_slots]
-				mat = bpy.data.materials.new("unfolder_temp")
-				mat.use_shadeless = True
-				mat.use_face_texture = True
-				for slot in self.ob.material_slots:
-					slot.material = mat
-				if not recall_materials:
-					# this is a crazy hack. Sometimes, slots must be accessed
-					# through ob.material_slots, sometimes ob.data.materials
-					self.ob.data.materials.append(mat)
-			
-			elif properties.output_type == 'SELECTED_TO_ACTIVE':
-				rd.bake_type = 'FULL'
-				rd.use_bake_selected_to_active = True
+			rd.bake_type = 'TEXTURE' if properties.output_type == 'TEXTURE' else 'FULL'
+			rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
 			
 			rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
 			if properties.image_packing == 'PAGE_LINK':
@@ -247,14 +224,6 @@ class Unfolder:
 			
 			# revoke settings
 			rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
-			if properties.output_type == 'TEXTURE':
-				for slot, material in zip(self.ob.material_slots, recall_materials):
-					slot.material = material
-				if not recall_materials:
-					# another crazy workaround, remove the material slot we have created
-					self.ob.data.materials.pop()
-				mat.user_clear()
-				bpy.data.materials.remove(mat)
 			if not properties.do_create_uvmap:
 				tex.active = True
 				bpy.ops.mesh.uv_texture_remove()
@@ -1794,9 +1763,9 @@ class ExportPaperModel(bpy.types.Operator):
 		description="Source of a texture for the model",
 		default='NONE', items=[
 			('NONE', "No Texture", "Export the net only"),
-			('TEXTURE', "Face Texture", "Export the active texture as it is in the 3D View"),
-			('RENDER', "Full Render", "Render the material of the model, including all illumination"),
-			('SELECTED_TO_ACTIVE', "Selected to Active", "Use the selected surrounding objects as a texture")
+			('TEXTURE', "From Materials", "Render the diffuse color and all painted textures"),
+			('RENDER', "Full Render", "Render the material in actual scene illumination"),
+			('SELECTED_TO_ACTIVE', "Selected to Active", "Render all selected surrounding objects as a texture")
 		])
 	do_create_stickers = bpy.props.BoolProperty(name="Create Tabs",
 		description="Create gluing tabs around the net (useful for paper)",
@@ -1809,8 +1778,8 @@ class ExportPaperModel(bpy.types.Operator):
 		default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
 	image_packing = bpy.props.EnumProperty(name="Image Packing Method",
 		description="Method of attaching baked image(s) to the SVG",
-		default='PAGE_LINK', items=[
-			('PAGE_LINK', "Single Linked", "Bake one image per page of output"),
+		default='ISLAND_EMBED', items=[
+			('PAGE_LINK', "Single Linked", "Bake one image per page of output and save it separately"),
 			('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
 			('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")
 		])
