@@ -993,6 +993,8 @@ class Island:
 		incidence = {vertex.tup for vertex in phantoms.values()}.intersection(vertex.tup for vertex in self.verts)
 		incidence = {position: list() for position in incidence}  # from now on, 'incidence' is a dict
 		for uvedge in chain(boundary_other, self.boundary):
+			if uvedge.va.co == uvedge.vb.co:
+				continue
 			for vertex in (uvedge.va, uvedge.vb):
 				site = incidence.get(vertex.tup)
 				if site is not None:
