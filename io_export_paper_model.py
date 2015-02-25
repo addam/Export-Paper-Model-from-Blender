@@ -376,7 +376,7 @@ class Mesh:
 			uvedge.island.add_marker(uvedge.sticker)
 		
 		for edge in self.edges.values():
-			if edge.is_main_cut and len(edge.uvedges) >= 2:
+			if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.vect.length_squared > 0:
 				uvedge_a, uvedge_b = edge.uvedges[:2]
 				if uvedge_priority(uvedge_a) < uvedge_priority(uvedge_b):
 					uvedge_a, uvedge_b = uvedge_b, uvedge_a
