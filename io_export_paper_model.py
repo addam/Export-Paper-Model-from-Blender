@@ -84,6 +84,14 @@ def first_letters(text):
 first_letters.pattern = re_compile("(?<!\w)[\w]")
 
 
+def is_upsidedown_wrong(name):
+	"""Tell if the string would get a different meaning if written upside down"""
+	chars = set(name)
+	mistakable = set("69NZMWpbqd")
+	rotatable = set("80oOxXIl").union(mistakable)
+	return chars.issubset(rotatable) and not chars.isdisjoint(mistakable)
+
+
 def pairs(sequence):
 	"""Generate consecutive pairs throughout the given sequence; at last, it gives elements last, first."""
 	i = iter(sequence)
@@ -382,8 +390,7 @@ class Mesh:
 							# So, create an arrow and put the index on all stickers
 							target_island.sticker_numbering += 1
 							index = str(target_island.sticker_numbering)
-							# if the index would have a different meaning upside down, append a dot
-							if {'6', '9'} < set(index) < {'6', '8', '9', '0'}:
+							if is_upsidedown_wrong(index):
 								index += "."
 							target_island.add_marker(Arrow(uvedge_a, default_width, index))
 							break
@@ -406,8 +413,7 @@ class Mesh:
 			if edge.is_main_cut and len(edge.uvedges) >= 2:
 				global_numbering += 1
 				index = str(global_numbering)
-				if ('6' in index or '9' in index) and set(index) <= {'6', '8', '9', '0'}:
-					# if index consists of the digits 6, 8, 9, 0 only and contains 6 or 9, make it distinguishable
+				if is_upsidedown_wrong(index):
 					index += "."
 				for uvedge in edge.uvedges:
 					uvedge.island.add_marker(NumberAlone(uvedge, index, size))
@@ -1087,7 +1093,7 @@ class Island:
 		"""Assign a name to this island automatically"""
 		abbr = abbreviation or self.abbreviation or str(self.number)
 		# TODO: dots should be added in the last instant when outputting any text
-		if not set('69NZMWpbqd').isdisjoint(abbr) and set('6890oOxXNZMWIlpbqd').issuperset(abbr):
+		if is_upsidedown_wrong(abbr):
 			abbr += "."
 		self.label = label or self.label or "Island {}".format(self.number)
 		self.abbreviation = abbr
