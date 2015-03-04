@@ -207,7 +207,8 @@ class Unfolder:
 		text_height = properties.sticker_width if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
 		aspect_ratio = printable_size.x / printable_size.y
 		# finalizing islands will scale everything so that the page height is 1
-		self.mesh.finalize_islands(title_height=text_height)
+		# title height must be somewhat larger that text size, glyphs go below the baseline
+		self.mesh.finalize_islands(title_height=text_height * 1.2)
 		self.mesh.fit_islands(cage_size=printable_size)
 		
 		if properties.output_type != 'NONE':
@@ -1335,7 +1336,7 @@ class SVG:
 			return "#{:02x}{:02x}{:02x}".format(round(vec[0] * 255), round(vec[1] * 255), round(vec[2] * 255))
 
 		def format_matrix(matrix):
-			return " ".join(str(cell) for column in matrix for cell in column)
+			return " ".join("{:.6f}".format(cell) for column in matrix for cell in column)
 		
 		def path_convert(string, relto=os_path.dirname(filename)):
 			assert(os_path)  # check the module was imported
@@ -1396,7 +1397,7 @@ class SVG:
 						print(self.text_tag.format(
 							size=self.ppm * self.text_size,
 							x=self.ppm * (island.bounding_box.x*0.5 + island.pos.x + self.margin),
-							y=self.ppm * (self.page_size.y - island.pos.y - self.margin),
+							y=self.ppm * (self.page_size.y - island.pos.y - self.margin - 0.2 * self.text_size),
 							label=island.title), file=f)
 
 					data_markers, data_stickerfill, data_outer, data_convex, data_concave = (list() for i in range(5))
@@ -1408,7 +1409,8 @@ class SVG:
 								data_markers.append(self.text_transformed_tag.format(
 									label=marker.text,
 									pos=self.format_vertex(marker.center, island.pos),
-									mat=format_matrix(marker.width * self.ppm * marker.rot)))
+									mat=format_matrix(marker.rot),
+									size=marker.width * self.ppm))
 						elif isinstance(marker, Arrow):
 							size = marker.size * self.ppm
 							position = marker.center + marker.rot*marker.size*M.Vector((0, -0.9))
@@ -1419,11 +1421,11 @@ class SVG:
 								pos=self.format_vertex(position, island.pos - marker.size*M.Vector((0, 0.4))),
 								mat=format_matrix(size * marker.rot)))
 						elif isinstance(marker, NumberAlone):
-							size = marker.size * self.ppm
 							data_markers.append(self.text_transformed_tag.format(
 								label=marker.text,
 								pos=self.format_vertex(marker.center, island.pos),
-								mat=format_matrix(size * marker.rot)))
+								mat=format_matrix(marker.rot)),
+								size=marker.size * self.ppm)
 					if data_stickerfill and self.style.sticker_fill[3] > 0:
 						print("<path class='sticker' d='", rows(data_stickerfill), "'/>", file=f)
 					
@@ -1481,10 +1483,10 @@ class SVG:
 	
 	image_linked_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='{path}'/>"
 	image_embedded_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='data:image/png;base64,"
-	text_tag = "<text transform='translate({x} {y}) scale({size})'><tspan>{label}</tspan></text>"
-	text_transformed_tag = "<text transform='matrix({mat} {pos})'><tspan>{label}</tspan></text>"
+	text_tag = "<text transform='translate({x} {y})' style='font-size:{size:.2f}px'><tspan>{label}</tspan></text>"
+	text_transformed_tag = "<text transform='matrix({mat} {pos})' style='font-size:{size:.2f}px'><tspan>{label}</tspan></text>"
 	arrow_marker_tag = "<g><path transform='matrix({mat} {arrow_pos})' class='arrow' d='M 0 0 L 1 1 L 0 0.25 L -1 1 Z'/>" \
-		"<text class='scaled' transform='matrix({scale} 0 0 {scale} {pos})'><tspan>{index}</tspan></text></g>"
+		"<text transform='translate({pos})' style='font-size:{scale:.2f}px'><tspan>{index}</tspan></text></g>"
 	
 	svg_base = """<?xml version='1.0' encoding='UTF-8' standalone='no'?>
 	<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1'
@@ -1543,13 +1545,12 @@ class SVG:
 		fill: #000;
 	}}
 	text {{
-		font-size: 1px;
 		font-style: normal;
 		fill: {text_color};
 		fill-opacity: {text_alpha:.2};
 		stroke: none;
 	}}
-	tspan {{
+	text, tspan {{
 		text-anchor:middle;
 	}}
 	</style>"""
