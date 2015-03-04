@@ -630,7 +630,7 @@ class Edge:
     """Wrapper for BPy Edge"""
     __slots__ = ('va', 'vb', 'faces', 'main_faces', 'uvedges',
         'vect', 'length', 'angle',
-        'is_main_cut', 'force_cut', 'priority')
+        'is_main_cut', 'force_cut', 'priority', 'freestyle')
 
     def __init__(self, edge, mesh, matrix=1):
         self.va = mesh.verts[edge.vertices[0]]
@@ -642,13 +642,14 @@ class Edge:
         # this constraint is assured at the time of finishing mesh.generate_cuts
         self.uvedges = list()
 
-        self.force_cut = bool(edge.use_seam)  # such edges will always be cut
+        self.force_cut = edge.use_seam  # such edges will always be cut
         self.main_faces = None  # two faces that may be connected in the island
         # is_main_cut defines whether the two main faces are connected
         # all the others will be assumed to be cut
         self.is_main_cut = True
         self.priority = None
         self.angle = None
+        self.freestyle = edge.use_freestyle_mark # freestyle edges will be highlighted
         self.va.edges.append(self)  #FIXME: editing foreign attribute
         self.vb.edges.append(self)  #FIXME: editing foreign attribute
 
@@ -1346,17 +1347,18 @@ class SVG:
             return string
 
         styleargs = {name: format_color(getattr(self.style, name)) for name in
-            ("outer_color", "outbg_color", "convex_color", "concave_color",
+            ("outer_color", "outbg_color", "convex_color", "concave_color", "freestyle_color",
             "inbg_color", "sticker_fill", "text_color")}
-        styleargs.update({name: format_style[getattr(self.style, name)] for name in 
-            ("outer_style", "convex_style", "concave_style")})
+        styleargs.update({name: format_style[getattr(self.style, name)] for name in
+            ("outer_style", "convex_style", "concave_style", "freestyle_style")})
         styleargs.update({name: getattr(self.style, attr)[3] for name, attr in
             (("outer_alpha", "outer_color"), ("outbg_alpha", "outbg_color"),
             ("convex_alpha", "convex_color"), ("concave_alpha", "concave_color"),
+            ("freestyle_alpha", "freestyle_color"),
             ("inbg_alpha", "inbg_color"), ("sticker_alpha", "sticker_fill"),
             ("text_alpha", "text_color"))})
         styleargs.update({name: getattr(self.style, name) for name in
-            ("outer_width", "convex_width", "concave_width")})
+            ("outer_width", "convex_width", "concave_width", "freestyle_width")})
         styleargs.update({"outbg_width": self.style.outer_width * self.style.outbg_width,
             "convexbg_width": self.style.convex_width * self.style.inbg_width,
             "concavebg_width": self.style.concave_width * self.style.inbg_width})
@@ -1400,7 +1402,7 @@ class SVG:
                             y=self.ppm * (self.page_size.y - island.pos.y - self.margin - 0.2 * self.text_size),
                             label=island.title), file=f)
 
-                    data_markers, data_stickerfill, data_outer, data_convex, data_concave = (list() for i in range(5))
+                    data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
                     for marker in island.markers:
                         if isinstance(marker, Sticker):
                             data_stickerfill.append("M {} Z".format(
@@ -1452,6 +1454,8 @@ class SVG:
                             continue
                         data_uvedge = "M {}".format(
                             line_through(self.format_vertex(vertex.co, island.pos) for vertex in (uvedge.va, uvedge.vb)))
+                        if edge.freestyle:
+                            data_freestyle.append(data_uvedge)
                         # each uvedge is in two opposite-oriented variants; we want to add each only once
                         if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
                             if edge.angle > 0.01:
@@ -1461,6 +1465,8 @@ class SVG:
                     if island.is_inside_out:
                         data_convex, data_concave = data_concave, data_convex
 
+                    if data_freestyle:
+                        print("<path class='freestyle' d='", rows(data_freestyle), "'/>", file=f)
                     if data_convex:
                         if not self.pure_net and self.style.use_inbg:
                             print("<path class='convex_background' d='", rows(data_convex), "'/>", file=f)
@@ -1520,6 +1526,13 @@ class SVG:
         stroke-dashoffset: 0;
         stroke-width: {concave_width:.2}px;
         stroke-opacity: {concave_alpha:.2}
+    }}
+    path.freestyle {{
+        stroke: {freestyle_color};
+        stroke-dasharray: {freestyle_style};
+        stroke-dashoffset: 0;
+        stroke-width: {freestyle_width:.2}px;
+        stroke-opacity: {freestyle_alpha:.2}
     }}
     path.outer_background {{
         stroke: {outbg_color};
@@ -1715,6 +1728,15 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         default='DASHDOT', items=line_styles)
     concave_width = bpy.props.FloatProperty(name="Concave Lines Thickness",
         description="Thickness of concave lines, in pixels",
+        default=1, min=0, soft_max=10, precision=1)
+    freestyle_color = bpy.props.FloatVectorProperty(name="Freestyle Edges",
+        description="Color of lines marked as Freestyle Edge",
+        default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
+    freestyle_style = bpy.props.EnumProperty(name="Freestyle Edges Drawing Style",
+        description="Drawing style of Freestyle Edges",
+        default='SOLID', items=line_styles)
+    freestyle_width = bpy.props.FloatProperty(name="Freestyle Edges Thickness",
+        description="Thickness of Freestyle Edges, in pixels",
         default=1, min=0, soft_max=10, precision=1)
     use_inbg = bpy.props.BoolProperty(name="Highlight Inner Lines",
         description="Add another line below every line to improve contrast",
@@ -1927,6 +1949,10 @@ class ExportPaperModel(bpy.types.Operator):
             col.prop(self.style, "concave_color")
             col.prop(self.style, "concave_width", text="Width (pixels)")
             col.prop(self.style, "concave_style", text="Style")
+            col = box.column()
+            col.prop(self.style, "freestyle_color")
+            col.prop(self.style, "freestyle_width", text="Width (pixels)")
+            col.prop(self.style, "freestyle_style", text="Style")
             col = box.column()
             col.active = self.output_type != 'NONE'
             col.prop(self.style, "use_inbg", text="Inner Lines Highlight:")
