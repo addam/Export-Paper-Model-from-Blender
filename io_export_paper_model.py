@@ -1423,8 +1423,8 @@ class SVG:
                             data_markers.append(self.text_transformed_tag.format(
                                 label=marker.text,
                                 pos=self.format_vertex(marker.center, island.pos),
-                                mat=format_matrix(marker.rot)),
-                                size=marker.size * 1000)
+                                mat=format_matrix(marker.rot),
+                                size=marker.size * 1000))
                     if data_stickerfill and self.style.sticker_fill[3] > 0:
                         print("<path class='sticker' d='", rows(data_stickerfill), "'/>", file=f)
 
