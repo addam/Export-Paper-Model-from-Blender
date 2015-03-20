@@ -1329,8 +1329,10 @@ class SVG:
     def write(self, mesh, filename):
         """Write data to a file given by its name."""
         line_through = " L ".join  # used for formatting of SVG path data
-        format_style = {'SOLID': "none", 'DOT': "0.2,4", 'DASH': "4,8", 'LONGDASH': "6,3", 'DASHDOT': "8,4,0.2,4"}
         rows = "\n".join
+
+        dl = ["{:.2f}".format(length * self.style.line_width * 1000) for length in (2, 5, 10)]
+        format_style = {'SOLID': "none", 'DOT': "{0},{1}".format(*dl), 'DASH': "{1},{2}".format(*dl), 'LONGDASH': "{2},{1}".format(*dl), 'DASHDOT': "{2},{1},{0},{1}".format(*dl)}
 
         def format_color(vec):
             return "#{:02x}{:02x}{:02x}".format(round(vec[0] * 255), round(vec[1] * 255), round(vec[2] * 255))
@@ -1356,11 +1358,8 @@ class SVG:
             ("freestyle_alpha", "freestyle_color"),
             ("inbg_alpha", "inbg_color"), ("sticker_alpha", "sticker_fill"),
             ("text_alpha", "text_color"))})
-        styleargs.update({name: getattr(self.style, name) * 1000 for name in
-            ("outer_width", "convex_width", "concave_width", "freestyle_width")})
-        styleargs.update({"outbg_width": styleargs["outer_width"] * self.style.outbg_width,
-            "convexbg_width": styleargs["convex_width"] * self.style.inbg_width,
-            "concavebg_width": styleargs["concave_width"] * self.style.inbg_width})
+        styleargs.update({name: getattr(self.style, name) * self.style.line_width * 1000 for name in
+            ("outer_width", "convex_width", "concave_width", "freestyle_width", "outbg_width", "inbg_width")})
         for num, page in enumerate(mesh.pages):
             with open("{}_{}.svg".format(filename, page.name), 'w') as f:
                 print(self.svg_base.format(width=self.page_size.x*1000, height=self.page_size.y*1000), file=f)
@@ -1464,13 +1463,11 @@ class SVG:
 
                     if data_freestyle:
                         print("<path class='freestyle' d='", rows(data_freestyle), "'/>", file=f)
+                    if (data_convex or data_concave) and not self.pure_net and self.style.use_inbg:
+                        print("<path class='inner_background' d='", rows(data_convex + data_concave), "'/>", file=f)
                     if data_convex:
-                        if not self.pure_net and self.style.use_inbg:
-                            print("<path class='convex_background' d='", rows(data_convex), "'/>", file=f)
                         print("<path class='convex' d='", rows(data_convex), "'/>", file=f)
                     if data_concave:
-                        if not self.pure_net and self.style.use_inbg:
-                            print("<path class='concave_background' d='", rows(data_concave), "'/>", file=f)
                         print("<path class='concave' d='", rows(data_concave), "'/>", file=f)
                     if data_outer:
                         if not self.pure_net and self.style.use_outbg:
@@ -1498,7 +1495,7 @@ class SVG:
     css_base = """<style type="text/css">
     path {{
         fill: none;
-        stroke-linecap: square;
+        stroke-linecap: butt;
         stroke-linejoin: bevel;
         stroke-dasharray: none;
     }}
@@ -1535,15 +1532,10 @@ class SVG:
         stroke-opacity: {outbg_alpha};
         stroke-width: {outbg_width:.2}
     }}
-    path.convex_background {{
+    path.inner_background {{
         stroke: {inbg_color};
         stroke-opacity: {inbg_alpha};
-        stroke-width: {convexbg_width:.2}
-    }}
-    path.concave_background {{
-        stroke:{inbg_color};
-        stroke-opacity:{inbg_alpha};
-        stroke-width:{concavebg_width:.2}
+        stroke-width: {inbg_width:.2}
     }}
     path.sticker {{
         fill: {sticker_fill};
@@ -1694,18 +1686,21 @@ class PaperModelStyle(bpy.types.PropertyGroup):
     outer_style = bpy.props.EnumProperty(name="Outer Lines Drawing Style",
         description="Drawing style of net outline",
         default='SOLID', items=line_styles)
+    line_width = bpy.props.FloatProperty(name="Base Lines Thickness",
+        description="Base thickness of net lines, each actual value is a multiple of this length",
+        default=1e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
     outer_width = bpy.props.FloatProperty(name="Outer Lines Thickness",
-        description="Thickness of net outline",
-        default=3e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
+        description="Relative thickness of net outline",
+        default=3, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
     use_outbg = bpy.props.BoolProperty(name="Highlight Outer Lines",
         description="Add another line below every line to improve contrast",
         default=True)
     outbg_color = bpy.props.FloatVectorProperty(name="Outer Highlight",
         description="Color of the highlight for outer lines",
         default=(1.0, 1.0, 1.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    outbg_width = bpy.props.FloatProperty(name="Outer Highlight Scale",
-        description="Thickness of the highlighting lines as a multiple of the outer line",
-        default=1.5, min=1, soft_max=3, subtype='FACTOR')
+    outbg_width = bpy.props.FloatProperty(name="Outer Highlight Thickness",
+        description="Relative thickness of the highlighting lines",
+        default=5, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
 
     convex_color = bpy.props.FloatVectorProperty(name="Inner Convex Lines",
         description="Color of lines to be folded to a convex angle",
@@ -1714,8 +1709,8 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         description="Drawing style of lines to be folded to a convex angle",
         default='DASH', items=line_styles)
     convex_width = bpy.props.FloatProperty(name="Convex Lines Thickness",
-        description="Thickness of concave lines",
-        default=2e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
+        description="Relative thickness of concave lines",
+        default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
     concave_color = bpy.props.FloatVectorProperty(name="Inner Concave Lines",
         description="Color of lines to be folded to a concave angle",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
@@ -1723,8 +1718,8 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         description="Drawing style of lines to be folded to a concave angle",
         default='DASHDOT', items=line_styles)
     concave_width = bpy.props.FloatProperty(name="Concave Lines Thickness",
-        description="Thickness of concave lines",
-        default=2e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
+        description="Relative thickness of concave lines",
+        default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
     freestyle_color = bpy.props.FloatVectorProperty(name="Freestyle Edges",
         description="Color of lines marked as Freestyle Edge",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
@@ -1732,17 +1727,17 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         description="Drawing style of Freestyle Edges",
         default='SOLID', items=line_styles)
     freestyle_width = bpy.props.FloatProperty(name="Freestyle Edges Thickness",
-        description="Thickness of Freestyle Edges",
-        default=3e-4, min=0, soft_max=1e-2, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
+        description="Relative thickness of Freestyle edges",
+        default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
     use_inbg = bpy.props.BoolProperty(name="Highlight Inner Lines",
         description="Add another line below every line to improve contrast",
         default=True)
     inbg_color = bpy.props.FloatVectorProperty(name="Inner Highlight",
         description="Color of the highlight for inner lines",
         default=(1.0, 1.0, 1.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    inbg_width = bpy.props.FloatProperty(name="Inner Highlight Scale",
-        description="Thickness of the highlighting lines as a multiple of the inner line",
-        default=1, min=1, soft_max=3, subtype='FACTOR')
+    inbg_width = bpy.props.FloatProperty(name="Inner Highlight Thickness",
+        description="Relative thickness of the highlighting lines",
+        default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
 
     sticker_fill = bpy.props.FloatVectorProperty(name="Tabs Fill",
         description="Fill color of sticking tabs",
@@ -1926,9 +1921,10 @@ class ExportPaperModel(bpy.types.Operator):
         row.label(text="Colors and Style")
 
         if self.ui_expanded_style:
+            box.prop(self.style, "line_width", text="Default line width")
             col = box.column()
             col.prop(self.style, "outer_color")
-            col.prop(self.style, "outer_width", text="Width")
+            col.prop(self.style, "outer_width", text="Relative width")
             col.prop(self.style, "outer_style", text="Style")
             col = box.column()
             col.active = self.output_type != 'NONE'
@@ -1939,15 +1935,15 @@ class ExportPaperModel(bpy.types.Operator):
             sub.prop(self.style, "outbg_width", text="Relative width")
             col = box.column()
             col.prop(self.style, "convex_color")
-            col.prop(self.style, "convex_width", text="Width")
+            col.prop(self.style, "convex_width", text="Relative width")
             col.prop(self.style, "convex_style", text="Style")
             col = box.column()
             col.prop(self.style, "concave_color")
-            col.prop(self.style, "concave_width", text="Width")
+            col.prop(self.style, "concave_width", text="Relative width")
             col.prop(self.style, "concave_style", text="Style")
             col = box.column()
             col.prop(self.style, "freestyle_color")
-            col.prop(self.style, "freestyle_width", text="Width")
+            col.prop(self.style, "freestyle_width", text="Relative width")
             col.prop(self.style, "freestyle_style", text="Style")
             col = box.column()
             col.active = self.output_type != 'NONE'
