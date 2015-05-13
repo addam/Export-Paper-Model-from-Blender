@@ -649,7 +649,7 @@ class Edge:
         self.is_main_cut = True
         self.priority = None
         self.angle = None
-        self.freestyle = edge.use_freestyle_mark # freestyle edges will be highlighted
+        self.freestyle = getattr(edge, "use_freestyle_mark", False) # freestyle edges will be highlighted
         self.va.edges.append(self)  #FIXME: editing foreign attribute
         self.vb.edges.append(self)  #FIXME: editing foreign attribute
 
