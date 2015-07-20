@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Export Paper Model from Blender by addam</title>
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/github-dark.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="javascripts/respond.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <!--[if lt IE 8]>
+    <link rel="stylesheet" href="stylesheets/ie.css">
+    <![endif]-->
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+  </head>
+  <body>
+      <div id="header">
+        <nav>
+          <li class="fork"><a href="https://github.com/addam/Export-Paper-Model-from-Blender">View On GitHub</a></li>
+          <li class="downloads"><a href="https://github.com/addam/Export-Paper-Model-from-Blender/zipball/master">ZIP</a></li>
+          <li class="downloads"><a href="https://github.com/addam/Export-Paper-Model-from-Blender/tarball/master">TAR</a></li>
+          <li class="title">DOWNLOADS</li>
+        </nav>
+      </div><!-- end header -->
+
+    <div class="wrapper">
+
+      <section>
+        <div id="title">
+          <h1>Export Paper Model from Blender</h1>
+          <p>A Python script for Blender 2.7 designed for creating paper models</p>
+          <hr>
+          <span class="credits left">Project maintained by <a href="https://github.com/addam">addam</a></span>
+          <span class="credits right">Hosted on GitHub Pages &mdash; Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></span>
+        </div>
+
+        <h1>
+<a id="jump-in" class="anchor" href="#jump-in" aria-hidden="true"><span class="octicon octicon-link"></span></a>Jump in</h1>
+
+<p><a href="https://github.com/addam/Export-Paper-Model-from-Blender/raw/master/io_export_paper_model.py"><strong>Download the script from here</strong></a></p>
+
+<h2>
+<a id="install" class="anchor" href="#install" aria-hidden="true"><span class="octicon octicon-link"></span></a>Install</h2>
+
+<p>To make it work, you need blender 2.70 or later. In <em>User Preferences</em> &gt; <em>Add-Ons</em>, use the <em>Import Add-on</em> tool. Then in the list of available add-ons, look for <em>Export Paper Model</em> and enable it.
+If you just want to see some action quickly, the export is done from menu <em>File</em> &gt; <em>Export</em> &gt; <em>Paper Model</em>.</p>
+
+<h2>
+<a id="how-to-use" class="anchor" href="#how-to-use" aria-hidden="true"><span class="octicon octicon-link"></span></a>How to Use</h2>
+
+<p>The first (optional) step is to mark edges where the model will be cut. From the Toolbox panel, call the Unfold operator on the selected model. The edges will get marked as Edit mode <em>Seams</em>, you can edit them in any way you like. The script will use the seams you mark and mark some more as necessary.</p>
+
+<p>Second step is to save the document. Use the <em>Export Paper Model</em> button in the Toolbox. A File Browser appears, which also allows you to change the export settings in the bottom-left corner.</p>
+
+<p>Then, if everything goes well, the script saves one or more files without any further talking. In the settings, if you switch No Texture to something else, Blender's <em>Bake Render</em> functionality will be exploited to create the images: that may take some time. Blender Internal is the only supported render engine.</p>
+
+<p>The file format is SVG. Most web browsers can open it and will allow you to directly print it. If you want to edit the net before printing, <a href="http://inkscape.org">Inkscape</a> might help you as a vector editor.</p>
+
+<h2>
+<a id="advanced-usage" class="anchor" href="#advanced-usage" aria-hidden="true"><span class="octicon octicon-link"></span></a>Advanced Usage</h2>
+
+<p>A humble panel is in the 3d View Toolbox. Currently it gives you an overview of how the net will be split into parts (aka. islands). It can show one of them directly in the 3D view, highlighted in orange. You can edit the name of each island and give it a three-letter abbreviation that will be used on the sticking tabs.</p>
+
+<p>Official description and a detailed user manual is located at a <a href="http://wiki.blender.org/index.php/Extensions:2.6/Py/Scripts/Import-Export/Paper_Model">Blender Wiki page</a>.</p>
+
+<p>More development details may be found in the <a href="https://github.com/addam/Export-Paper-Model-from-Blender">github repository</a>. You may post <a href="https://github.com/addam/Export-Paper-Model-from-Blender/issues">feature requests and bug reports</a> there. Or, if you have a BlenderArtists.org account, you may prefer to post to <a href="http://blenderartists.org/forum/showthread.php?186071">the associated forum thread</a></p>
+
+<p>Bug reports and constructive ideas are appreciated. If the script fails or creates something useless, please, let me know, I will try and fix it. Also, if something feels unnatural to you or you need support for a specific task, I will appreciate if you tell me.</p>
+
+<h1>
+<a id="associated-projects" class="anchor" href="#associated-projects" aria-hidden="true"><span class="octicon octicon-link"></span></a>Associated projects</h1>
+
+<h2>
+<a id="animate-the-net" class="anchor" href="#animate-the-net" aria-hidden="true"><span class="octicon octicon-link"></span></a>Animate the net</h2>
+
+<p>I have also written an addon for animating the net using bones. You can get it from the <a href="https://github.com/addam/Export-Paper-Model-from-Blender/raw/master/object_convert_to_armature.py">repository too</a>. Installation and usage is explained on its own <a href="http://wiki.blender.org/index.php/Extensions:2.6/Py/Scripts/Object/Convert_to_Armature">Blender Wiki page</a>.</p>
+
+<h2>
+<a id="flatten-all-polygon-faces" class="anchor" href="#flatten-all-polygon-faces" aria-hidden="true"><span class="octicon octicon-link"></span></a>Flatten all polygon faces</h2>
+
+<p>The export script can only handle flat faces, whereas Blender allows you to move vertices around freely. If a quad face is not perfectly flat, for instance, the exported net will be skewed and impossible to glue correctly. The easiest option is to convert all faces to triangles before export.</p>
+
+<p>For the purpose of my <a href="blenderartists.org/forum/showthread.php?366189">Add Dual Polyhedron script</a>, I have coded an operator to automatically flatten all faces. Copy the code from the aforementioned thread, install it as an Add-on and then look for a Mesh operator called <em>Planarize</em>. Someday I will perhaps include this operator in the Export Paper Model script as well.</p>
+      </section>
+
+    </div>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+    
+  </body>
+</html>
