@@ -237,7 +237,7 @@ class Unfolder:
                 tex.active = True
                 bpy.ops.mesh.uv_texture_remove()
 
-        svg = SVG(page_size, properties.style, (properties.output_type == 'NONE'))
+        svg = SVG(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
         svg.do_create_stickers = properties.do_create_stickers
         svg.margin = properties.output_margin
         svg.text_size = properties.sticker_width
@@ -1311,14 +1311,14 @@ class NumberAlone:
 class SVG:
     """Simple SVG exporter"""
 
-    def __init__(self, page_size: M.Vector, style, pure_net=True):
+    def __init__(self, page_size: M.Vector, style, margin, pure_net=True):
         """Initialize document settings.
         page_size: document dimensions in meters
         pure_net: if True, do not use image"""
         self.page_size = page_size
         self.pure_net = pure_net
         self.style = style
-        self.margin = 0
+        self.margin = margin
         self.text_size = 12
 
     def format_vertex(self, vector, pos=M.Vector((0, 0))):
@@ -1366,9 +1366,9 @@ class SVG:
                 print(self.css_base.format(**styleargs), file=f)
                 if page.image_path:
                     print(self.image_linked_tag.format(
-                        pos="{0} {0}".format(self.page_size),
-                        width=self.page_size.x - 2 * self.page_size,
-                        height=self.page_size.y - 2 * self.page_size,
+                        pos="{0} {0}".format(self.margin*1000),
+                        width=(self.page_size.x - 2 * self.margin)*1000,
+                        height=(self.page_size.y - 2 * self.margin)*1000,
                         path=path_convert(page.image_path)),
                         file=f)
                 if len(page.islands) > 1:
