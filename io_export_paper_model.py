@@ -227,9 +227,9 @@ class Unfolder:
             if properties.image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
             elif properties.image_packing == 'ISLAND_LINK':
-                self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath)
+                self.mesh.save_separate_images(tex, ppm, filepath)
             elif properties.image_packing == 'ISLAND_EMBED':
-                self.mesh.save_separate_images(tex, printable_size.y * ppm, filepath, do_embed=True)
+                self.mesh.save_separate_images(tex, ppm, filepath, do_embed=True)
 
             # revoke settings
             rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
