@@ -206,7 +206,6 @@ class Unfolder:
 
         text_height = properties.sticker_width if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
         aspect_ratio = printable_size.x / printable_size.y
-        # finalizing islands will scale everything so that the page height is 1
         # title height must be somewhat larger that text size, glyphs go below the baseline
         self.mesh.finalize_islands(title_height=text_height * 1.2)
         self.mesh.fit_islands(cage_size=printable_size)
@@ -239,7 +238,6 @@ class Unfolder:
 
         svg = SVG(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
         svg.do_create_stickers = properties.do_create_stickers
-        svg.margin = properties.output_margin
         svg.text_size = properties.sticker_width
         svg.write(self.mesh, filepath)
 
@@ -1366,7 +1364,7 @@ class SVG:
                 print(self.css_base.format(**styleargs), file=f)
                 if page.image_path:
                     print(self.image_linked_tag.format(
-                        pos="{0} {0}".format(self.margin*1000),
+                        pos="{0:.6f} {0:.6f}".format(self.margin*1000),
                         width=(self.page_size.x - 2 * self.margin)*1000,
                         height=(self.page_size.y - 2 * self.margin)*1000,
                         path=path_convert(page.image_path)),
@@ -1481,8 +1479,8 @@ class SVG:
                     print("</g>", file=f)
                 print("</svg>", file=f)
 
-    image_linked_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='{path}'/>"
-    image_embedded_tag = "<image transform='translate({pos})' width='{width}' height='{height}' xlink:href='data:image/png;base64,"
+    image_linked_tag = "<image transform='translate({pos})' width='{width:.6f}' height='{height:.6f}' xlink:href='{path}'/>"
+    image_embedded_tag = "<image transform='translate({pos})' width='{width:.6f}' height='{height:.6f}' xlink:href='data:image/png;base64,"
     text_tag = "<text transform='translate({x} {y})' style='font-size:{size:.2f}'><tspan>{label}</tspan></text>"
     text_transformed_tag = "<text transform='matrix({mat} {pos})' style='font-size:{size:.2f}'><tspan>{label}</tspan></text>"
     arrow_marker_tag = "<g><path transform='matrix({mat} {arrow_pos})' class='arrow' d='M 0 0 L 1 1 L 0 0.25 L -1 1 Z'/>" \
