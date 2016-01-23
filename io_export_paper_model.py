@@ -152,6 +152,13 @@ def create_blank_image(image_name, dimensions, alpha=1):
     image.file_format = 'PNG'
     return image
 
+def bu2m(value):
+    """Convert blender units to meters"""
+    return value * bpy.context.scene.unit_settings.scale_length
+
+def m2bu(value):
+    """Convert meters to blender units"""
+    return value / bpy.context.scene.unit_settings.scale_length
 
 class UnfoldError(ValueError):
     pass
@@ -191,9 +198,9 @@ class Unfolder:
         if filepath.lower().endswith((".svg", ".png")):
             filepath = filepath[0:-4]
         # page size in meters
-        page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+        page_size = bu2m( M.Vector((properties.output_size_x, properties.output_size_y)) )
         # printable area size in meters
-        printable_size = page_size - 2 * properties.output_margin * M.Vector((1, 1))
+        printable_size = page_size - 2 * bu2m( properties.output_margin * M.Vector((1, 1)) )
         unit_scale = bpy.context.scene.unit_settings.scale_length
         ppm = properties.output_dpi * 100 / 2.54  # pixels per meter
 
@@ -236,7 +243,7 @@ class Unfolder:
                 tex.active = True
                 bpy.ops.mesh.uv_texture_remove()
 
-        svg = SVG(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
+        svg = SVG(page_size, properties.style, bu2m(properties.output_margin), (properties.output_type == 'NONE'))
         svg.do_create_stickers = properties.do_create_stickers
         svg.text_size = properties.sticker_width
         svg.write(self.mesh, filepath)
@@ -1603,7 +1610,7 @@ class Unfold(bpy.types.Operator):
         self.object = context.active_object
         mesh = self.object.data
 
-        cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
+        cage_size = bu2m( M.Vector((settings.output_size_x, settings.output_size_y)) ) if settings.limit_by_page else None
         priority_effect = {'CONVEX': self.priority_effect_convex, 'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
         unfolder = Unfolder(self.object)
         unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
@@ -1657,17 +1664,17 @@ class ClearAllSeams(bpy.types.Operator):
 def page_size_preset_changed(self, context):
     """Update the actual document size to correct values"""
     if self.page_size_preset == 'A4':
-        self.output_size_x = 0.210
-        self.output_size_y = 0.297
+        self.output_size_x = m2bu(0.210)
+        self.output_size_y = m2bu(0.297)
     elif self.page_size_preset == 'A3':
-        self.output_size_x = 0.297
-        self.output_size_y = 0.420
+        self.output_size_x = m2bu(0.297)
+        self.output_size_y = m2bu(0.420)
     elif self.page_size_preset == 'US_LETTER':
-        self.output_size_x = 0.216
-        self.output_size_y = 0.279
+        self.output_size_x = m2bu(0.216)
+        self.output_size_y = m2bu(0.279)
     elif self.page_size_preset == 'US_LEGAL':
-        self.output_size_x = 0.216
-        self.output_size_y = 0.356
+        self.output_size_x = m2bu(0.216)
+        self.output_size_y = m2bu(0.356)
 
 
 class PaperModelStyle(bpy.types.PropertyGroup):
@@ -1769,13 +1776,13 @@ class ExportPaperModel(bpy.types.Operator):
         ])
     output_size_x = bpy.props.FloatProperty(name="Page Width",
         description="Width of the exported document",
-        default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+        default=m2bu(0.210), soft_min=m2bu(0.105), soft_max=m2bu(0.841), subtype="UNSIGNED", unit="LENGTH")
     output_size_y = bpy.props.FloatProperty(name="Page Height",
         description="Height of the exported document",
-        default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+        default=m2bu(0.297), soft_min=m2bu(0.148), soft_max=m2bu(1.189), subtype="UNSIGNED", unit="LENGTH")
     output_margin = bpy.props.FloatProperty(name="Page Margin",
         description="Distance from page borders to the printable area",
-        default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+        default=m2bu(0.005), min=m2bu(0), soft_max=m2bu(0.1), step=m2bu(0.1), subtype="UNSIGNED", unit="LENGTH")
     output_type = bpy.props.EnumProperty(name="Textures",
         description="Source of a texture for the model",
         default='NONE', items=[
@@ -1792,7 +1799,7 @@ class ExportPaperModel(bpy.types.Operator):
         default=True)
     sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size",
         description="Width of gluing tabs and their numbers",
-        default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+        default=m2bu(0.005), soft_min=m2bu(0), soft_max=m2bu(0.05), step=m2bu(0.1), subtype="UNSIGNED", unit="LENGTH")
     output_dpi = bpy.props.FloatProperty(name="Resolution (DPI)",
         description="Resolution of images in pixels per inch",
         default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
@@ -1841,7 +1848,7 @@ class ExportPaperModel(bpy.types.Operator):
         margin = self.output_margin + self.sticker_width + 1e-5
         if min(self.output_size_x, self.output_size_y) <= 2 * margin:
             return False
-        output_inner_size = M.Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin))
+        output_inner_size = bu2m( M.Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin)) )
         ratio = self.unfolder.mesh.largest_island_ratio(output_inner_size)
         return ratio * sce.unit_settings.scale_length / self.scale
 
@@ -1853,7 +1860,7 @@ class ExportPaperModel(bpy.types.Operator):
         self.scale = sce.paper_model.scale
         self.object = context.active_object
         self.unfolder = Unfolder(self.object)
-        cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
+        cage_size = bu2m( M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) ) if sce.paper_model.limit_by_page else None
         self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
         scale_ratio = self.get_scale_ratio(sce)
         if scale_ratio > 1:
@@ -2142,10 +2149,10 @@ class PaperModelSettings(bpy.types.PropertyGroup):
         description="Do not create islands larger than given dimensions", default=False)
     output_size_x = bpy.props.FloatProperty(name="Width",
         description="Maximal width of an island",
-        default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+        default=m2bu(0.2), soft_min=m2bu(0.105), soft_max=m2bu(0.841), subtype="UNSIGNED", unit="LENGTH")
     output_size_y = bpy.props.FloatProperty(name="Height",
         description="Maximal height of an island",
-        default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+        default=m2bu(0.29), soft_min=m2bu(0.148), soft_max=m2bu(1.189), subtype="UNSIGNED", unit="LENGTH")
     scale = bpy.props.FloatProperty(name="Scale",
         description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
