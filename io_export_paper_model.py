@@ -1256,23 +1256,41 @@ class Sticker:
 
         other_first, other_second = (other.va, other.vb) if not other.uvface.flipped else (other.vb, other.va)
         other_edge = other_second.co - other_first.co
+
         # angle a is at vertex uvedge.va, b is at uvedge.vb
         cos_a = cos_b = 0.5
         sin_a = sin_b = 0.75**0.5
         # len_a is length of the side adjacent to vertex a, len_b likewise
         len_a = len_b = sticker_width / sin_a
+
         # fix overlaps with the most often neighbour - its sticking target
         if first_vertex == other_second:
             cos_a = max(cos_a, (edge*other_edge) / (edge.length**2))  # angles between pi/3 and 0
-            sin_a = abs(1 - cos_a**2)**0.5
-            len_b = min(len_a, (edge.length*sin_a) / (sin_a*cos_b + sin_b*cos_a))
-            len_a = 0 if sin_a == 0 else min(sticker_width / sin_a, (edge.length - len_b*cos_b) / cos_a)
         elif second_vertex == other_first:
             cos_b = max(cos_b, (edge*other_edge) / (edge.length**2))  # angles between pi/3 and 0
-            sin_b = abs(1 - cos_b**2)**0.5
-            len_a = min(len_a, (edge.length*sin_b) / (sin_a*cos_b + sin_b*cos_a))
-            len_b = 0 if sin_b == 0 else min(sticker_width / sin_b, (edge.length - len_a*cos_a) / cos_b)
-        v3 = UVVertex(second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b / edge.length)
+
+        # Fix tabs for sticking targets with small angles
+        # Index of other uvedge in its face (not in its island)
+        other_idx = other.uvface.edges.index(other)
+        # Left and right neighbors in the face
+        other_face_neighbor_left = other.uvface.edges[(other_idx+1) % len(other.uvface.edges)]
+        other_face_neighbor_right = other.uvface.edges[(other_idx-1) % len(other.uvface.edges)]
+        other_edge_neighbor_a = other_face_neighbor_left.vb.co - other.vb.co
+        other_edge_neighbor_b = other_face_neighbor_right.va.co - other.va.co
+        # Adjacent angles in the face
+        cos_a = max(cos_a, (-other_edge*other_edge_neighbor_a) / (other_edge.length*other_edge_neighbor_a.length))
+        cos_b = max(cos_b, (other_edge*other_edge_neighbor_b) / (other_edge.length*other_edge_neighbor_b.length))
+
+        # Calculate the lengths of the glue tab edges using the possibly smaller angles
+        sin_a = abs(1 - cos_a**2)**0.5
+        len_b = min(len_a, (edge.length*sin_a) / (sin_a*cos_b + sin_b*cos_a))
+        len_a = 0 if sin_a == 0 else min(sticker_width / sin_a, (edge.length - len_b*cos_b) / cos_a)
+
+        sin_b = abs(1 - cos_b**2)**0.5
+        len_a = min(len_a, (edge.length*sin_b) / (sin_a*cos_b + sin_b*cos_a))
+        len_b = 0 if sin_b == 0 else min(sticker_width / sin_b, (edge.length - len_a*cos_a) / cos_b)
+
+        v3 = UVVertex(second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge *len_b / edge.length)
         v4 = UVVertex(first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a / edge.length)
         if v3.co != v4.co:
             self.vertices = [second_vertex, v3, v4, first_vertex]
