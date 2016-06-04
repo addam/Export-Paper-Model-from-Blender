@@ -222,7 +222,7 @@ class Unfolder:
             rd.bake_type = 'TEXTURE' if properties.output_type == 'TEXTURE' else 'FULL'
             rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
 
-            rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 10, 0, 0.001, False, False
+            rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
             if properties.image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
             elif properties.image_packing == 'ISLAND_LINK':
