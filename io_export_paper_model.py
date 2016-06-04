@@ -1098,11 +1098,20 @@ class Island:
 
     def generate_label(self, label=None, abbreviation=None):
         """Assign a name to this island automatically"""
+        settings = bpy.context.scene.paper_model
         abbr = abbreviation or self.abbreviation or str(self.number)
+        print(self.label)
         # TODO: dots should be added in the last instant when outputting any text
         if is_upsidedown_wrong(abbr):
             abbr += "."
-        self.label = label or self.label or "Island {}".format(self.number)
+
+        if settings.regenerate_island_labels:
+            # Generate new labels
+            self.label = "Island {}".format(self.number)
+        else:
+            # Use existing labels where possible, otherwise generate new label
+            self.label = label or self.label or "Island {}".format(self.number)
+
         self.abbreviation = abbr
 
     def save_uv(self, tex, cage_size):
@@ -1632,13 +1641,16 @@ class Unfold(bpy.types.Operator):
         priority_effect = {'CONVEX': self.priority_effect_convex, 'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
         unfolder = Unfolder(self.object)
         unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
-        if mesh.paper_island_list:
+
+        if mesh.paper_island_list and not settings.regenerate_island_labels:
+            # Use existing labels if not explicitly asking to regenerate them
             unfolder.copy_island_names(mesh.paper_island_list)
 
         island_list = mesh.paper_island_list
         attributes = {item.label: (item.abbreviation, item.auto_label, item.auto_abbrev) for item in island_list}
         island_list.clear()  # remove previously defined islands
         for island in unfolder.mesh.islands:
+            print(island.label)
             # add islands to UI list and set default descriptions
             list_item = island_list.add()
             # add faces' IDs to the island
@@ -2043,6 +2055,7 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
         sub.active = sce.paper_model.limit_by_page
         sub.prop(sce.paper_model, "output_size_x")
         sub.prop(sce.paper_model, "output_size_y")
+        col.prop(sce.paper_model, "regenerate_island_labels")
 
 
 class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
@@ -2193,6 +2206,8 @@ class PaperModelSettings(bpy.types.PropertyGroup):
     scale = bpy.props.FloatProperty(name="Scale",
         description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
+    regenerate_island_labels = bpy.props.BoolProperty(name="Regenerate island labels",
+        description="Discard existing island labels and generate new unique labels for all islands", default=False)
 bpy.utils.register_class(PaperModelSettings)
 
 
