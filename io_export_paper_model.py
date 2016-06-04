@@ -81,7 +81,7 @@ def first_letters(text):
     """Iterator over the first letter of each word"""
     for match in first_letters.pattern.finditer(text):
         yield text[match.start()]
-first_letters.pattern = re_compile("(?<!\w)[\w]")
+first_letters.pattern = re_compile("((?<!\w)\w)|\d")
 
 
 def is_upsidedown_wrong(name):
@@ -175,12 +175,19 @@ class Unfolder:
 
     def copy_island_names(self, island_list):
         """Copy island label and abbreviation from the best matching island in the list"""
-        orig_list = {(frozenset(face.id for face in item.faces), item.label, item.abbreviation) for item in island_list}
-        for island in self.mesh.islands:
+        orig_islands = [{face.id for face in item.faces} for item in island_list]
+        matching = list()
+        for i, island in enumerate(self.mesh.islands):
             islfaces = {uvface.face.index for uvface in island.faces}
-            match = max(orig_list, key=lambda item: islfaces.intersection(item[0]))
-            island.label = match[1]
-            island.abbreviation = match[2]
+            matching.extend((len(islfaces.intersection(item)), i, j) for j, item in enumerate(orig_islands))
+        matching.sort(reverse=True)
+        available_new = [True for island in self.mesh.islands]
+        available_orig = [True for item in island_list]
+        for face_count, i, j in matching:
+            if available_new[i] and available_orig[j]:
+                available_new[i] = available_orig[j] = False
+                self.mesh.islands[i].label = island_list[j].label
+                self.mesh.islands[i].abbreviation = island_list[j].abbreviation
 
     def save(self, properties):
         """Export the document"""
@@ -1629,6 +1636,7 @@ class Unfold(bpy.types.Operator):
             unfolder.copy_island_names(mesh.paper_island_list)
 
         island_list = mesh.paper_island_list
+        attributes = {item.label: (item.abbreviation, item.auto_label, item.auto_abbrev) for item in island_list}
         island_list.clear()  # remove previously defined islands
         for island in unfolder.mesh.islands:
             # add islands to UI list and set default descriptions
@@ -1638,9 +1646,9 @@ class Unfold(bpy.types.Operator):
                 lface = list_item.faces.add()
                 lface.id = uvface.face.index
 
-            # name must be set afterwards because it invokes an update callback
-            list_item["abbreviation"] = island.abbreviation or "?"
-            list_item.label = island.label or "No Name"
+            list_item["label"] = island.label
+            list_item["abbreviation"], list_item["auto_label"], list_item["auto_abbrev"] = attributes.get(island.label, (island.abbreviation, True, True))
+            island_item_changed(list_item, context)
 
         mesh.paper_island_index = -1
         mesh.show_edge_seams = True
@@ -2057,6 +2065,7 @@ class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
             if mesh.paper_island_index >= 0:
                 list_item = mesh.paper_island_list[mesh.paper_island_index]
                 sub = layout.column(align=True)
+                sub.prop(list_item, "auto_label")
                 sub.prop(list_item, "label")
                 sub.prop(list_item, "auto_abbrev")
                 row = sub.row()
@@ -2121,10 +2130,24 @@ def display_islands_changed(self, context):
 
 
 def label_changed(self, context):
+    """The label of an island was changed"""
+    # accessing properties via [..] to avoid a recursive call after the update
+    self["auto_label"] = not self.label or self.label.isspace()
+    island_item_changed(self, context)
+
+
+def island_item_changed(self, context):
     """The labelling of an island was changed"""
     # accessing properties via [..] to avoid a recursive call after the update
+    island_list = context.active_object.data.paper_island_list
+    if self.auto_label:
+        self["label"] = ""  # avoid self-conflict
+        number = 1
+        while any(item.label == "Island {}".format(number) for item in island_list):
+            number += 1
+        self["label"] = "Island {}".format(number)
     if self.auto_abbrev:
-        self["abbreviation"] = "".join(first_letters(self.label)).upper()
+        self["abbreviation"] = "".join(first_letters(self.label))[:3].upper()
     elif len(self.abbreviation) > 3:
         self["abbreviation"] = self.abbreviation[:3]
     self.name = "[{}] {} ({} {})".format(self.abbreviation, self.label, len(self.faces), "faces" if len(self.faces) > 1 else "face")
@@ -2142,10 +2165,13 @@ class IslandList(bpy.types.PropertyGroup):
         default="", update=label_changed)
     abbreviation = bpy.props.StringProperty(name="Abbreviation",
         description="Three-letter label to use when there is not enough space",
-        default="", update=label_changed)
+        default="", update=island_item_changed)
+    auto_label = bpy.props.BoolProperty(name="Auto Label",
+        description="Generate the label automatically",
+        default=True, update=island_item_changed)
     auto_abbrev = bpy.props.BoolProperty(name="Auto Abbreviation",
         description="Generate the abbreviation automatically",
-        default=True, update=label_changed)
+        default=True, update=island_item_changed)
 bpy.utils.register_class(FaceList)
 bpy.utils.register_class(IslandList)
 
