@@ -193,10 +193,10 @@ class Unfolder:
         """Export the document"""
         # Note about scale: input is direcly in blender length
         # Mesh.scale_islands multiplies everything by a user-defined ratio
-        # SVG object multiplies everything by 1000 (output in millimeters)
+        # exporters (SVG or PDF) multiply everything by 1000 (output in millimeters)
         filepath = properties.filepath
-        if filepath.lower().endswith((".svg", ".png")):
-            filepath = filepath[0:-4]
+        extension = properties.file_format.lower()
+        filepath = bpy.path.ensure_ext(filepath, "." + extension)
         # page size in meters
         page_size = M.Vector((properties.output_size_x, properties.output_size_y))
         # printable area size in meters
@@ -219,7 +219,8 @@ class Unfolder:
 
         if properties.output_type != 'NONE':
             # bake an image and save it as a PNG to disk or into memory
-            use_separate_images = properties.image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
+            image_packing = properties.image_packing if file_format == 'SVG' else 'ISLAND_EMBED'
+            use_separate_images = image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
             tex = self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images, tex=self.tex)
             if not tex:
                 raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
@@ -230,11 +231,11 @@ class Unfolder:
             rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
 
             rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
-            if properties.image_packing == 'PAGE_LINK':
+            if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
-            elif properties.image_packing == 'ISLAND_LINK':
+            elif image_packing == 'ISLAND_LINK':
                 self.mesh.save_separate_images(tex, ppm, filepath)
-            elif properties.image_packing == 'ISLAND_EMBED':
+            elif image_packing == 'ISLAND_EMBED':
                 self.mesh.save_separate_images(tex, ppm, filepath, do_embed=True)
 
             # revoke settings
@@ -243,10 +244,11 @@ class Unfolder:
                 tex.active = True
                 bpy.ops.mesh.uv_texture_remove()
 
-        svg = SVG(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
-        svg.do_create_stickers = properties.do_create_stickers
-        svg.text_size = properties.sticker_width
-        svg.write(self.mesh, filepath)
+        Exporter = SVG if properties.file_format == 'SVG' else PDF
+        exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
+        exporter.do_create_stickers = properties.do_create_stickers
+        exporter.text_size = properties.sticker_width
+        exporter.write(self.mesh, filepath)
 
 
 class Mesh:
@@ -1384,7 +1386,8 @@ class SVG:
         styleargs.update({name: getattr(self.style, name) * self.style.line_width * 1000 for name in
             ("outer_width", "convex_width", "concave_width", "freestyle_width", "outbg_width", "inbg_width")})
         for num, page in enumerate(mesh.pages):
-            with open("{}_{}.svg".format(filename, page.name), 'w') as f:
+            page_filename = "{}_{}.svg".format(filename[:filename.rfind(".svg")], page.name) if len(mesh.pages) > 1 else filename
+            with open(page_filename, 'w') as f:
                 print(self.svg_base.format(width=self.page_size.x*1000, height=self.page_size.y*1000), file=f)
                 print(self.css_base.format(**styleargs), file=f)
                 if page.image_path:
@@ -1580,7 +1583,158 @@ class SVG:
     </style>"""
 
 
+class PDF:
+    """Simple PDF exporter"""
+    
+    def __init__(self, page_size: M.Vector, style, margin, pure_net=True):
+        self.page_size = page_size
+        self.style = style
+        self.margin = M.Vector((margin, margin))
+        self.pure_net = pure_net
+    
+    def write(self, mesh, filename):
+        def format_dict(obj, refs=tuple()):
+            return "<< " + "".join("/{} {}\n".format(key, format_value(value, refs)) for (key, value) in obj.items()) + ">>"
+        
+        line_through = " l ".join  # used for formatting of PDF path data
+        
+        format_vertex = "{0.x} {0.y}".format
+    
+        def format_value(value, refs=tuple()):
+            if value in refs:
+                return "{} 0 R".format(refs.index(value) + 1)
+            elif type(value) is dict:
+                return format_dict(value, refs)
+            elif type(value) is list:
+                return "[ " + " ".join(format_value(item, refs) for item in value) + " ]"
+            elif type(value) in (int, float):
+                return str(value)
+            elif type(value) is bool:
+                return "true" if value else "false"
+            else:
+                return "/{}".format(value)  # this script can output only PDF names, no strings
+        
+        def write_object(index, obj, refs, f, stream=None):
+            byte_count = f.write("{} 0 obj\n".format(index))
+            if type(obj) is not dict:
+                stream, obj = obj, dict()
+            elif "stream" in obj:
+                stream = obj.pop("stream")
+            if stream:
+                obj["Length"] = len(stream)
+            byte_count += f.write(format_dict(obj, refs))
+            if stream:
+                byte_count += f.write("\nstream\n")
+                byte_count += f.write(stream)
+                byte_count += f.write("\nendstream")
+            return byte_count + f.write("\nendobj\n")
+        
+        def encode(data):
+            from base64 import a85encode
+            from zlib import compress
+            if hasattr(data, "encode"):
+                data = data.encode()
+            return a85encode(compress(data), adobe=True, wrapcol=250)[2:].decode()
 
+        root = {"Type": "Pages", "MediaBox": [0, 0, 595, 842], "Kids": list()}
+        catalog = {"Type": "Catalog", "Pages": root}
+        font = {"Type": "Font", "Subtype": "Type1", "Name": "F1", "BaseFont": "Helvetica", "Encoding": "MacRomanEncoding"}
+        
+        objects = [root, catalog, font]
+        for page in mesh.pages:
+            commands = ["2.83464567 0 0 2.83464567 0 0 cm"]
+            resources = {"Font": {"F1": font}, "XObject": list()}
+            for island in page.islands:
+                offset = 1000 * (self.margin + island.pos)
+                if island.embedded_image:
+                    identifier = "Im{}".format(len(resources["XObject"]) + 1)
+                    image = {"Type": "XObject", "Subtype": "Image", "Width": 2, "Height": 3, "ColorSpace": "DeviceGray", "BitsPerComponent": 8, "Interpolate": False, "Filter": ["ASCII85Decode", "FlateDecode"], "stream": encode(page.embedded_image)}
+                    commands.append("/{} Do".format(identifier))
+                    objects.append(image)
+                    resources["XObject"][identifier] = image
+                    
+                if island.title:
+                    commands.append("BT /F1 {size} Tf {x} {y} Td ({label}) Tj ET".format(
+                        size=1000 * self.text_size,
+                        x=1000 * 0.5 * island.bounding_box.x + offset.x,
+                        y=1000 * 0.2 * self.text_size + offset.y,
+                        label=island.title))
+
+                data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
+                outer_edges = set(island.boundary)
+                while outer_edges:
+                    data_loop = list()
+                    uvedge = outer_edges.pop()
+                    while 1:
+                        if uvedge.sticker:
+                            data_loop.extend(format_vertex(1000 * vertex.co + offset) for vertex in uvedge.sticker.vertices[1:])
+                        else:
+                            vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
+                            data_loop.append(format_vertex(1000 * vertex.co + offset))
+                        uvedge = uvedge.neighbor_right
+                        try:
+                            outer_edges.remove(uvedge)
+                        except KeyError:
+                            break
+                    data_outer.append("{} m {} l s".format(data_loop[0], line_through(data_loop[1:])))
+
+                for uvedge in island.edges:
+                    edge = uvedge.edge
+                    if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
+                        continue
+                    data_uvedge = "{} m {} l S".format(*(format_vertex(1000 * vertex.co + offset) for vertex in (uvedge.va, uvedge.vb)))
+                    if edge.freestyle:
+                        data_freestyle.append(data_uvedge)
+                    # each uvedge is in two opposite-oriented variants; we want to add each only once
+                    if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
+                        if edge.angle > 0.01:
+                            data_convex.append(data_uvedge)
+                        elif edge.angle < -0.01:
+                            data_concave.append(data_uvedge)
+                if island.is_inside_out:
+                    data_convex, data_concave = data_concave, data_convex
+
+                if data_freestyle:
+                    commands.append("1 w 0 0 0 RG")
+                    commands.extend(data_freestyle)
+                if (data_convex or data_concave) and not self.pure_net and self.style.use_inbg:
+                    commands.append("1 w 1 1 1 RG")
+                    commands.extend(chain(data_convex, data_concave))
+                if data_convex:
+                    commands.append("0.5 w 0 0 0 RG [ 1 1 ] 0 d")
+                    commands.extend(data_convex)
+                if data_concave:
+                    commands.append("0.5 w 0 0 0 RG [ 0.5 1 1.5 1 ] 0 d")
+                    commands.extend(data_concave)
+                if data_outer:
+                    if not self.pure_net and self.style.use_outbg:
+                        commands.append("1 w 1 1 1 RG [ ] 0 d")
+                        commands.extend(data_outer)
+                    commands.append("0.75 w 0 0 0 RG [ ] 0 d")
+                    commands.extend(data_outer)
+                commands.extend(data_markers)
+            content = "\n".join(commands)
+            page = {"Type": "Page", "Parent": root, "Contents": content, "Resources": resources}
+            root["Kids"].append(page)
+            objects.extend((page, content))
+        
+        root["Count"] = len(root["Kids"])
+        with open(filename, "w+") as f:
+            xref_table = list()
+            position = f.write("%PDF-1.4\n")
+            for index, obj in enumerate(objects, 1):
+                xref_table.append(position)
+                position += write_object(index, obj, objects, f)
+            xref_pos = position
+            f.write("xref_table\n0 {}\n".format(len(xref_table) + 1))
+            f.write("{:010} {:05} f\n".format(0, 65536))
+            for position in xref_table:
+                f.write("{:010} {:05} n\n".format(position, 0))
+            f.write("trailer\n")
+            f.write(format_dict({"Size": len(xref_table), "Root": catalog}, objects))
+            f.write("\nstartxref\n{}\n%%EOF\n".format(xref_pos))
+
+        
 class Unfold(bpy.types.Operator):
     """Blender Operator: unfold the selected object."""
 
@@ -1822,6 +1976,12 @@ class ExportPaperModel(bpy.types.Operator):
     output_dpi = bpy.props.FloatProperty(name="Resolution (DPI)",
         description="Resolution of images in pixels per inch",
         default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
+    file_format = bpy.props.EnumProperty(name="Document Format",
+        description="File format of the exported net",
+        default='PDF', items=[
+            ('PDF', "PDF", "Adobe Portable Document Format 1.4"),
+            ('SVG', "SVG", "W3C Scalable Vector Graphics"),
+        ])
     image_packing = bpy.props.EnumProperty(name="Image Packing Method",
         description="Method of attaching baked image(s) to the SVG",
         default='ISLAND_EMBED', items=[
@@ -1915,6 +2075,7 @@ class ExportPaperModel(bpy.types.Operator):
         row.label(text="Document Settings")
 
         if self.ui_expanded_document:
+            box.prop(self.properties, "file_format", text="Format")
             box.prop(self.properties, "page_size_preset")
             col = box.column(align=True)
             col.active = self.page_size_preset == 'USER'
@@ -1936,7 +2097,9 @@ class ExportPaperModel(bpy.types.Operator):
             elif context.scene.render.engine != 'BLENDER_RENDER' and self.output_type != 'NONE':
                 col.label(text="Blender Internal engine will be used for texture baking.", icon='ERROR')
             col.prop(self.properties, "output_dpi")
-            col.prop(self.properties, "image_packing", text="Images")
+            row = col.row()
+            row.active = self.file_format == 'SVG'
+            row.prop(self.properties, "image_packing", text="Images")
 
         box = layout.box()
         row = box.row(align=True)
