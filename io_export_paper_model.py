@@ -57,7 +57,7 @@ import bl_operators
 import bgl
 import mathutils as M
 from re import compile as re_compile
-from itertools import chain
+from itertools import chain, repeat
 from math import pi
 
 try:
@@ -1592,14 +1592,18 @@ class PDF:
         self.margin = M.Vector((margin, margin))
         self.pure_net = pure_net
     
+    character_width_packed = {833: 'mM', 834: '¼½¾', 260: '¦|', 389: '*', 584: '>~+¬±<×÷=', 778: 'ÒGÖÕQÔØÓO', 333: '¹\xad\x98\x84²¨\x94\x9b¯¡´()\x8b\x93¸³-\x88`r', 334: '{}', 400: '°', 722: 'DÛÚUÑwRÐÜCÇNÙH', 611: '¿øTßZF\x8e', 469: '^', 278: 'ì\x05\x06 ;\x01/\x08I\x07,\x13\x11\x04\\.![\x15\r\x10:\x18]\x0c\x00\x1bÍf\xa0\x14\x1c\n\t\x1e\x1dïí\x12·\x16\x0bî\x0e\x03tÏ\x17\x1fÎ\x19\x0f\x02Ì\x1a', 537: '¶', 667: 'ÄË\x8aÃÀBÊVX&AKSÈÞPÁYÉ\x9fÝEÅÂ', 222: 'jl\x92\x91i\x82', 737: '©®', 355: '"', 1000: '\x89\x97\x8c\x99\x85Æ', 556: 'éhòúd»§ùþ5\x803õ¢åëûa64_ã\x83ñ¤8n?g2e#9«oqL$âö1päuð\x86¥µ\x967üóê\x87bá0àèô£', 365: 'º', 944: '\x9cW', 370: 'ª', 500: 'Js\x9eçyÿ\x9aývckzx', 350: '\x90\x8d\x81\x8f\x95\x7f\x9d', 1015: '@', 889: 'æ%', 191: "'"}
+    character_width = {c: value for (value, chars) in character_width_packed.items() for c in chars}
+    def text_width(self, text):
+        return self.text_size * sum(self.character_width.get(c, 556) for c in text) / 1000
+    
     def write(self, mesh, filename):
         def format_dict(obj, refs=tuple()):
             return "<< " + "".join("/{} {}\n".format(key, format_value(value, refs)) for (key, value) in obj.items()) + ">>"
         
-        line_through = " l ".join  # used for formatting of PDF path data
-        
-        format_vertex = "{0.x} {0.y}".format
-    
+        def line_through(seq):
+            return "".join("{0.x:.6f} {0.y:.6f} {1} ".format(1000*v.co, c) for (v, c) in zip(seq, chain("m", repeat("l"))))
+
         def format_value(value, refs=tuple()):
             if value in refs:
                 return "{} 0 R".format(refs.index(value) + 1)
@@ -1645,7 +1649,7 @@ class PDF:
             commands = ["2.83464567 0 0 2.83464567 0 0 cm"]
             resources = {"Font": {"F1": font}, "XObject": list()}
             for island in page.islands:
-                offset = 1000 * (self.margin + island.pos)
+                commands.append("q 1 0 0 1 {0.x} {0.y} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
                     identifier = "Im{}".format(len(resources["XObject"]) + 1)
                     image = {"Type": "XObject", "Subtype": "Image", "Width": 2, "Height": 3, "ColorSpace": "DeviceGray", "BitsPerComponent": 8, "Interpolate": False, "Filter": ["ASCII85Decode", "FlateDecode"], "stream": encode(page.embedded_image)}
@@ -1655,34 +1659,63 @@ class PDF:
                     
                 if island.title:
                     commands.append("BT /F1 {size} Tf {x} {y} Td ({label}) Tj ET".format(
-                        size=1000 * self.text_size,
-                        x=1000 * 0.5 * island.bounding_box.x + offset.x,
-                        y=1000 * 0.2 * self.text_size + offset.y,
+                        size=1000*self.text_size,
+                        x=500 * (island.bounding_box.x - self.text_width(island.title)),
+                        y=1000 * 0.2 * self.text_size,
                         label=island.title))
 
                 data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
+                for marker in island.markers:
+                    if isinstance(marker, Sticker):
+                        data_stickerfill.append(line_through(marker.vertices) + "f")
+                        if marker.text:
+                            data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align} 0 Td /F1 {size:.6f} Tf ({label}) Tj ET Q".format(
+                                label=marker.text,
+                                pos=1000*marker.center,
+                                mat=marker.rot,
+                                align=-500 * self.text_width(marker.text),
+                                size=1000*marker.width))
+                    elif isinstance(marker, Arrow):
+                        size = 1000 * marker.size
+                        position = 1000 * (marker.center + marker.rot*marker.size*M.Vector((0, -0.9)))
+                        data_markers.append("q BT {pos.x} {pos.y} Td /F1 {size:.6f} Tf ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q".format(
+                            index=marker.text,
+                            arrow_pos=1000 * marker.center,
+                            pos=position - 1000 * M.Vector((0.5 * self.text_width(marker.text), 0.4 * self.text_size)),
+                            mat=size * marker.rot,
+                            size=size))
+                    elif isinstance(marker, NumberAlone):
+                        data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT /F1 {size} Tf ({label}) Tj ET Q".format(
+                            label=marker.text,
+                            pos=1000*marker.center,
+                            mat=format_matrix(marker.rot),
+                            size=1000*marker.size))
+                if data_stickerfill and self.style.sticker_fill[3] > 0:
+                    commands.append("1 1 1 rg")
+                    commands.extend(data_stickerfill)
+
                 outer_edges = set(island.boundary)
                 while outer_edges:
                     data_loop = list()
                     uvedge = outer_edges.pop()
                     while 1:
                         if uvedge.sticker:
-                            data_loop.extend(format_vertex(1000 * vertex.co + offset) for vertex in uvedge.sticker.vertices[1:])
+                            data_loop.extend(uvedge.sticker.vertices[1:])
                         else:
                             vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
-                            data_loop.append(format_vertex(1000 * vertex.co + offset))
+                            data_loop.append(vertex)
                         uvedge = uvedge.neighbor_right
                         try:
                             outer_edges.remove(uvedge)
                         except KeyError:
                             break
-                    data_outer.append("{} m {} l s".format(data_loop[0], line_through(data_loop[1:])))
+                    data_outer.append(line_through(data_loop) + "s")
 
                 for uvedge in island.edges:
                     edge = uvedge.edge
                     if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
                         continue
-                    data_uvedge = "{} m {} l S".format(*(format_vertex(1000 * vertex.co + offset) for vertex in (uvedge.va, uvedge.vb)))
+                    data_uvedge = line_through((uvedge.va, uvedge.vb)) + "S"
                     if edge.freestyle:
                         data_freestyle.append(data_uvedge)
                     # each uvedge is in two opposite-oriented variants; we want to add each only once
@@ -1712,7 +1745,9 @@ class PDF:
                         commands.extend(data_outer)
                     commands.append("0.75 w 0 0 0 RG [ ] 0 d")
                     commands.extend(data_outer)
+                commands.append("0 0 0 rg")
                 commands.extend(data_markers)
+                commands.append("Q")
             content = "\n".join(commands)
             page = {"Type": "Page", "Parent": root, "Contents": content, "Resources": resources}
             root["Kids"].append(page)
