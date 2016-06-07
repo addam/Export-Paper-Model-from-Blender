@@ -1609,7 +1609,7 @@ class PDF:
                 return "{} 0 R".format(refs.index(value) + 1)
             elif type(value) is dict:
                 return format_dict(value, refs)
-            elif type(value) is list:
+            elif type(value) in (list, tuple):
                 return "[ " + " ".join(format_value(item, refs) for item in value) + " ]"
             elif type(value) in (int, float):
                 return str(value)
@@ -1626,10 +1626,11 @@ class PDF:
                 stream = obj.pop("stream")
             if stream:
                 obj["Length"] = len(stream)
+                obj["Filter"] = ["ASCII85Decode", "FlateDecode"]
             byte_count += f.write(format_dict(obj, refs))
             if stream:
                 byte_count += f.write("\nstream\n")
-                byte_count += f.write(stream)
+                byte_count += f.write(encode(stream))
                 byte_count += f.write("\nendstream")
             return byte_count + f.write("\nendobj\n")
         
@@ -1644,21 +1645,41 @@ class PDF:
         catalog = {"Type": "Catalog", "Pages": root}
         font = {"Type": "Font", "Subtype": "Type1", "Name": "F1", "BaseFont": "Helvetica", "Encoding": "MacRomanEncoding"}
         
+        dl = [length * self.style.line_width * 1000 for length in (1, 4, 9)]
+        format_style = {'SOLID': list(), 'DOT': [dl[0], dl[1]], 'DASH': [dl[1], dl[2]], 'LONGDASH': [dl[2], dl[1]], 'DASHDOT': [dl[2], dl[1], dl[0], dl[1]]}
+        styles = {
+            "Gtext": {"ca": self.style.text_color[3], "Font": [font, 1000 * self.text_size]},
+            "Gsticker": {"ca": self.style.sticker_fill[3]}}
+        for name in ("outer", "convex", "concave", "freestyle"):
+            gs = {
+                "LW": self.style.line_width * getattr(self.style, name + "_width"),
+                "CA": getattr(self.style, name + "_color")[3],
+                "D": [format_style[getattr(self.style, name + "_style")], 0]}
+            styles["G" + name] = gs
+        for name in ("outbg", "inbg"):
+            gs = {
+                "LW": self.style.line_width * getattr(self.style, name + "_width"),
+                "CA": getattr(self.style, name + "_color")[3],
+                "D": [format_style['SOLID'], 0]}
+            styles["G" + name] = gs
+
         objects = [root, catalog, font]
+        objects.extend(styles.values())
+
         for page in mesh.pages:
             commands = ["2.83464567 0 0 2.83464567 0 0 cm"]
-            resources = {"Font": {"F1": font}, "XObject": list()}
+            resources = {"Font": {"F1": font}, "ExtGState": styles, "XObject": list()}
             for island in page.islands:
                 commands.append("q 1 0 0 1 {0.x} {0.y} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
                     identifier = "Im{}".format(len(resources["XObject"]) + 1)
-                    image = {"Type": "XObject", "Subtype": "Image", "Width": 2, "Height": 3, "ColorSpace": "DeviceGray", "BitsPerComponent": 8, "Interpolate": False, "Filter": ["ASCII85Decode", "FlateDecode"], "stream": encode(page.embedded_image)}
+                    image = {"Type": "XObject", "Subtype": "Image", "Width": 2, "Height": 3, "ColorSpace": "DeviceGray", "BitsPerComponent": 8, "Interpolate": False, "Filter": ["ASCII85Decode", "FlateDecode"], "stream": page.embedded_image}
                     commands.append("/{} Do".format(identifier))
                     objects.append(image)
                     resources["XObject"][identifier] = image
                     
                 if island.title:
-                    commands.append("BT /F1 {size} Tf {x} {y} Td ({label}) Tj ET".format(
+                    commands.append("/Gtext gs BT {x} {y} Td ({label}) Tj ET".format(
                         size=1000*self.text_size,
                         x=500 * (island.bounding_box.x - self.text_width(island.title)),
                         y=1000 * 0.2 * self.text_size,
@@ -1690,9 +1711,6 @@ class PDF:
                             pos=1000*marker.center,
                             mat=format_matrix(marker.rot),
                             size=1000*marker.size))
-                if data_stickerfill and self.style.sticker_fill[3] > 0:
-                    commands.append("1 1 1 rg")
-                    commands.extend(data_stickerfill)
 
                 outer_edges = set(island.boundary)
                 while outer_edges:
@@ -1727,25 +1745,28 @@ class PDF:
                 if island.is_inside_out:
                     data_convex, data_concave = data_concave, data_convex
 
+                if data_stickerfill and self.style.sticker_fill[3] > 0:
+                    commands.append("/Gsticker gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} rg".format(self.style.sticker_fill))
+                    commands.extend(data_stickerfill)
                 if data_freestyle:
-                    commands.append("1 w 0 0 0 RG")
+                    commands.append("/Gfreestyle gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.freestyle_color))
                     commands.extend(data_freestyle)
                 if (data_convex or data_concave) and not self.pure_net and self.style.use_inbg:
-                    commands.append("1 w 1 1 1 RG")
+                    commands.append("/Ginbg gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.inbg_color))
                     commands.extend(chain(data_convex, data_concave))
                 if data_convex:
-                    commands.append("0.5 w 0 0 0 RG [ 1 1 ] 0 d")
+                    commands.append("/Gconvex gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.convex_color))
                     commands.extend(data_convex)
                 if data_concave:
-                    commands.append("0.5 w 0 0 0 RG [ 0.5 1 1.5 1 ] 0 d")
+                    commands.append("/Gconcave gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.concave_color))
                     commands.extend(data_concave)
                 if data_outer:
                     if not self.pure_net and self.style.use_outbg:
-                        commands.append("1 w 1 1 1 RG [ ] 0 d")
+                        commands.append("/Goutbg gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.outbg_color))
                         commands.extend(data_outer)
-                    commands.append("0.75 w 0 0 0 RG [ ] 0 d")
+                    commands.append("/Gouter gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.outer_color))
                     commands.extend(data_outer)
-                commands.append("0 0 0 rg")
+                commands.append("/Gtext gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} rg".format(self.style.text_color))
                 commands.extend(data_markers)
                 commands.append("Q")
             content = "\n".join(commands)
