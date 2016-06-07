@@ -194,6 +194,7 @@ class Unfolder:
         # Note about scale: input is direcly in blender length
         # Mesh.scale_islands multiplies everything by a user-defined ratio
         # exporters (SVG or PDF) multiply everything by 1000 (output in millimeters)
+        Exporter = SVG if properties.file_format == 'SVG' else PDF
         filepath = properties.filepath
         extension = properties.file_format.lower()
         filepath = bpy.path.ensure_ext(filepath, "." + extension)
@@ -219,7 +220,7 @@ class Unfolder:
 
         if properties.output_type != 'NONE':
             # bake an image and save it as a PNG to disk or into memory
-            image_packing = properties.image_packing if file_format == 'SVG' else 'ISLAND_EMBED'
+            image_packing = properties.image_packing if properties.file_format == 'SVG' else 'ISLAND_EMBED'
             use_separate_images = image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
             tex = self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images, tex=self.tex)
             if not tex:
@@ -236,7 +237,7 @@ class Unfolder:
             elif image_packing == 'ISLAND_LINK':
                 self.mesh.save_separate_images(tex, ppm, filepath)
             elif image_packing == 'ISLAND_EMBED':
-                self.mesh.save_separate_images(tex, ppm, filepath, do_embed=True)
+                self.mesh.save_separate_images(tex, ppm, filepath, embed=Exporter.encode_image)
 
             # revoke settings
             rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
@@ -244,7 +245,6 @@ class Unfolder:
                 tex.active = True
                 bpy.ops.mesh.uv_texture_remove()
 
-        Exporter = SVG if properties.file_format == 'SVG' else PDF
         exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
         exporter.do_create_stickers = properties.do_create_stickers
         exporter.text_size = properties.sticker_width
@@ -565,20 +565,7 @@ class Mesh:
                 image.user_clear()
                 bpy.data.images.remove(image)
 
-    def save_separate_images(self, tex, scale, filepath, do_embed=False):
-        assert(os_path)  # check the module was imported
-        if do_embed:
-            import tempfile
-            import base64
-        else:
-            from os import mkdir
-            image_dir = filepath
-            try:
-                mkdir(image_dir)
-            except OSError:
-                # image_dir already existed
-                pass
-
+    def save_separate_images(self, tex, scale, filepath, embed=None):
         texfaces = tex.data
         # omitting these 3 lines causes a "Circular reference in texture stack" error
         for island in self.islands:
@@ -586,34 +573,26 @@ class Mesh:
                 texfaces[uvface.face.index].image = None
 
         for i, island in enumerate(self.islands, 1):
-            if do_embed:
-                tempfile_manager = tempfile.NamedTemporaryFile("rb", suffix=".png")
-                image_path = tempfile_manager.name
-                image_name = os_path.basename(tempfile_manager.name)
-                # note: image_path exists by now and Blender will overwrite it;
-                # we will read later from the same file
-            else:
-                image_path = os_path.join(image_dir, "island{}.png".format(i))
-                image_name = "{} isl{}".format(self.data.name[:15], i)
+            image_name = "{} isl{}".format(self.data.name[:15], i)
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-            image.filepath_raw = image_path
             for uvface in island.faces:
                 texfaces[uvface.face.index].image = image
-
-            try:
-                bpy.ops.object.bake_image()
-                image.save()
-            finally:
-                for uvface in island.faces:
-                    texfaces[uvface.face.index].image = None
-                image.user_clear()
-                bpy.data.images.remove(image)
-
-            if do_embed:
-                with tempfile_manager as imgfile:
-                    island.embedded_image = base64.encodebytes(imgfile.read()).decode('ascii')
+            bpy.ops.object.bake_image()
+            
+            if embed:
+                island.embedded_image = embed(image)
             else:
-                island.image_path = image_path
+                from os import makedirs
+                image_dir = filepath
+                makedirs(image_dir, exist_ok=True)
+                image_path = os_path.join(image_dir, "island{}.png".format(i))
+                image.filepath_raw = image_path
+                image.save()
+                island.image_path = image.path
+            for uvface in island.faces:
+                texfaces[uvface.face.index].image = None
+            image.user_clear()
+            bpy.data.images.remove(image)
 
 
 class Vertex:
@@ -1346,6 +1325,16 @@ class SVG:
         self.margin = margin
         self.text_size = 12
 
+    @classmethod
+    def encode_image(cls, bpy_image):
+        import tempfile
+        import base64
+        tempfile_manager = tempfile.NamedTemporaryFile("rb", suffix=".png")
+        bpy_image.filepath_raw = tempfile_manager.name
+        bpy_image.save()
+        with tempfile_manager as imgfile:
+            return base64.encodebytes(imgfile.read()).decode('ascii')
+
     def format_vertex(self, vector, pos=M.Vector((0, 0))):
         """Return a string with both coordinates of the given vertex."""
         x, y = vector + pos
@@ -1594,8 +1583,15 @@ class PDF:
     
     character_width_packed = {833: 'mM', 834: '¼½¾', 260: '¦|', 389: '*', 584: '>~+¬±<×÷=', 778: 'ÒGÖÕQÔØÓO', 333: '¹\xad\x98\x84²¨\x94\x9b¯¡´()\x8b\x93¸³-\x88`r', 334: '{}', 400: '°', 722: 'DÛÚUÑwRÐÜCÇNÙH', 611: '¿øTßZF\x8e', 469: '^', 278: 'ì\x05\x06 ;\x01/\x08I\x07,\x13\x11\x04\\.![\x15\r\x10:\x18]\x0c\x00\x1bÍf\xa0\x14\x1c\n\t\x1e\x1dïí\x12·\x16\x0bî\x0e\x03tÏ\x17\x1fÎ\x19\x0f\x02Ì\x1a', 537: '¶', 667: 'ÄË\x8aÃÀBÊVX&AKSÈÞPÁYÉ\x9fÝEÅÂ', 222: 'jl\x92\x91i\x82', 737: '©®', 355: '"', 1000: '\x89\x97\x8c\x99\x85Æ', 556: 'éhòúd»§ùþ5\x803õ¢åëûa64_ã\x83ñ¤8n?g2e#9«oqL$âö1päuð\x86¥µ\x967üóê\x87bá0àèô£', 365: 'º', 944: '\x9cW', 370: 'ª', 500: 'Js\x9eçyÿ\x9aývckzx', 350: '\x90\x8d\x81\x8f\x95\x7f\x9d', 1015: '@', 889: 'æ%', 191: "'"}
     character_width = {c: value for (value, chars) in character_width_packed.items() for c in chars}
-    def text_width(self, text):
-        return self.text_size * sum(self.character_width.get(c, 556) for c in text) / 1000
+    def text_width(self, text, scale=None):
+        return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
+    
+    @classmethod
+    def encode_image(cls, bpy_image):
+        data = bytes(int(255 * px) for (i, px) in enumerate(bpy_image.pixels) if i % 4 != 3)
+        image = {"Type": "XObject", "Subtype": "Image", "Width": bpy_image.size[0], "Height": bpy_image.size[1], "ColorSpace": "DeviceRGB", "BitsPerComponent": 8, "Interpolate": True, "Filter": ["ASCII85Decode", "FlateDecode"], "stream": data}
+        return image
+
     
     def write(self, mesh, filename):
         def format_dict(obj, refs=tuple()):
@@ -1625,12 +1621,14 @@ class PDF:
             elif "stream" in obj:
                 stream = obj.pop("stream")
             if stream:
+                if True or type(stream) is bytes:
+                    obj["Filter"] = ["ASCII85Decode", "FlateDecode"]
+                    stream = encode(stream)
                 obj["Length"] = len(stream)
-                obj["Filter"] = ["ASCII85Decode", "FlateDecode"]
             byte_count += f.write(format_dict(obj, refs))
             if stream:
                 byte_count += f.write("\nstream\n")
-                byte_count += f.write(encode(stream))
+                byte_count += f.write(stream)
                 byte_count += f.write("\nendstream")
             return byte_count + f.write("\nendobj\n")
         
@@ -1668,15 +1666,14 @@ class PDF:
 
         for page in mesh.pages:
             commands = ["2.83464567 0 0 2.83464567 0 0 cm"]
-            resources = {"Font": {"F1": font}, "ExtGState": styles, "XObject": list()}
+            resources = {"Font": {"F1": font}, "ExtGState": styles, "XObject": dict()}
             for island in page.islands:
                 commands.append("q 1 0 0 1 {0.x} {0.y} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
                     identifier = "Im{}".format(len(resources["XObject"]) + 1)
-                    image = {"Type": "XObject", "Subtype": "Image", "Width": 2, "Height": 3, "ColorSpace": "DeviceGray", "BitsPerComponent": 8, "Interpolate": False, "Filter": ["ASCII85Decode", "FlateDecode"], "stream": page.embedded_image}
-                    commands.append("/{} Do".format(identifier))
-                    objects.append(image)
-                    resources["XObject"][identifier] = image
+                    commands.append("q {0.x} 0 0 {0.y} 0 0 cm 1 0 0 -1 0 1 cm /{1} Do Q".format(1000 * island.bounding_box, identifier))
+                    objects.append(island.embedded_image)
+                    resources["XObject"][identifier] = island.embedded_image
                     
                 if island.title:
                     commands.append("/Gtext gs BT {x} {y} Td ({label}) Tj ET".format(
@@ -1694,7 +1691,7 @@ class PDF:
                                 label=marker.text,
                                 pos=1000*marker.center,
                                 mat=marker.rot,
-                                align=-500 * self.text_width(marker.text),
+                                align=-500 * self.text_width(marker.text, marker.width),
                                 size=1000*marker.width))
                     elif isinstance(marker, Arrow):
                         size = 1000 * marker.size
