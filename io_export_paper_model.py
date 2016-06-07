@@ -1575,6 +1575,7 @@ class SVG:
 class PDF:
     """Simple PDF exporter"""
     
+    mm_to_pt = 72 / 25.4
     def __init__(self, page_size: M.Vector, style, margin, pure_net=True):
         self.page_size = page_size
         self.style = style
@@ -1607,8 +1608,10 @@ class PDF:
                 return format_dict(value, refs)
             elif type(value) in (list, tuple):
                 return "[ " + " ".join(format_value(item, refs) for item in value) + " ]"
-            elif type(value) in (int, float):
+            elif type(value) is int:
                 return str(value)
+            elif type(value) is float:
+                return "{:.6f}".format(value)
             elif type(value) is bool:
                 return "true" if value else "false"
             else:
@@ -1639,7 +1642,8 @@ class PDF:
                 data = data.encode()
             return a85encode(compress(data), adobe=True, wrapcol=250)[2:].decode()
 
-        root = {"Type": "Pages", "MediaBox": [0, 0, 595, 842], "Kids": list()}
+        page_size_pt = 1000 * self.mm_to_pt * self.page_size
+        root = {"Type": "Pages", "MediaBox": [0, 0, page_size_pt.x, page_size_pt.y], "Kids": list()}
         catalog = {"Type": "Catalog", "Pages": root}
         font = {"Type": "Font", "Subtype": "Type1", "Name": "F1", "BaseFont": "Helvetica", "Encoding": "MacRomanEncoding"}
         
@@ -1665,18 +1669,18 @@ class PDF:
         objects.extend(styles.values())
 
         for page in mesh.pages:
-            commands = ["2.83464567 0 0 2.83464567 0 0 cm"]
+            commands = ["{0:.6f} 0 0 {0:.6f} 0 0 cm".format(self.mm_to_pt)]
             resources = {"Font": {"F1": font}, "ExtGState": styles, "XObject": dict()}
             for island in page.islands:
-                commands.append("q 1 0 0 1 {0.x} {0.y} cm".format(1000*(self.margin + island.pos)))
+                commands.append("q 1 0 0 1 {0.x:.6f} {0.y:.6f} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
                     identifier = "Im{}".format(len(resources["XObject"]) + 1)
-                    commands.append("q {0.x} 0 0 {0.y} 0 0 cm 1 0 0 -1 0 1 cm /{1} Do Q".format(1000 * island.bounding_box, identifier))
+                    commands.append("q {0.x:.6f} 0 0 {0.y:.6f} 0 0 cm 1 0 0 -1 0 1 cm /{1} Do Q".format(1000 * island.bounding_box, identifier))
                     objects.append(island.embedded_image)
                     resources["XObject"][identifier] = island.embedded_image
                     
                 if island.title:
-                    commands.append("/Gtext gs BT {x} {y} Td ({label}) Tj ET".format(
+                    commands.append("/Gtext gs BT {x:.6f} {y:.6f} Td ({label}) Tj ET".format(
                         size=1000*self.text_size,
                         x=500 * (island.bounding_box.x - self.text_width(island.title)),
                         y=1000 * 0.2 * self.text_size,
@@ -1687,7 +1691,7 @@ class PDF:
                     if isinstance(marker, Sticker):
                         data_stickerfill.append(line_through(marker.vertices) + "f")
                         if marker.text:
-                            data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align} 0 Td /F1 {size:.6f} Tf ({label}) Tj ET Q".format(
+                            data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align:.6f} 0 Td /F1 {size:.6f} Tf ({label}) Tj ET Q".format(
                                 label=marker.text,
                                 pos=1000*marker.center,
                                 mat=marker.rot,
@@ -1696,14 +1700,14 @@ class PDF:
                     elif isinstance(marker, Arrow):
                         size = 1000 * marker.size
                         position = 1000 * (marker.center + marker.rot*marker.size*M.Vector((0, -0.9)))
-                        data_markers.append("q BT {pos.x} {pos.y} Td /F1 {size:.6f} Tf ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q".format(
+                        data_markers.append("q BT {pos.x:.6f} {pos.y:.6f} Td /F1 {size:.6f} Tf ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q".format(
                             index=marker.text,
                             arrow_pos=1000 * marker.center,
                             pos=position - 1000 * M.Vector((0.5 * self.text_width(marker.text), 0.4 * self.text_size)),
                             mat=size * marker.rot,
                             size=size))
                     elif isinstance(marker, NumberAlone):
-                        data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT /F1 {size} Tf ({label}) Tj ET Q".format(
+                        data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT /F1 {size:.6f} Tf ({label}) Tj ET Q".format(
                             label=marker.text,
                             pos=1000*marker.center,
                             mat=format_matrix(marker.rot),
