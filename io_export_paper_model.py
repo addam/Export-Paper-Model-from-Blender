@@ -231,7 +231,8 @@ class Unfolder:
             rd.bake_type = 'TEXTURE' if properties.output_type == 'TEXTURE' else 'FULL'
             rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
 
-            rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
+            rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear =\
+                properties.image_margin, 0, 0.001, False, False
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
             elif image_packing == 'ISLAND_LINK':
@@ -2059,6 +2060,9 @@ class ExportPaperModel(bpy.types.Operator):
         description="Shows the box 'Colors and Style' expanded in user interface",
         default=False, options={'SKIP_SAVE'})
     style = bpy.props.PointerProperty(type=PaperModelStyle)
+    image_margin = bpy.props.IntProperty(name="Image margin",
+        description="Extend the image beyond the edge of the islands to avoid gaps",
+        default=0, soft_min=0)
 
     unfolder = None
     largest_island_ratio = 0
@@ -2157,6 +2161,8 @@ class ExportPaperModel(bpy.types.Operator):
             row = col.row()
             row.active = self.file_format == 'SVG'
             row.prop(self.properties, "image_packing", text="Images")
+            row = col.row()
+            row.prop(self.properties, "image_margin", text="Image margin (px)")
 
         box = layout.box()
         row = box.row(align=True)
