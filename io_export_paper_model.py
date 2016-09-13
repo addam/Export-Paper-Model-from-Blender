@@ -58,7 +58,7 @@ import bgl
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain, repeat
-from math import pi
+from math import pi, ceil
 
 try:
     import os.path as os_path
@@ -2053,7 +2053,7 @@ class ExportPaperModel(bpy.types.Operator):
         ])
     scale = bpy.props.FloatProperty(name="Scale",
         description="Divisor of all dimensions when exporting",
-        default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=0)
+        default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
     do_create_uvmap = bpy.props.BoolProperty(name="Create UVMap",
         description="Create a new UV Map showing the islands and page layout",
         default=False, options={'SKIP_SAVE'})
@@ -2105,7 +2105,7 @@ class ExportPaperModel(bpy.types.Operator):
         self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
         scale_ratio = self.get_scale_ratio(sce)
         if scale_ratio > 1:
-            self.scale *= scale_ratio
+            self.scale = ceil(self.scale * scale_ratio)
         wm = context.window_manager
         wm.fileselect_add(self)
 
@@ -2417,7 +2417,7 @@ class PaperModelSettings(bpy.types.PropertyGroup):
         default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
     scale = bpy.props.FloatProperty(name="Scale",
         description="Divisor of all dimensions when exporting",
-        default=1, soft_min=1.0, soft_max=10000.0, subtype='UNSIGNED', precision=0)
+        default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
 bpy.utils.register_class(PaperModelSettings)
 
 
