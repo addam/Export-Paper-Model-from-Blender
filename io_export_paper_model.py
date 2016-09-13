@@ -166,7 +166,8 @@ class Unfolder:
     def prepare(self, cage_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
         """Create the islands of the net"""
         self.mesh.generate_cuts(cage_size / scale if cage_size else None, priority_effect)
-        self.mesh.finalize_islands()
+        is_landscape = cage_size and cage_size.x > cage_size.y
+        self.mesh.finalize_islands(is_landscape)
         self.mesh.enumerate_islands()
         if create_uvmap:
             self.tex = self.mesh.save_uv()
@@ -215,7 +216,7 @@ class Unfolder:
         text_height = properties.sticker_width if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
         aspect_ratio = printable_size.x / printable_size.y
         # title height must be somewhat larger that text size, glyphs go below the baseline
-        self.mesh.finalize_islands(title_height=text_height * 1.2)
+        self.mesh.finalize_islands(is_landscape=(printable_size.x > printable_size.y), title_height=text_height * 1.2)
         self.mesh.fit_islands(cage_size=printable_size)
 
         if properties.output_type != 'NONE':
@@ -436,13 +437,17 @@ class Mesh:
             for point in chain((vertex.co for vertex in island.verts), island.fake_verts):
                 point *= scale
 
-    def finalize_islands(self, title_height=0):
+    def finalize_islands(self, is_landscape=False, title_height=0):
         for island in self.islands:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
             points = list(vertex.co for vertex in island.verts) + island.fake_verts
             angle = M.geometry.box_fit_2d(points)
             rot = M.Matrix.Rotation(angle, 2)
+            # ensure that the island matches page orientation (portrait/landscape)
+            dimensions = M.Vector(max(r * v for v in points) - min(r * v for v in points) for r in rot)
+            if dimensions.x > dimensions.y != is_landscape:
+                rot = M.Matrix.Rotation(angle + pi / 2, 2)
             for point in points:
                 # note: we need an in-place operation, and Vector.rotate() seems to work for 3d vectors only
                 point[:] = rot * point
@@ -454,7 +459,7 @@ class Mesh:
             island.bounding_box = M.Vector((max(v.x for v in points), max(v.y for v in points)))
 
     def largest_island_ratio(self, page_size):
-        return max(max(island.bounding_box.x / page_size.x, island.bounding_box.y / page_size.y) for island in self.islands)
+        return max(i / p for island in self.islands for (i, p) in zip(island.bounding_box, page_size))
 
     def fit_islands(self, cage_size):
         """Move islands so that they fit onto pages, based on their bounding boxes"""
