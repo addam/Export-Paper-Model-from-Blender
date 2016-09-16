@@ -1659,13 +1659,13 @@ class PDF:
             "Gsticker": {"ca": self.style.sticker_fill[3]}}
         for name in ("outer", "convex", "concave", "freestyle"):
             gs = {
-                "LW": self.style.line_width * getattr(self.style, name + "_width"),
+                "LW": self.style.line_width * 1000 * getattr(self.style, name + "_width"),
                 "CA": getattr(self.style, name + "_color")[3],
                 "D": [format_style[getattr(self.style, name + "_style")], 0]}
             styles["G" + name] = gs
         for name in ("outbg", "inbg"):
             gs = {
-                "LW": self.style.line_width * getattr(self.style, name + "_width"),
+                "LW": self.style.line_width * 1000 * getattr(self.style, name + "_width"),
                 "CA": getattr(self.style, name + "_color")[3],
                 "D": [format_style['SOLID'], 0]}
             styles["G" + name] = gs
