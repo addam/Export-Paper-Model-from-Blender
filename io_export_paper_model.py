@@ -1751,7 +1751,7 @@ class PDF:
                         data_markers.append("q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT /F1 {size:.6f} Tf ({label}) Tj ET Q".format(
                             label=marker.text,
                             pos=1000*marker.center,
-                            mat=format_matrix(marker.rot),
+                            mat = marker.rot,
                             size=1000*marker.size))
 
                 outer_edges = set(island.boundary)
