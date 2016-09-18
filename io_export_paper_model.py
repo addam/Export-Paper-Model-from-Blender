@@ -153,6 +153,52 @@ def create_blank_image(image_name, dimensions, alpha=1):
     return image
 
 
+def bake(face_indices, uvmap, image):
+    import bpy
+    is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
+    if is_cycles:
+        # please excuse the following mess. Cycles baking API does not seem to allow better.
+        trash = list()
+        me = bpy.context.active_object.data
+        mat = bpy.data.materials.new("unfolder dummy")
+        me.materials.append(mat)
+        mat.use_nodes = True
+        for mat in bpy.data.materials:
+            if not mat.use_nodes:
+                continue
+            img = mat.node_tree.nodes.new('ShaderNodeTexImage')
+            uv = mat.node_tree.nodes.new('ShaderNodeUVMap')
+            uv.uv_map = uvmap.name
+            img.image = image
+            mat.node_tree.links.new(uv.outputs['UV'], img.inputs['Vector'])
+            mat.node_tree.nodes.active = img
+            trash.append((mat.node_tree, img, uv))
+        bake_type = bpy.context.scene.cycles.bake_type
+        sta = bpy.context.scene.render.bake.use_selected_to_active
+        uvmap.active = True
+        loop = me.uv_layers[me.uv_layers.active_index].data
+        face_indices = set(face_indices)
+        ignored_uvs = [face.loop_start + i for face in me.polygons if face.index not in face_indices for i, v in enumerate(face.vertices)]
+        for vid in ignored_uvs:
+            loop[vid].uv[0] *= -1
+            loop[vid].uv[1] *= -1
+        bpy.ops.object.bake(type=bake_type, margin=0, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
+        for vid in ignored_uvs:
+            loop[vid].uv[0] *= -1
+            loop[vid].uv[1] *= -1
+        for node_tree, img, uv in trash:
+            node_tree.nodes.remove(img)
+            node_tree.nodes.remove(uv)
+        bpy.data.materials.remove(me.materials.pop())
+    else:
+        texfaces = uvmap.data
+        for fid in face_indices:
+            texfaces[fid].image = image
+        bpy.ops.object.bake_image()
+        for fid in face_indices:
+            texfaces[fid].image = None
+
+
 class UnfoldError(ValueError):
     pass
 
@@ -226,13 +272,24 @@ class Unfolder:
             tex = self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images, tex=self.tex)
             if not tex:
                 raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
-            rd = bpy.context.scene.render
-            recall = rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
 
-            rd.bake_type = 'TEXTURE' if properties.output_type == 'TEXTURE' else 'FULL'
-            rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
-
-            rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
+            sce = bpy.context.scene
+            rd = sce.render
+            bk = rd.bake
+            if rd.engine == 'CYCLES':
+                recall = sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear
+                lookup = {'TEXTURE': 'DIFFUSE_COLOR', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
+                sce.cycles.bake_type = lookup[properties.output_type]
+                bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
+                bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 0, 10, False, False
+            else:
+                recall = rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
+                rd.engine = 'BLENDER_RENDER'
+                lookup = {'TEXTURE': 'TEXTURE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'FULL', 'SELECTED_TO_ACTIVE': 'FULL'}
+                rd.bake_type = lookup[properties.output_type]
+                rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
+                rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
+            
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
             elif image_packing == 'ISLAND_LINK':
@@ -241,7 +298,10 @@ class Unfolder:
                 self.mesh.save_separate_images(tex, ppm, filepath, embed=Exporter.encode_image)
 
             # revoke settings
-            rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
+            if rd.engine == 'CYCLES':
+                sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = recall
+            else:
+                rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
             if not properties.do_create_uvmap:
                 tex.active = True
                 bpy.ops.mesh.uv_texture_remove()
@@ -548,42 +608,20 @@ class Mesh:
         return tex
 
     def save_image(self, tex, page_size_pixels: M.Vector, filename):
-        texfaces = tex.data
-        # omitting this causes a "Circular reference in texture stack" error
-        for island in self.islands:
-            for uvface in island.faces:
-                texfaces[uvface.face.index].image = None
-
         for page in self.pages:
             image = create_blank_image("{} {} Unfolded".format(self.data.name[:14], page.name), page_size_pixels, alpha=1)
             image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
-            for island in page.islands:
-                for uvface in island.faces:
-                    texfaces[uvface.face.index].image = image
-            try:
-                bpy.ops.object.bake_image()
-                image.save()
-            finally:
-                for island in page.islands:
-                    for uvface in island.faces:
-                        texfaces[uvface.face.index].image = None
-                image.user_clear()
-                bpy.data.images.remove(image)
+            faces = [uvface.face.index for island in page.islands for uvface in island.faces]
+            bake(faces, tex, image)
+            image.save()
+            image.user_clear()
+            bpy.data.images.remove(image)
 
     def save_separate_images(self, tex, scale, filepath, embed=None):
-        texfaces = tex.data
-        # omitting these 3 lines causes a "Circular reference in texture stack" error
-        for island in self.islands:
-            for uvface in island.faces:
-                texfaces[uvface.face.index].image = None
-
         for i, island in enumerate(self.islands, 1):
             image_name = "{} isl{}".format(self.data.name[:15], i)
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-            for uvface in island.faces:
-                texfaces[uvface.face.index].image = image
-            bpy.ops.object.bake_image()
-            
+            bake([uvface.face.index for uvface in island.faces], tex, image)
             if embed:
                 island.embedded_image = embed(image)
             else:
@@ -594,8 +632,6 @@ class Mesh:
                 image.filepath_raw = image_path
                 image.save()
                 island.image_path = image.path
-            for uvface in island.faces:
-                texfaces[uvface.face.index].image = None
             image.user_clear()
             bpy.data.images.remove(image)
 
@@ -2023,6 +2059,7 @@ class ExportPaperModel(bpy.types.Operator):
         default='NONE', items=[
             ('NONE', "No Texture", "Export the net only"),
             ('TEXTURE', "From Materials", "Render the diffuse color and all painted textures"),
+            ('AMBIENT_OCCLUSION', "Ambient Occlusion", "Render the Ambient Occlusion pass"),
             ('RENDER', "Full Render", "Render the material in actual scene illumination"),
             ('SELECTED_TO_ACTIVE', "Selected to Active", "Render all selected surrounding objects as a texture")
         ])
@@ -2156,7 +2193,7 @@ class ExportPaperModel(bpy.types.Operator):
             col.active = (self.output_type != 'NONE')
             if len(self.object.data.uv_textures) == 8:
                 col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
-            elif context.scene.render.engine != 'BLENDER_RENDER' and self.output_type != 'NONE':
+            elif context.scene.render.engine not in ('BLENDER_RENDER', 'CYCLES') and self.output_type != 'NONE':
                 col.label(text="Blender Internal engine will be used for texture baking.", icon='ERROR')
             col.prop(self.properties, "output_dpi")
             row = col.row()
