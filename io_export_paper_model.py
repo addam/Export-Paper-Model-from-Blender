@@ -158,38 +158,43 @@ def bake(face_indices, uvmap, image):
     is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
     if is_cycles:
         # please excuse the following mess. Cycles baking API does not seem to allow better.
-        trash = list()
-        me = bpy.context.active_object.data
+        ob = bpy.context.active_object
+        me = ob.data
         mat = bpy.data.materials.new("unfolder dummy")
-        me.materials.append(mat)
         mat.use_nodes = True
-        for mat in bpy.data.materials:
-            if not mat.use_nodes:
-                continue
-            img = mat.node_tree.nodes.new('ShaderNodeTexImage')
-            uv = mat.node_tree.nodes.new('ShaderNodeUVMap')
-            uv.uv_map = uvmap.name
-            img.image = image
-            mat.node_tree.links.new(uv.outputs['UV'], img.inputs['Vector'])
-            mat.node_tree.nodes.active = img
-            trash.append((mat.node_tree, img, uv))
-        bake_type = bpy.context.scene.cycles.bake_type
-        sta = bpy.context.scene.render.bake.use_selected_to_active
+        img = mat.node_tree.nodes.new('ShaderNodeTexImage')
+        img.image = image
+        mat.node_tree.nodes.active = img
+        uv = mat.node_tree.nodes.new('ShaderNodeUVMap')
+        uv.uv_map = uvmap.name
+        mat.node_tree.links.new(uv.outputs['UV'], img.inputs['Vector'])
         uvmap.active = True
+        recall_object_slots, recall_mesh_slots = [slot.material for slot in ob.material_slots], me.materials[:]
+        for i, slot in enumerate(ob.material_slots):
+            slot.material = me.materials[i] = mat
+        me.materials.append(mat)
         loop = me.uv_layers[me.uv_layers.active_index].data
         face_indices = set(face_indices)
         ignored_uvs = [face.loop_start + i for face in me.polygons if face.index not in face_indices for i, v in enumerate(face.vertices)]
         for vid in ignored_uvs:
             loop[vid].uv[0] *= -1
             loop[vid].uv[1] *= -1
-        bpy.ops.object.bake(type=bake_type, margin=0, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
+        bake_type = bpy.context.scene.cycles.bake_type
+        sta = bpy.context.scene.render.bake.use_selected_to_active
+        try:
+            bpy.ops.object.bake(type=bake_type, margin=0, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
+        except RuntimeError as e:
+            raise UnfoldError(*e.args)
+        finally:
+            me.materials.pop()
+            for slot, recall in zip(ob.material_slots, recall_object_slots):
+                slot.material = recall
+            for i, recall in enumerate(recall_mesh_slots):
+                me.materials[i] = recall
+            bpy.data.materials.remove(mat)
         for vid in ignored_uvs:
             loop[vid].uv[0] *= -1
             loop[vid].uv[1] *= -1
-        for node_tree, img, uv in trash:
-            node_tree.nodes.remove(img)
-            node_tree.nodes.remove(uv)
-        bpy.data.materials.remove(me.materials.pop())
     else:
         texfaces = uvmap.data
         for fid in face_indices:
