@@ -1375,11 +1375,11 @@ class SVG:
     def encode_image(cls, bpy_image):
         import tempfile
         import base64
-        tempfile_manager = tempfile.NamedTemporaryFile("rb", suffix=".png")
-        bpy_image.filepath_raw = tempfile_manager.name
-        bpy_image.save()
-        with tempfile_manager as imgfile:
-            return base64.encodebytes(imgfile.read()).decode('ascii')
+        with tempfile.TemporaryDirectory() as directory:
+            filename = directory + "/i.png"
+            bpy_image.filepath_raw = filename
+            bpy_image.save()
+            return base64.encodebytes(open(filename, "rb").read()).decode('ascii')
 
     def format_vertex(self, vector, pos=M.Vector((0, 0))):
         """Return a string with both coordinates of the given vertex."""
