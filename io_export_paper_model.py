@@ -32,7 +32,6 @@ bl_info = {
 
 #### TODO:
 # sanitize the constructors so that they don't edit their parent object
-# rename verts -> vertices, edge.vect -> edge.vector
 # SVG object doesn't need a 'pure_net' argument in constructor
 # remember selected objects before baking, except selected to active
 # islands with default names should be excluded while matching
@@ -323,7 +322,7 @@ class Mesh:
     """Wrapper for Bpy Mesh"""
 
     def __init__(self, mesh, matrix):
-        self.verts = dict()
+        self.vertices = dict()
         self.edges = dict()
         self.edges_by_verts_indices = dict()
         self.faces = dict()
@@ -331,7 +330,7 @@ class Mesh:
         self.data = mesh
         self.pages = list()
         for bpy_vertex in mesh.vertices:
-            self.verts[bpy_vertex.index] = Vertex(bpy_vertex, matrix)
+            self.vertices[bpy_vertex.index] = Vertex(bpy_vertex, matrix)
         for bpy_edge in mesh.edges:
             edge = Edge(bpy_edge, self, matrix)
             self.edges[bpy_edge.index] = edge
@@ -374,12 +373,12 @@ class Mesh:
         edges = [edge for edge in self.edges.values() if not edge.force_cut and len(edge.faces) > 1]
 
         if edges:
-            average_length = sum(edge.length for edge in edges) / len(edges)
+            average_length = sum(edge.vector.length for edge in edges) / len(edges)
             for edge in edges:
                 edge.generate_priority(priority_effect, average_length)
             edges.sort(reverse=False, key=lambda edge: edge.priority)
             for edge in edges:
-                if edge.length == 0:
+                if edge.vector.length_squared == 0:
                     continue
                 face_a, face_b = edge.main_faces
                 island_a, island_b = face_a.uvface.island, face_b.uvface.island
@@ -466,14 +465,14 @@ class Mesh:
         def uvedge_priority(uvedge):
             """Retuns whether it is a good idea to stick something on this edge's face"""
             # TODO: it should take into account overlaps with faces and with other stickers
-            return uvedge.uvface.face.area / sum((vb.co - va.co).length for (va, vb) in pairs(uvedge.uvface.verts))
+            return uvedge.uvface.face.area / sum((vb.co - va.co).length for (va, vb) in pairs(uvedge.uvface.vertices))
 
         def add_sticker(uvedge, index, target_island):
             uvedge.sticker = Sticker(uvedge, default_width, index, target_island)
             uvedge.island.add_marker(uvedge.sticker)
 
         for edge in self.edges.values():
-            if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.vect.length_squared > 0:
+            if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.vector.length_squared > 0:
                 uvedge_a, uvedge_b = edge.uvedges[:2]
                 if uvedge_priority(uvedge_a) < uvedge_priority(uvedge_b):
                     uvedge_a, uvedge_b = uvedge_b, uvedge_a
@@ -522,14 +521,14 @@ class Mesh:
 
     def scale_islands(self, scale):
         for island in self.islands:
-            for point in chain((vertex.co for vertex in island.verts), island.fake_verts):
+            for point in chain((vertex.co for vertex in island.vertices), island.fake_vertices):
                 point *= scale
 
     def finalize_islands(self, is_landscape=False, title_height=0):
         for island in self.islands:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
-            points = list(vertex.co for vertex in island.verts) + island.fake_verts
+            points = list(vertex.co for vertex in island.vertices) + island.fake_vertices
             angle = M.geometry.box_fit_2d(points)
             rot = M.Matrix.Rotation(angle, 2)
             # ensure that the island matches page orientation (portrait/landscape)
@@ -684,14 +683,13 @@ class Vertex:
 class Edge:
     """Wrapper for BPy Edge"""
     __slots__ = ('va', 'vb', 'faces', 'main_faces', 'uvedges',
-        'vect', 'length', 'angle',
+        'vector', 'angle',
         'is_main_cut', 'force_cut', 'priority', 'freestyle')
 
     def __init__(self, edge, mesh, matrix=1):
-        self.va = mesh.verts[edge.vertices[0]]
-        self.vb = mesh.verts[edge.vertices[1]]
-        self.vect = self.vb.co - self.va.co
-        self.length = self.vect.length
+        self.va = mesh.vertices[edge.vertices[0]]
+        self.vb = mesh.vertices[edge.vertices[1]]
+        self.vector = self.vb.co - self.va.co
         self.faces = list()
         # if self.main_faces is set, then self.uvedges[:2] must correspond to self.main_faces, in their order
         # this constraint is assured at the time of finishing mesh.generate_cuts
@@ -724,8 +722,8 @@ class Edge:
             self.angle = -3 # just a very sharp angle
             return
         # correction if normals are flipped
-        a_is_clockwise = ((face_a.verts.index(self.va) - face_a.verts.index(self.vb)) % len(face_a.verts) == 1)
-        b_is_clockwise = ((face_b.verts.index(self.va) - face_b.verts.index(self.vb)) % len(face_b.verts) == 1)
+        a_is_clockwise = ((face_a.vertices.index(self.va) - face_a.vertices.index(self.vb)) % len(face_a.vertices) == 1)
+        b_is_clockwise = ((face_b.vertices.index(self.va) - face_b.vertices.index(self.vb)) % len(face_b.vertices) == 1)
         is_equal_flip = True
         if face_a.uvface and face_b.uvface:
             a_is_clockwise ^= face_a.uvface.flipped
@@ -733,7 +731,7 @@ class Edge:
             is_equal_flip = (face_a.uvface.flipped == face_b.uvface.flipped)
             # TODO: maybe this need not be true in _really_ ugly cases: assert(a_is_clockwise != b_is_clockwise)
         if a_is_clockwise != b_is_clockwise:
-            if (a_is_clockwise == (face_b.normal.cross(face_a.normal).dot(self.vect) > 0)) == is_equal_flip:
+            if (a_is_clockwise == (face_b.normal.cross(face_a.normal).dot(self.vector) > 0)) == is_equal_flip:
                 # the angle is convex
                 self.angle = face_a.normal.angle(face_b.normal)
             else:
@@ -751,7 +749,7 @@ class Edge:
             self.priority = priority_effect['CONVEX'] * angle / pi
         else:
             self.priority = priority_effect['CONCAVE'] * (-angle) / pi
-        self.priority += (self.length / average_length) * priority_effect['LENGTH']
+        self.priority += (self.vector.length / average_length) * priority_effect['LENGTH']
 
     def is_cut(self, face):
         """Return False if this edge will the given face to another one in the resulting net
@@ -771,28 +769,28 @@ class Edge:
 
 class Face:
     """Wrapper for BPy Face"""
-    __slots__ = ('index', 'edges', 'verts', 'uvface',
+    __slots__ = ('index', 'edges', 'vertices', 'uvface',
         'loop_start', 'area', 'normal')
 
     def __init__(self, bpy_face, mesh):
         self.index = bpy_face.index
         self.edges = list()
-        self.verts = [mesh.verts[i] for i in bpy_face.vertices]
+        self.vertices = [mesh.vertices[i] for i in bpy_face.vertices]
         self.loop_start = bpy_face.loop_start
         self.area = bpy_face.area
         self.uvface = None
-        self.normal = M.geometry.normal(v.co for v in self.verts)
+        self.normal = M.geometry.normal(v.co for v in self.vertices)
         for verts_indices in bpy_face.edge_keys:
             edge = mesh.edges_by_verts_indices[verts_indices]
             self.edges.append(edge)
             edge.faces.append(self)  #FIXME: editing foreign attribute
 
     def is_twisted(self):
-        if len(self.verts) > 3:
-            center = sum((vertex.co for vertex in self.verts), M.Vector((0, 0, 0))) / len(self.verts)
+        if len(self.vertices) > 3:
+            center = sum(vertex.co for vertex in self.vertices) / len(self.vertices)
             plane_d = center.dot(self.normal)
-            diameter = max((center - vertex.co).length for vertex in self.verts)
-            for vertex in self.verts:
+            diameter = max((center - vertex.co).length for vertex in self.vertices)
+            for vertex in self.vertices:
                 # check coplanarity
                 if abs(vertex.co.dot(self.normal) - plane_d) > diameter * 0.01:
                     return True
@@ -804,19 +802,19 @@ class Face:
 
 class Island:
     """Part of the net to be exported"""
-    __slots__ = ('faces', 'edges', 'verts', 'fake_verts', 'uvverts_by_id', 'boundary', 'markers',
+    __slots__ = ('faces', 'edges', 'vertices', 'fake_vertices', 'uvverts_by_id', 'boundary', 'markers',
         'pos', 'bounding_box',
         'image_path', 'embedded_image',
         'number', 'label', 'abbreviation', 'title',
         'has_safe_geometry', 'is_inside_out',
         'sticker_numbering')
 
-    def __init__(self, face=None):
+    def __init__(self, face):
         """Create an Island from a single Face"""
         self.faces = list()
         self.edges = set()
-        self.verts = set()
-        self.fake_verts = list()
+        self.vertices = set()
+        self.fake_vertices = list()
         self.markers = list()
         self.label = None
         self.abbreviation = None
@@ -827,14 +825,12 @@ class Island:
         self.is_inside_out = False  # swaps concave <-> convex edges
         self.has_safe_geometry = True
         self.sticker_numbering = 0
-
-        if face:
-            uvface = UVFace(face, self)
-            self.verts.update(uvface.verts)
-            self.edges.update(uvface.edges)
-            self.faces.append(uvface)
+        uvface = UVFace(face, self)
+        self.vertices.update(uvface.vertices)
+        self.edges.update(uvface.edges)
+        self.faces.append(uvface)
         # speedup for Island.join
-        self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.verts}
+        self.uvverts_by_id = {uvvertex.vertex.index: [uvvertex] for uvvertex in self.vertices}
         # UVEdges on the boundary
         self.boundary = list(self.edges)
 
@@ -979,7 +975,7 @@ class Island:
             rot = fitting_matrix(flip * (first_b.co - second_b.co), uvedge_a.vb.co - uvedge_a.va.co) * flip
         trans = uvedge_a.vb.co - rot * first_b.co
         # extract and transform island_b's boundary
-        phantoms = {uvvertex: UVVertex(rot*uvvertex.co + trans, uvvertex.vertex) for uvvertex in other.verts}
+        phantoms = {uvvertex: UVVertex(rot*uvvertex.co + trans, uvvertex.vertex) for uvvertex in other.vertices}
 
         # check the size of the resulting island
         if size_limit:
@@ -993,7 +989,7 @@ class Island:
                 # for the time being, just throw this piece away
                 return False
 
-        distance_limit = edge.vect.length_squared * epsilon
+        distance_limit = edge.vector.length_squared * epsilon
         # try and merge UVVertices closer than sqrt(distance_limit)
         merged_uvedges = set()
         merged_uvedge_pairs = list()
@@ -1041,7 +1037,7 @@ class Island:
             for uvedge in other.boundary if uvedge not in merged_uvedges]
         # TODO: if is_merged_mine, it might make sense to create a similar list from self.boundary as well
 
-        incidence = {vertex.tup for vertex in phantoms.values()}.intersection(vertex.tup for vertex in self.verts)
+        incidence = {vertex.tup for vertex in phantoms.values()}.intersection(vertex.tup for vertex in self.vertices)
         incidence = {position: list() for position in incidence}  # from now on, 'incidence' is a dict
         for uvedge in chain(boundary_other, self.boundary):
             if uvedge.va.co == uvedge.vb.co:
@@ -1079,7 +1075,7 @@ class Island:
             uvedge.edge.is_main_cut = False
 
         # include all trasformed vertices as mine
-        self.verts.update(phantoms.values())
+        self.vertices.update(phantoms.values())
 
         # update the uvverts_by_id dictionary
         for source, target in phantoms.items():
@@ -1107,15 +1103,15 @@ class Island:
 
         for uvface in other.faces:
             uvface.island = self
-            uvface.verts = [phantoms[uvvertex] for uvvertex in uvface.verts]
+            uvface.vertices = [phantoms[uvvertex] for uvvertex in uvface.vertices]
             uvface.uvvertex_by_id = {index: phantoms[uvvertex]
                 for index, uvvertex in uvface.uvvertex_by_id.items()}
             uvface.flipped ^= flipped
         if is_merged_mine:
             # there may be own uvvertices that need to be replaced by phantoms
             for uvface in self.faces:
-                if any(uvvertex in phantoms for uvvertex in uvface.verts):
-                    uvface.verts = [phantoms.get(uvvertex, uvvertex) for uvvertex in uvface.verts]
+                if any(uvvertex in phantoms for uvvertex in uvface.vertices):
+                    uvface.vertices = [phantoms.get(uvvertex, uvvertex) for uvvertex in uvface.vertices]
                     uvface.uvvertex_by_id = {index: phantoms.get(uvvertex, uvvertex)
                         for index, uvvertex in uvface.uvvertex_by_id.items()}
         self.faces.extend(other.faces)
@@ -1131,7 +1127,7 @@ class Island:
         return True
 
     def add_marker(self, marker):
-        self.fake_verts.extend(marker.bounds)
+        self.fake_vertices.extend(marker.bounds)
         self.markers.append(marker)
 
     def generate_label(self, label=None, abbreviation=None):
@@ -1149,7 +1145,7 @@ class Island:
         page_size: size of the page in pixels (vector)"""
         texface = tex.data
         for uvface in self.faces:
-            for i, uvvertex in enumerate(uvface.verts):
+            for i, uvvertex in enumerate(uvface.vertices):
                 uv = uvvertex.co + self.pos
                 texface[uvface.face.loop_start + i].uv[0] = uv.x / cage_size.x
                 texface[uvface.face.loop_start + i].uv[1] = uv.y / cage_size.y
@@ -1161,7 +1157,7 @@ class Island:
         texface = tex.data
         scale_x, scale_y = 1 / self.bounding_box.x, 1 / self.bounding_box.y
         for uvface in self.faces:
-            for i, uvvertex in enumerate(uvface.verts):
+            for i, uvvertex in enumerate(uvface.vertices):
                 texface[uvface.face.loop_start + i].uv[0] = uvvertex.co.x * scale_x
                 texface[uvface.face.loop_start + i].uv[1] = uvvertex.co.y * scale_y
 
@@ -1241,28 +1237,31 @@ class PhantomUVEdge:
 
 class UVFace:
     """Face in 2D"""
-    __slots__ = ('verts', 'edges', 'face', 'island', 'flipped', 'uvvertex_by_id')
+    __slots__ = ('vertices', 'edges', 'face', 'island', 'flipped', 'uvvertex_by_id')
 
     def __init__(self, face: Face, island: Island):
         """Creace an UVFace from a Face and a fixed edge.
         face: Face to take coordinates from
         island: Island to register itself in
         fixed_edge: Edge to connect to (that already has UV coordinates)"""
-        self.verts = list()
+        self.vertices = list()
         self.face = face
         face.uvface = self
         self.island = island
         self.flipped = False  # a flipped UVFace has edges clockwise
 
         rot = z_up_matrix(face.normal)
-        self.uvvertex_by_id = {vertex.index: UVVertex(rot * vertex.co, vertex) for vertex in face.verts}
-        self.verts = [self.uvvertex_by_id[vertex.index] for vertex in face.verts]
+        self.uvvertex_by_id = dict()  # link vertex id -> UVVertex
+        for vertex in face.vertices:
+            uvvertex = UVVertex(rot * vertex.co, vertex)
+            self.vertices.append(uvvertex)
+            self.uvvertex_by_id[vertex.index] = uvvertex
         self.edges = list()
         edge_by_verts = dict()
         for edge in face.edges:
             edge_by_verts[(edge.va.index, edge.vb.index)] = edge
             edge_by_verts[(edge.vb.index, edge.va.index)] = edge
-        for va, vb in pairs(self.verts):
+        for va, vb in pairs(self.vertices):
             edge = edge_by_verts[(va.vertex.index, vb.vertex.index)]
             uvedge = UVEdge(va, vb, island, self, edge)
             self.edges.append(uvedge)
@@ -1278,10 +1277,10 @@ class Arrow:
         edge = (uvedge.vb.co - uvedge.va.co) if not uvedge.uvface.flipped else (uvedge.va.co - uvedge.vb.co)
         self.center = (uvedge.va.co + uvedge.vb.co) / 2
         self.size = size
-        sin, cos = edge.y / edge.length, edge.x / edge.length
-        self.rot = M.Matrix(((cos, -sin), (sin, cos)))
         tangent = edge.normalized()
-        normal = M.Vector((tangent.y, -tangent.x))
+        cos, sin = tangent
+        self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+        normal = M.Vector((sin, -cos))
         self.bounds = [self.center, self.center + (1.2*normal + tangent)*size, self.center + (1.2*normal - tangent)*size]
 
 
