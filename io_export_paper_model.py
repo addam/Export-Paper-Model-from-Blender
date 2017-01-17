@@ -1244,11 +1244,8 @@ class UVFace:
         self.flipped = False  # a flipped UVFace has edges clockwise
 
         rot = z_up_matrix(face.normal)
-        self.uvvertex_by_id = dict()  # link vertex id -> UVVertex
-        for vertex in face.verts:
-            uvvertex = UVVertex(rot * vertex.co, vertex)
-            self.verts.append(uvvertex)
-            self.uvvertex_by_id[vertex.index] = uvvertex
+        self.uvvertex_by_id = {vertex.index: UVVertex(rot * vertex.co, vertex) for vertex in face.verts}
+        self.verts = [self.uvvertex_by_id[vertex.index] for vertex in face.verts]
         self.edges = list()
         edge_by_verts = dict()
         for edge in face.edges:
