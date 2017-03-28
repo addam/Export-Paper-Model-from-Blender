@@ -352,15 +352,18 @@ class Mesh:
         if not (null_edges or null_faces or twisted_faces):
             return
         bpy.context.tool_settings.mesh_select_mode = False, bool(null_edges), bool(null_faces or twisted_faces)
+        for vertex in self.data.vertices:
+            vertex.select = False
         for edge in self.data.edges:
             edge.select = (edge.index in null_edges)
         for face in self.data.polygons:
             face.select = (face.index in null_faces or face.index in twisted_faces)
+        cure = "Remove Doubles and Triangulate" if (null_edges or null_faces) and twisted_faces else "Triangulate" if twisted_faces else "Remove Doubles"
         raise UnfoldError("The model contains:\n" +
             (" {} zero-length edge(s)\n".format(len(null_edges)) if null_edges else "") +
             (" {} zero-area face(s)\n".format(len(null_faces)) if null_faces else "") + 
             (" {} twisted polygon(s)\n".format(len(twisted_faces)) if twisted_faces else "") +
-            "Fix the selected geometry by hand. Export failed.")
+            "The offenders are selected and you can use {} to fix them. Export failed.".format(cure))
 
     def generate_cuts(self, page_size, priority_effect):
         """Cut the mesh so that it can be unfolded to a flat net."""
@@ -1898,6 +1901,8 @@ class Unfold(bpy.types.Operator):
             unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            bpy.ops.object.mode_set(mode=recall_mode)
+            sce.paper_model.display_islands = recall_display_islands
             return {'CANCELLED'}
         if mesh.paper_island_list:
             unfolder.copy_island_names(mesh.paper_island_list)
@@ -2161,6 +2166,7 @@ class ExportPaperModel(bpy.types.Operator):
             self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            bpy.ops.object.mode_set(mode=recall_mode)
             return {'CANCELLED'}
         scale_ratio = self.get_scale_ratio(sce)
         if scale_ratio > 1:
