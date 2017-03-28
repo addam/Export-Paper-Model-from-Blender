@@ -312,7 +312,7 @@ class Unfolder:
                 tex.active = True
                 bpy.ops.mesh.uv_texture_remove()
 
-        exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'))
+        exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'), properties.angle_epsilon)
         exporter.do_create_stickers = properties.do_create_stickers
         exporter.text_size = properties.sticker_width
         exporter.write(self.mesh, filepath)
@@ -1365,7 +1365,7 @@ class NumberAlone:
 class SVG:
     """Simple SVG exporter"""
 
-    def __init__(self, page_size: M.Vector, style, margin, pure_net=True):
+    def __init__(self, page_size: M.Vector, style, margin, pure_net=True, angle_epsilon=0.01):
         """Initialize document settings.
         page_size: document dimensions in meters
         pure_net: if True, do not use image"""
@@ -1374,6 +1374,7 @@ class SVG:
         self.style = style
         self.margin = margin
         self.text_size = 12
+        self.angle_epsilon = angle_epsilon
 
     @classmethod
     def encode_image(cls, bpy_image):
@@ -1519,9 +1520,9 @@ class SVG:
                             data_freestyle.append(data_uvedge)
                         # each uvedge is in two opposite-oriented variants; we want to add each only once
                         if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
-                            if edge.angle > 0.01:
+                            if edge.angle > self.angle_epsilon:
                                 data_convex.append(data_uvedge)
-                            elif edge.angle < -0.01:
+                            elif edge.angle < -self.angle_epsilon:
                                 data_concave.append(data_uvedge)
                     if island.is_inside_out:
                         data_convex, data_concave = data_concave, data_convex
@@ -1626,11 +1627,12 @@ class PDF:
     """Simple PDF exporter"""
     
     mm_to_pt = 72 / 25.4
-    def __init__(self, page_size: M.Vector, style, margin, pure_net=True):
+    def __init__(self, page_size: M.Vector, style, margin, pure_net=True, angle_epsilon=0.01):
         self.page_size = page_size
         self.style = style
         self.margin = M.Vector((margin, margin))
         self.pure_net = pure_net
+        self.angle_epsilon = angle_epsilon
     
     character_width_packed = {833: 'mM', 834: '¼½¾', 260: '¦|', 389: '*', 584: '>~+¬±<×÷=', 778: 'ÒGÖÕQÔØÓO', 333: '¹\xad\x98\x84²¨\x94\x9b¯¡´()\x8b\x93¸³-\x88`r', 334: '{}', 400: '°', 722: 'DÛÚUÑwRÐÜCÇNÙH', 611: '¿øTßZF\x8e', 469: '^', 278: 'ì\x05\x06 ;\x01/\x08I\x07,\x13\x11\x04\\.![\x15\r\x10:\x18]\x0c\x00\x1bÍf\xa0\x14\x1c\n\t\x1e\x1dïí\x12·\x16\x0bî\x0e\x03tÏ\x17\x1fÎ\x19\x0f\x02Ì\x1a', 537: '¶', 667: 'ÄË\x8aÃÀBÊVX&AKSÈÞPÁYÉ\x9fÝEÅÂ', 222: 'jl\x92\x91i\x82', 737: '©®', 355: '"', 1000: '\x89\x97\x8c\x99\x85Æ', 556: 'éhòúd»§ùþ5\x803õ¢åëûa64_ã\x83ñ¤8n?g2e#9«oqL$âö1päuð\x86¥µ\x967üóê\x87bá0àèô£', 365: 'º', 944: '\x9cW', 370: 'ª', 500: 'Js\x9eçyÿ\x9aývckzx', 350: '\x90\x8d\x81\x8f\x95\x7f\x9d', 1015: '@', 889: 'æ%', 191: "'"}
     character_width = {c: value for (value, chars) in character_width_packed.items() for c in chars}
@@ -1789,9 +1791,9 @@ class PDF:
                         data_freestyle.append(data_uvedge)
                     # each uvedge is in two opposite-oriented variants; we want to add each only once
                     if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.vertex.index > uvedge.vb.vertex.index):
-                        if edge.angle > 0.01:
+                        if edge.angle > self.angle_epsilon:
                             data_convex.append(data_uvedge)
-                        elif edge.angle < -0.01:
+                        elif edge.angle < -self.angle_epsilon:
                             data_concave.append(data_uvedge)
                 if island.is_inside_out:
                     data_convex, data_concave = data_concave, data_convex
@@ -2085,6 +2087,9 @@ class ExportPaperModel(bpy.types.Operator):
     sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size",
         description="Width of gluing tabs and their numbers",
         default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+    angle_epsilon = bpy.props.FloatProperty(name="Hidden Edge Angle",
+        description="Folds with angle below this limit will not be drawn",
+        default=pi/360, min=0, soft_max=pi/4, step=0.01, subtype="ANGLE", unit="ROTATION")
     output_dpi = bpy.props.FloatProperty(name="Resolution (DPI)",
         description="Resolution of images in pixels per inch",
         default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
@@ -2204,6 +2209,7 @@ class ExportPaperModel(bpy.types.Operator):
             col = box.column()
             col.active = self.do_create_stickers or self.do_create_numbers
             col.prop(self.properties, "sticker_width")
+            box.prop(self.properties, "angle_epsilon")
 
             box.prop(self.properties, "output_type")
             col = box.column()
