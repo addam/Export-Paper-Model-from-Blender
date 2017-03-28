@@ -212,6 +212,7 @@ class Unfolder:
     def __init__(self, ob):
         self.ob = ob
         self.mesh = Mesh(ob.data, ob.matrix_world)
+        self.mesh.check_correct()
         self.tex = None
 
     def prepare(self, cage_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
@@ -342,6 +343,24 @@ class Mesh:
             edge.choose_main_faces()
             if edge.main_faces:
                 edge.calculate_angle()
+
+    def check_correct(self, epsilon=1e-6):
+        """Check for invalid geometry"""
+        null_edges = {i for i, e in self.edges.items() if e.length < epsilon and e.faces}
+        null_faces = {i for i, f in self.faces.items() if f.normal.length_squared < epsilon}
+        twisted_faces = {i for i, f in self.faces.items() if f.is_twisted()}
+        if not (null_edges or null_faces or twisted_faces):
+            return
+        bpy.context.tool_settings.mesh_select_mode = False, bool(null_edges), bool(null_faces or twisted_faces)
+        for edge in self.data.edges:
+            edge.select = (edge.index in null_edges)
+        for face in self.data.polygons:
+            face.select = (face.index in null_faces or face.index in twisted_faces)
+        raise UnfoldError("The model contains:\n" +
+            (" {} zero-length edge(s)\n".format(len(null_edges)) if null_edges else "") +
+            (" {} zero-area face(s)\n".format(len(null_faces)) if null_faces else "") + 
+            (" {} twisted polygon(s)\n".format(len(twisted_faces)) if twisted_faces else "") +
+            "Fix the selected geometry by hand. Export failed.")
 
     def generate_cuts(self, page_size, priority_effect):
         """Cut the mesh so that it can be unfolded to a flat net."""
@@ -758,10 +777,7 @@ class Face:
         self.loop_start = bpy_face.loop_start
         self.area = bpy_face.area
         self.uvface = None
-        self.normal = mathutils.geometry.normal(v.co for v in self.verts)
-		if self.normal.length_squared == 0:
-			bpy_face.select = True
-			raise UnfoldError("There is an invalid face that passed first security check. Please report this error, including the model if you can.")
+        self.normal = M.geometry.normal(v.co for v in self.verts)
         for verts_indices in bpy_face.edge_keys:
             edge = mesh.edges_by_verts_indices[verts_indices]
             self.edges.append(edge)
@@ -769,7 +785,7 @@ class Face:
 
     def is_twisted(self):
         if len(self.verts) > 3:
-            center = sum(vertex.co for vertex in self.verts) / len(self.verts)
+            center = sum((vertex.co for vertex in self.verts), M.Vector((0, 0, 0))) / len(self.verts)
             plane_d = center.dot(self.normal)
             diameter = max((center - vertex.co).length for vertex in self.verts)
             for vertex in self.verts:
@@ -1875,8 +1891,12 @@ class Unfold(bpy.types.Operator):
 
         cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
         priority_effect = {'CONVEX': self.priority_effect_convex, 'CONCAVE': self.priority_effect_concave, 'LENGTH': self.priority_effect_length}
-        unfolder = Unfolder(self.object)
-        unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
+        try:
+            unfolder = Unfolder(self.object)
+            unfolder.prepare(cage_size, self.do_create_uvmap, mark_seams=True, priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
+        except UnfoldError as error:
+            self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            return {'CANCELLED'}
         if mesh.paper_island_list:
             unfolder.copy_island_names(mesh.paper_island_list)
 
@@ -2130,9 +2150,13 @@ class ExportPaperModel(bpy.types.Operator):
 
         self.scale = sce.paper_model.scale
         self.object = context.active_object
-        self.unfolder = Unfolder(self.object)
         cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
-        self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
+        try:
+            self.unfolder = Unfolder(self.object)
+            self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
+        except UnfoldError as error:
+            self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            return {'CANCELLED'}
         scale_ratio = self.get_scale_ratio(sce)
         if scale_ratio > 1:
             self.scale = ceil(self.scale * scale_ratio)
