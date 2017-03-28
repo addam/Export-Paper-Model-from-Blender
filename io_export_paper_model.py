@@ -751,26 +751,17 @@ class Face:
     __slots__ = ('index', 'edges', 'verts', 'uvface',
         'loop_start', 'area', 'normal')
 
-    def __init__(self, bpy_face, mesh, matrix=1):
+    def __init__(self, bpy_face, mesh):
         self.index = bpy_face.index
         self.edges = list()
         self.verts = [mesh.verts[i] for i in bpy_face.vertices]
         self.loop_start = bpy_face.loop_start
         self.area = bpy_face.area
         self.uvface = None
-
-        # calculate the face normal explicitly
-        if len(self.verts) == 3:
-            # normal of a triangle can be calculated directly
-            self.normal = (self.verts[1].co - self.verts[0].co).cross(self.verts[2].co - self.verts[0].co).normalized()
-        else:
-            # Newell's method
-            nor = M.Vector((0, 0, 0))
-            for a, b in pairs(self.verts):
-                p, m = a.co + b.co, a.co - b.co
-                nor.x, nor.y, nor.z = nor.x + m.y*p.z, nor.y + m.z*p.x, nor.z + m.x*p.y
-            self.normal = nor.normalized()
-
+        self.normal = mathutils.geometry.normal(v.co for v in self.verts)
+		if self.normal.length_squared == 0:
+			bpy_face.select = True
+			raise UnfoldError("There is an invalid face that passed first security check. Please report this error, including the model if you can.")
         for verts_indices in bpy_face.edge_keys:
             edge = mesh.edges_by_verts_indices[verts_indices]
             self.edges.append(edge)
