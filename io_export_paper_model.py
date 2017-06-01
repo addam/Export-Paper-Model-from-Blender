@@ -20,7 +20,7 @@ bl_info = {
     "name": "Export Paper Model",
     "author": "Addam Dominec",
     "version": (0, 9),
-    "blender": (2, 70, 0),
+    "blender": (2, 73, 0),
     "location": "File > Export > Paper Model",
     "warning": "",
     "description": "Export printable net of the active mesh",
