@@ -284,7 +284,7 @@ class Unfolder:
             bk = rd.bake
             if rd.engine == 'CYCLES':
                 recall = sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear
-                lookup = {'TEXTURE': 'DIFFUSE_COLOR', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
+                lookup = {'TEXTURE': 'DIFFUSE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
                 sce.cycles.bake_type = lookup[properties.output_type]
                 bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
                 bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 0, 10, False, False
@@ -299,7 +299,8 @@ class Unfolder:
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
             elif image_packing == 'ISLAND_LINK':
-                self.mesh.save_separate_images(tex, ppm, filepath)
+                image_dir = filepath[:filepath.rfind(".")]
+                self.mesh.save_separate_images(tex, ppm, image_dir)
             elif image_packing == 'ISLAND_EMBED':
                 self.mesh.save_separate_images(tex, ppm, filepath, embed=Exporter.encode_image)
 
@@ -658,7 +659,7 @@ class Mesh:
                 image_path = os_path.join(image_dir, "island{}.png".format(i))
                 image.filepath_raw = image_path
                 image.save()
-                island.image_path = image.path
+                island.image_path = image_path
             image.user_clear()
             bpy.data.images.remove(image)
 
