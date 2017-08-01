@@ -2429,6 +2429,13 @@ def label_changed(self, context):
 
 def island_item_changed(self, context):
     """The labelling of an island was changed"""
+    def increment(abbrev, collisions):
+        letters = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789"
+        while abbrev in collisions:
+            abbrev = abbrev.rstrip(letters[-1])
+            abbrev = abbrev[:2] + letters[letters.find(abbrev[-1]) + 1 if len(abbrev) == 3 else 0]
+        return abbrev
+    
     # accessing properties via [..] to avoid a recursive call after the update
     island_list = context.active_object.data.paper_island_list
     if self.auto_label:
@@ -2438,7 +2445,9 @@ def island_item_changed(self, context):
             number += 1
         self["label"] = "Island {}".format(number)
     if self.auto_abbrev:
-        self["abbreviation"] = "".join(first_letters(self.label))[:3].upper()
+        self["abbreviation"] = ""  # avoid self-conflict
+        abbrev = "".join(first_letters(self.label))[:3].upper()
+        self["abbreviation"] = increment(abbrev, {item.abbreviation for item in island_list})
     elif len(self.abbreviation) > 3:
         self["abbreviation"] = self.abbreviation[:3]
     self.name = "[{}] {} ({} {})".format(self.abbreviation, self.label, len(self.faces), "faces" if len(self.faces) > 1 else "face")
