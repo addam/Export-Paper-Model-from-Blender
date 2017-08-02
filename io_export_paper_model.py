@@ -75,6 +75,13 @@ default_priority_effect = {
     'LENGTH': -0.05
 }
 
+global_paper_sizes = [
+    ('USER', "User defined", "User defined paper size"),
+    ('A4', "A4", "International standard paper size"),
+    ('A3', "A3", "International standard paper size"),
+    ('US_LETTER', "Letter", "North American paper size"),
+    ('US_LEGAL', "Legal", "North American paper size")
+]
 
 def first_letters(text):
     """Iterator over the first letter of each word"""
@@ -2058,13 +2065,7 @@ class ExportPaperModel(bpy.types.Operator):
         description="Directory of the file", options={'SKIP_SAVE'})
     page_size_preset = bpy.props.EnumProperty(name="Page Size",
         description="Size of the exported document",
-        default='A4', update=page_size_preset_changed, items=[
-            ('USER', "User defined", "User defined paper size"),
-            ('A4', "A4", "International standard paper size"),
-            ('A3', "A3", "International standard paper size"),
-            ('US_LETTER', "Letter", "North American paper size"),
-            ('US_LEGAL', "Legal", "North American paper size")
-        ])
+        default='A4', update=page_size_preset_changed, items=global_paper_sizes)
     output_size_x = bpy.props.FloatProperty(name="Page Width",
         description="Width of the exported document",
         default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
@@ -2325,15 +2326,18 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
             row.operator("mesh.mark_seam", text="Clear Seam").clear = True
         else:
             layout.operator("mesh.clear_all_seams")
+        
+        props = sce.paper_model
+        layout.prop(props, "scale", text="Model Scale: 1")
 
-        layout.prop(sce.paper_model, "scale", text="Model Scale: 1")
-
-        col = layout.column(align=True)
-        col.prop(sce.paper_model, "limit_by_page")
+        layout.prop(props, "limit_by_page")
+        col = layout.column()
+        col.active = props.limit_by_page
+        col.prop(props, "page_size_preset")
         sub = col.column(align=True)
-        sub.active = sce.paper_model.limit_by_page
-        sub.prop(sce.paper_model, "output_size_x")
-        sub.prop(sce.paper_model, "output_size_y")
+        sub.active = props.page_size_preset == 'USER'
+        sub.prop(props, "output_size_x")
+        sub.prop(props, "output_size_y")
 
 
 class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
@@ -2484,6 +2488,9 @@ class PaperModelSettings(bpy.types.PropertyGroup):
         description="Opacity of island highlighting", min=0.0, max=1.0, default=0.3)
     limit_by_page = bpy.props.BoolProperty(name="Limit Island Size",
         description="Do not create islands larger than given dimensions", default=False)
+    page_size_preset = bpy.props.EnumProperty(name="Page Size",
+        description="Maximal size of an island",
+        default='A4', update=page_size_preset_changed, items=global_paper_sizes)
     output_size_x = bpy.props.FloatProperty(name="Width",
         description="Maximal width of an island",
         default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
