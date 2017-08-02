@@ -346,7 +346,7 @@ class Mesh:
 
     def check_correct(self, epsilon=1e-6):
         """Check for invalid geometry"""
-        null_edges = {i for i, e in self.edges.items() if e.length < epsilon and e.faces}
+        null_edges = {i for i, e in self.edges.items() if e.vector.length < epsilon and e.faces}
         null_faces = {i for i, f in self.faces.items() if f.normal.length_squared < epsilon}
         twisted_faces = {i for i, f in self.faces.items() if f.is_twisted()}
         if not (null_edges or null_faces or twisted_faces):
@@ -787,7 +787,7 @@ class Face:
 
     def is_twisted(self):
         if len(self.vertices) > 3:
-            center = sum(vertex.co for vertex in self.vertices) / len(self.vertices)
+            center = sum((vertex.co for vertex in self.vertices), M.Vector((0,0,0))) / len(self.vertices)
             plane_d = center.dot(self.normal)
             diameter = max((center - vertex.co).length for vertex in self.vertices)
             for vertex in self.vertices:
