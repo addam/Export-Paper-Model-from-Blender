@@ -2198,6 +2198,8 @@ class ExportPaperModel(bpy.types.Operator):
         elif scale_ratio > 0:
             layout.label(text="Largest island is roughly 1/{:.1f} of page".format(1 / scale_ratio))
 
+        if context.scene.unit_settings.scale_length != 1:
+            layout.label(text="Unit scale {:.1f} makes page size etc. not display correctly".format(context.scene.unit_settings.scale_length), icon="ERROR")
         box = layout.box()
         row = box.row(align=True)
         row.prop(self.properties, "ui_expanded_document", text="",
