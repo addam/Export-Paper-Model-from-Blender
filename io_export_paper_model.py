@@ -1961,6 +1961,8 @@ class ClearAllSeams(bpy.types.Operator):
 
 def page_size_preset_changed(self, context):
     """Update the actual document size to correct values"""
+    if hasattr(self, "limit_by_page") and not self.limit_by_page:
+        return
     if self.page_size_preset == 'A4':
         self.output_size_x = 0.210
         self.output_size_y = 0.297
@@ -2487,7 +2489,7 @@ class PaperModelSettings(bpy.types.PropertyGroup):
     islands_alpha = bpy.props.FloatProperty(name="Opacity",
         description="Opacity of island highlighting", min=0.0, max=1.0, default=0.3)
     limit_by_page = bpy.props.BoolProperty(name="Limit Island Size",
-        description="Do not create islands larger than given dimensions", default=False)
+        description="Do not create islands larger than given dimensions", default=False, update=page_size_preset_changed)
     page_size_preset = bpy.props.EnumProperty(name="Page Size",
         description="Maximal size of an island",
         default='A4', update=page_size_preset_changed, items=global_paper_sizes)
