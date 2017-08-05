@@ -1963,18 +1963,31 @@ def page_size_preset_changed(self, context):
     """Update the actual document size to correct values"""
     if hasattr(self, "limit_by_page") and not self.limit_by_page:
         return
+    s = context.scene.unit_settings.scale_length
     if self.page_size_preset == 'A4':
-        self.output_size_x = 0.210
-        self.output_size_y = 0.297
+        self.output_size_x = 0.210 / s
+        self.output_size_y = 0.297 / s
     elif self.page_size_preset == 'A3':
-        self.output_size_x = 0.297
-        self.output_size_y = 0.420
+        self.output_size_x = 0.297 / s
+        self.output_size_y = 0.420 / s
     elif self.page_size_preset == 'US_LETTER':
-        self.output_size_x = 0.216
-        self.output_size_y = 0.279
+        self.output_size_x = 0.216 / s
+        self.output_size_y = 0.279 / s
     elif self.page_size_preset == 'US_LEGAL':
-        self.output_size_x = 0.216
-        self.output_size_y = 0.356
+        self.output_size_x = 0.216 / s
+        self.output_size_y = 0.356 / s
+
+
+def getset_pair(prop_name, default):
+    def getter(self):
+        sce=bpy.context.scene
+        if prop_name not in self:
+            self[prop_name] = default
+        return self[prop_name] / sce.unit_settings.scale_length
+    def setter(self, value):
+        sce=bpy.context.scene
+        self[prop_name] = value * sce.unit_settings.scale_length
+    return {"get": getter, "set": setter}
 
 
 class PaperModelStyle(bpy.types.PropertyGroup):
@@ -1993,7 +2006,7 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         default='SOLID', items=line_styles)
     line_width = bpy.props.FloatProperty(name="Base Lines Thickness",
         description="Base thickness of net lines, each actual value is a multiple of this length",
-        default=1e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
+        default=1e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH", **getset_pair("line_width", 1e-4))
     outer_width = bpy.props.FloatProperty(name="Outer Lines Thickness",
         description="Relative thickness of net outline",
         default=3, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
@@ -2070,13 +2083,13 @@ class ExportPaperModel(bpy.types.Operator):
         default='A4', update=page_size_preset_changed, items=global_paper_sizes)
     output_size_x = bpy.props.FloatProperty(name="Page Width",
         description="Width of the exported document",
-        default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+        default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH", **getset_pair("output_size_x", 0.210))
     output_size_y = bpy.props.FloatProperty(name="Page Height",
         description="Height of the exported document",
-        default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+        default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH", **getset_pair("output_size_y", 0.297))
     output_margin = bpy.props.FloatProperty(name="Page Margin",
         description="Distance from page borders to the printable area",
-        default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+        default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH", **getset_pair("output_margin", 5e-3))
     output_type = bpy.props.EnumProperty(name="Textures",
         description="Source of a texture for the model",
         default='NONE', items=[
@@ -2094,7 +2107,7 @@ class ExportPaperModel(bpy.types.Operator):
         default=True)
     sticker_width = bpy.props.FloatProperty(name="Tabs and Text Size",
         description="Width of gluing tabs and their numbers",
-        default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+        default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH", **getset_pair("sticker_width", 5e-3))
     angle_epsilon = bpy.props.FloatProperty(name="Hidden Edge Angle",
         description="Folds with angle below this limit will not be drawn",
         default=pi/360, min=0, soft_max=pi/4, step=0.01, subtype="ANGLE", unit="ROTATION")
@@ -2495,10 +2508,10 @@ class PaperModelSettings(bpy.types.PropertyGroup):
         default='A4', update=page_size_preset_changed, items=global_paper_sizes)
     output_size_x = bpy.props.FloatProperty(name="Width",
         description="Maximal width of an island",
-        default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
+        default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH", **getset_pair("output_size_x", 0.2))
     output_size_y = bpy.props.FloatProperty(name="Height",
         description="Maximal height of an island",
-        default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+        default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH", **getset_pair("output_size_y", 0.29))
     scale = bpy.props.FloatProperty(name="Scale",
         description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
