@@ -662,6 +662,10 @@ class Mesh:
             bpy.data.images.remove(image)
 
     def save_separate_images(self, tex, scale, filepath, embed=None):
+        # omitting this causes a "Circular reference in texture stack" error
+        recall = [texface.image for texface in tex.data]
+        for texface in tex.data:
+            texface.image = None
         for i, island in enumerate(self.islands, 1):
             image_name = "{} isl{}".format(self.data.name[:15], i)
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
@@ -678,6 +682,8 @@ class Mesh:
                 island.image_path = image_path
             image.user_clear()
             bpy.data.images.remove(image)
+        for image, texface in zip(recall, tex.data):
+            texface.image = image
 
 
 class Vertex:
