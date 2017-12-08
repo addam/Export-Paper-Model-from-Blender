@@ -364,7 +364,7 @@ class Mesh:
             face.select = (face.index in null_faces or face.index in twisted_faces)
         cure = ("Remove Doubles and Triangulate" if (null_edges or null_faces) and twisted_faces
             else "Triangulate" if twisted_faces
-            else"Remove Doubles")
+            else "Remove Doubles")
         raise UnfoldError(
             "The model contains:\n" +
             (" {} zero-length edge(s)\n".format(len(null_edges)) if null_edges else "") +
@@ -655,8 +655,8 @@ class Mesh:
             bpy.data.images.remove(image)
 
     def save_separate_images(self, tex, scale, filepath, embed=None):
-        # omitting this causes a "Circular reference in texture stack" error
-        recall = [texface.image for texface in tex.data]
+        # omitting this may cause a "Circular reference in texture stack" error
+        recall = {texface: texface.image for texface in tex.data}
         for texface in tex.data:
             texface.image = None
         for i, island in enumerate(self.islands, 1):
@@ -675,8 +675,8 @@ class Mesh:
                 island.image_path = image_path
             image.user_clear()
             bpy.data.images.remove(image)
-        for image, texface in zip(recall, tex.data):
-            texface.image = image
+        for texface, img in recall.items():
+            texface.image = img
 
 
 class Vertex:
