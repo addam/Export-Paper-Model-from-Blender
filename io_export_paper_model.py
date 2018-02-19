@@ -1125,18 +1125,12 @@ class Island:
         for uvface in other.faces:
             uvface.island = self
             uvface.vertices = [phantoms[uvvertex] for uvvertex in uvface.vertices]
-            uvface.uvvertex_by_id = {
-                index: phantoms[uvvertex]
-                for index, uvvertex in uvface.uvvertex_by_id.items()}
             uvface.flipped ^= flipped
         if is_merged_mine:
             # there may be own uvvertices that need to be replaced by phantoms
             for uvface in self.faces:
                 if any(uvvertex in phantoms for uvvertex in uvface.vertices):
                     uvface.vertices = [phantoms.get(uvvertex, uvvertex) for uvvertex in uvface.vertices]
-                    uvface.uvvertex_by_id = {
-                        index: phantoms.get(uvvertex, uvvertex)
-                        for index, uvvertex in uvface.uvvertex_by_id.items()}
         self.faces.extend(other.faces)
 
         self.boundary = [
@@ -1261,7 +1255,7 @@ class PhantomUVEdge:
 
 class UVFace:
     """Face in 2D"""
-    __slots__ = ('vertices', 'edges', 'face', 'island', 'flipped', 'uvvertex_by_id')
+    __slots__ = ('vertices', 'edges', 'face', 'island', 'flipped')
 
     def __init__(self, face: Face, island: Island):
         """Creace an UVFace from a Face and a fixed edge.
@@ -1275,11 +1269,9 @@ class UVFace:
         self.flipped = False  # a flipped UVFace has edges clockwise
 
         rot = z_up_matrix(face.normal)
-        self.uvvertex_by_id = dict()  # link vertex id -> UVVertex
         for vertex in face.vertices:
             uvvertex = UVVertex(rot * vertex.co, vertex)
             self.vertices.append(uvvertex)
-            self.uvvertex_by_id[vertex.index] = uvvertex
         self.edges = list()
         edge_by_verts = dict()
         for edge in face.edges:
