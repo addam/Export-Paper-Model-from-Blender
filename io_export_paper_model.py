@@ -1,20 +1,6 @@
 # -*- coding: utf-8 -*-
-# ##### BEGIN GPL LICENSE BLOCK #####
-#
-#  This program is free software: you can redistribute it and/or modify
-#  it under the terms of the GNU General Public License as published by
-#  the Free Software Foundation, either version 2 of the License, or
-#  (at your option) any later version.
-#
-#  This program is distributed in the hope that it will be useful,
-#  but without any warranty; without even the implied warranty of
-#  merchantability or fitness for a particular purpose.  See the
-#  GNU General Public License for more details.
-#
-#  You should have received a copy of the GNU General Public License
-#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-# ##### END GPL LICENSE BLOCK #####
+# This script is Free software. Please share and reuse.
+# ♡2010-2018 Adam Dominec <adominec@gmail.com>
 
 bl_info = {
     "name": "Export Paper Model",
@@ -26,8 +12,7 @@ bl_info = {
     "description": "Export printable net of the active mesh",
     "category": "Import-Export",
     "wiki_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/"
-                "Scripts/Import-Export/Paper_Model",
-    "tracker_url": "https://developer.blender.org/T38441"
+                "Scripts/Import-Export/Paper_Model"
 }
 
 # TODO:
@@ -43,13 +28,6 @@ bl_info = {
 #  * append a number to the conflicting names or
 #  * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
 
-
-"""
-
-Additional links:
-    e-mail: adominec {at} gmail {dot} com
-
-"""
 import bpy
 import bl_operators
 import bgl
