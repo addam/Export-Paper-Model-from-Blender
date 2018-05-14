@@ -179,6 +179,16 @@ def bake(face_indices, uvmap, image):
             texfaces[fid].image = None
 
 
+def mesh_select(mesh, vertex_ids, edge_ids, polygon_ids):
+    bpy.context.tool_settings.mesh_select_mode = bool(vertex_ids), bool(edge_ids), bool(polygon_ids)
+    for vertex in mesh.vertices:
+        vertex.select = (vertex.index in vertex_ids)
+    for edge in mesh.edges:
+        edge.select = (edge.index in edge_ids)
+    for face in mesh.polygons:
+        face.select = (face.index in polygon_ids)
+
+
 class UnfoldError(ValueError):
     pass
 
@@ -322,18 +332,11 @@ class Mesh:
                         return True
             return False
         
-        null_edges = {e for e in self.edges.values() if e.vector.length < epsilon and e.faces}
+        null_edges = {e.data for e in self.edges.values() if e.vector.length < epsilon and e.data.link_faces}
         null_faces = {f for f in self.data.faces if f.calc_area() < epsilon}
         twisted_faces = {f for f in self.data.faces if is_twisted(f)}
         if not (null_edges or null_faces or twisted_faces):
             return
-        bpy.context.tool_settings.mesh_select_mode = False, bool(null_edges), bool(null_faces or twisted_faces)
-        for vertex in self.data.vertices:
-            vertex.select = False
-        for edge in self.data.edges:
-            edge.select = (edge in null_edges)
-        for face in self.data.polygons:
-            face.select = (face in null_faces or face in twisted_faces)
         disease = [("Remove Doubles", null_edges or null_faces), ("Triangulate", twisted_faces)]
         cure = " and ".join(s for s, k in disease if k)
         raise UnfoldError(
@@ -341,7 +344,8 @@ class Mesh:
             (" {} zero-length edge(s)\n".format(len(null_edges)) if null_edges else "") +
             (" {} zero-area face(s)\n".format(len(null_faces)) if null_faces else "") +
             (" {} twisted polygon(s)\n".format(len(twisted_faces)) if twisted_faces else "") +
-            "The offenders are selected and you can use {} to fix them. Export failed.".format(cure))
+            "The offenders are selected and you can use {} to fix them. Export failed.".format(cure),
+            {"verts": set(), "edges": null_edges, "faces": null_faces | twisted_faces})
 
     def generate_cuts(self, page_size, priority_effect):
         """Cut the mesh so that it can be unfolded to a flat net."""
@@ -1835,6 +1839,8 @@ class Unfold(bpy.types.Operator):
                 priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            if len(error.args) > 1:
+                mesh_select(mesh, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
             bpy.ops.object.mode_set(mode=recall_mode)
             sce.paper_model.display_islands = recall_display_islands
             return {'CANCELLED'}
@@ -2098,6 +2104,8 @@ class ExportPaperModel(bpy.types.Operator):
                 scale=sce.unit_settings.scale_length/self.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            if len(error.args) > 1:
+                mesh_select(mesh, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
             bpy.ops.object.mode_set(mode=recall_mode)
             return {'CANCELLED'}
         scale_ratio = self.get_scale_ratio(sce)
