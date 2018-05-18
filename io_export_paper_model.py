@@ -200,7 +200,7 @@ class Unfolder:
         self.mesh = Mesh(bm)
         self.mesh.check_correct()
 
-    def prepare(self, cage_size=None, create_uvmap=False, mark_seams=False, priority_effect=default_priority_effect, scale=1):
+    def prepare(self, cage_size=None, create_uvmap=False, priority_effect=default_priority_effect, scale=1):
         """Create the islands of the net"""
         self.mesh.generate_cuts(cage_size / scale if cage_size else None, priority_effect)
         is_landscape = cage_size and cage_size.x > cage_size.y
@@ -208,8 +208,6 @@ class Unfolder:
         self.mesh.enumerate_islands()
         if create_uvmap:
             self.mesh.save_uv()
-        if mark_seams:
-            self.mesh.mark_cuts()
 
     def copy_island_names(self, island_list):
         """Copy island label and abbreviation from the best matching island in the list"""
@@ -304,6 +302,9 @@ class Unfolder:
         exporter.do_create_stickers = properties.do_create_stickers
         exporter.text_size = properties.sticker_width
         exporter.write(self.mesh, filepath)
+    
+    def cuts_indices(self):
+        return [bmedge.index for bmedge, edge in self.mesh.edges.items() if len(edge.uvedges) > 1 and edge.is_main_cut]
 
 
 class Mesh:
@@ -437,11 +438,6 @@ class Mesh:
                     left.neighbor_right = right
                     right.neighbor_left = left
         return True
-
-    def mark_cuts(self):
-        """Mark cut edges in the original mesh so that the user can see"""
-        for bmedge, edge in self.edges.items():
-            bmedge.seam = len(edge.uvedges) > 1 and edge.is_main_cut
 
     def generate_stickers(self, default_width, do_create_numbers=True):
         """Add sticker faces where they are needed."""
@@ -1834,9 +1830,10 @@ class Unfold(bpy.types.Operator):
             'LENGTH': self.priority_effect_length}
         try:
             unfolder = Unfolder(self.object, sce)
-            unfolder.prepare(
-                cage_size, self.do_create_uvmap, mark_seams=True,
-                priority_effect=priority_effect, scale=sce.unit_settings.scale_length/settings.scale)
+            scale = sce.unit_settings.scale_length / settings.scale
+            unfolder.prepare(cage_size, self.do_create_uvmap, priority_effect, scale)
+            for edge_id in unfolder.cuts_indices():
+                mesh.edges[edge_id].use_seam = True
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             if len(error.args) > 1:
