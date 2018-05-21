@@ -162,7 +162,7 @@ def bake(face_indices, uvmap, image):
         bake_type = bpy.context.scene.cycles.bake_type
         sta = bpy.context.scene.render.bake.use_selected_to_active
         try:
-            bpy.ops.object.bake(type=bake_type, margin=0, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
+            bpy.ops.object.bake(type=bake_type, margin=1, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
         except RuntimeError as e:
             raise UnfoldError(*e.args)
         finally:
@@ -272,14 +272,14 @@ class Unfolder:
                 sce.cycles.bake_type = lookup[properties.output_type]
                 bk.use_pass_direct = bk.use_pass_indirect = (properties.output_type != 'TEXTURE')
                 bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
-                bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 0, 10, False, False
+                bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 1, 10, False, False
             else:
                 recall = rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
                 rd.engine = 'BLENDER_RENDER'
                 lookup = {'TEXTURE': 'TEXTURE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'FULL', 'SELECTED_TO_ACTIVE': 'FULL'}
                 rd.bake_type = lookup[properties.output_type]
                 rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
-                rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 0, 0, 0.001, False, False
+                rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 1, 0, 0.001, False, False
 
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(tex, printable_size * ppm, filepath)
