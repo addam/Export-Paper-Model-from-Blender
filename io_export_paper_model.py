@@ -22,6 +22,10 @@ bl_info = {
                 "Scripts/Import-Export/Paper_Model"
 }
 
+# Task: split into four files (SVG and PDF separately)
+    # does any portion of baking belong into the export module?
+    # sketch out the code for GCODE and two-sided export
+
 # TODO:
 # sanitize the constructors Edge, Face, UVFace so that they don't edit their parent object
 # The Exporter classes should take parameters as a whole pack, and parse it themselves
@@ -41,7 +45,7 @@ import bgl
 import bmesh
 import mathutils as M
 from re import compile as re_compile
-from itertools import chain, repeat
+from itertools import chain, repeat, product, combinations
 from math import pi, ceil
 
 try:
@@ -134,7 +138,7 @@ def create_blank_image(image_name, dimensions, alpha=1):
     return image
 
 
-def bake(face_indices, uvmap, image):
+def bake(faces, tex, image):
     import bpy
     is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
     if is_cycles:
@@ -149,7 +153,7 @@ def bake(face_indices, uvmap, image):
             img.image = image
             temp_nodes[mat] = img
             mat.node_tree.nodes.active = img
-            uvmap.active = True
+            tex.active = True
         # move all excess faces to negative numbers (that is the only way to disable them)
         loop = me.uv_layers[me.uv_layers.active_index].data
         face_indices = set(face_indices)
@@ -171,21 +175,20 @@ def bake(face_indices, uvmap, image):
         for vid in ignored_uvs:
             loop[vid].uv *= -1
     else:
-        texfaces = uvmap.data
-        for fid in face_indices:
-            texfaces[fid].image = image
+        for face in faces:
+            face[tex].image = image
         bpy.ops.object.bake_image()
-        for fid in face_indices:
-            texfaces[fid].image = None
+        for face in faces:
+            face[tex].image = None
 
 
 def mesh_select(mesh, vertex_ids, edge_ids, polygon_ids):
     bpy.context.tool_settings.mesh_select_mode = bool(vertex_ids), bool(edge_ids), bool(polygon_ids)
-    for vertex in mesh.vertices:
+    for vertex in mesh.verts:
         vertex.select = (vertex.index in vertex_ids)
     for edge in mesh.edges:
         edge.select = (edge.index in edge_ids)
-    for face in mesh.polygons:
+    for face in mesh.faces:
         face.select = (face.index in polygon_ids)
 
 
@@ -194,20 +197,26 @@ class UnfoldError(ValueError):
 
 
 class Unfolder:
-    def __init__(self, ob, scene):
-        bm = bmesh.new()
-        bm.from_object(ob, scene)
-        self.mesh = Mesh(bm)
+    def __init__(self, ob, do_create_uvmap=False):
+        bm = bmesh.from_edit_mesh(ob.data)
+        if do_create_uvmap or True:
+            self.looptex = bm.loops.layers.uv.new("Unfolded")
+            self.facetex = bm.faces.layers.tex.new("Unfolded")
+            if not (self.looptex and self.facetex):
+                raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
+        else:
+            self.looptex = self.facetex = None
+        self.mesh = Mesh(bm, ob.matrix_world)
         self.mesh.check_correct()
 
-    def prepare(self, cage_size=None, create_uvmap=False, priority_effect=default_priority_effect, scale=1):
+    def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1):
         """Create the islands of the net"""
         self.mesh.generate_cuts(cage_size / scale if cage_size else None, priority_effect)
         is_landscape = cage_size and cage_size.x > cage_size.y
         self.mesh.finalize_islands(is_landscape)
         self.mesh.enumerate_islands()
-        if create_uvmap:
-            self.mesh.save_uv()
+        if self.looptex:
+            self.mesh.save_uv(self.looptex)
 
     def copy_island_names(self, island_list):
         """Copy island label and abbreviation from the best matching island in the list"""
@@ -258,9 +267,7 @@ class Unfolder:
             # bake an image and save it as a PNG to disk or into memory
             image_packing = properties.image_packing if properties.file_format == 'SVG' else 'ISLAND_EMBED'
             use_separate_images = image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
-            tex = self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images, tex=self.tex)
-            if not tex:
-                raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
+            self.mesh.save_uv(self.looptex, cage_size=printable_size, separate_image=use_separate_images)
 
             sce = bpy.context.scene
             rd = sce.render
@@ -282,21 +289,22 @@ class Unfolder:
                 rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 1, 0, 0.001, False, False
 
             if image_packing == 'PAGE_LINK':
-                self.mesh.save_image(tex, printable_size * ppm, filepath)
+                self.mesh.save_image(self.facetex, printable_size * ppm, filepath)
             elif image_packing == 'ISLAND_LINK':
                 image_dir = filepath[:filepath.rfind(".")]
-                self.mesh.save_separate_images(tex, ppm, image_dir)
+                self.mesh.save_separate_images(self.facetex, ppm, image_dir)
             elif image_packing == 'ISLAND_EMBED':
-                self.mesh.save_separate_images(tex, ppm, filepath, embed=Exporter.encode_image)
+                self.mesh.save_separate_images(self.facetex, ppm, filepath, embed=Exporter.encode_image)
 
             # revoke settings
             if rd.engine == 'CYCLES':
                 sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear, bk.use_pass_direct, bk.use_pass_indirect = recall
             else:
                 rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
-            if not properties.do_create_uvmap:
-                tex.active = True
-                bpy.ops.mesh.uv_texture_remove()
+            if not properties.do_create_uvmap and False:
+                bm = self.mesh.data
+                bm.loops.layers.uv.remove(self.looptex)
+                bm.faces.layers.tex.remove(self.facetex)
 
         exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'), properties.angle_epsilon)
         exporter.do_create_stickers = properties.do_create_stickers
@@ -310,8 +318,9 @@ class Unfolder:
 class Mesh:
     """Wrapper for Bpy Mesh"""
 
-    def __init__(self, bmesh):
+    def __init__(self, bmesh, matrix):
         self.data = bmesh
+        self.matrix = matrix.to_3x3()
         self.edges = {bmedge: Edge(bmedge) for bmedge in bmesh.edges}
         self.islands = list()
         self.pages = list()
@@ -350,7 +359,8 @@ class Mesh:
 
     def generate_cuts(self, page_size, priority_effect):
         """Cut the mesh so that it can be unfolded to a flat net."""
-        islands = {Island(self, face) for face in self.data.faces}
+        normal_matrix = self.matrix.inverted().transposed()
+        islands = {Island(self, face, self.matrix, normal_matrix) for face in self.data.faces}
         uvfaces = {face: uvface for island in islands for face, uvface in island.faces.items()}
         uvedges = {loop: uvedge for island in islands for loop, uvedge in island.edges.items()}
         for loop, uvedge in uvedges.items():
@@ -391,8 +401,8 @@ class Mesh:
         for island in self.islands:
             # if the normals are ambiguous, flip them so that there are more convex edges than concave ones
             if any(uvface.flipped for uvface in island.faces.values()):
-                island_edges = {uvedge.edge for uvedge in island.edges if not uvedge.edge.is_cut(uvedge.uvface.face)}
-                balance = sum((+1 if edge.angle > 0 else -1) for edge in island_edges)
+                island_edges = {self.edges[uvedge.edge] for uvedge in island.edges}
+                balance = sum((+1 if edge.angle > 0 else -1) for edge in island_edges if not edge.is_cut(uvedge.uvface.face))
                 if balance < 0:
                     island.is_inside_out = True
 
@@ -597,25 +607,13 @@ class Mesh:
             remaining_islands = [island for island in remaining_islands if island not in page.islands]
             self.pages.append(page)
 
-    def save_uv(self, cage_size=M.Vector((1, 1)), separate_image=False, tex=None):
-        # TODO: mode switching should be handled by higher-level code
-        bpy.ops.object.mode_set()
-        # note: assuming that the active object's data is self.mesh
-        if not tex:
-            tex = self.data.uv_textures.new()
-            if not tex:
-                return None
-        tex.name = "Unfolded"
-        tex.active = True
-        # TODO: this is somewhat dirty, but I do not see a nicer way in the API
-        loop = self.data.uv_layers[self.data.uv_layers.active_index]
+    def save_uv(self, tex, cage_size=M.Vector((1, 1)), separate_image=False):
         if separate_image:
             for island in self.islands:
-                island.save_uv_separate(loop)
+                island.save_uv_separate(tex)
         else:
             for island in self.islands:
-                island.save_uv(loop, cage_size)
-        return tex
+                island.save_uv(tex, cage_size)
 
     def save_image(self, tex, page_size_pixels: M.Vector, filename):
         for page in self.pages:
@@ -629,13 +627,11 @@ class Mesh:
 
     def save_separate_images(self, tex, scale, filepath, embed=None):
         # omitting this may cause a "Circular reference in texture stack" error
-        recall = {texface: texface.image for texface in tex.data}
-        for texface in tex.data:
-            texface.image = None
-        for i, island in enumerate(self.islands, 1):
-            image_name = "{} isl{}".format(self.data.name[:15], i)
+        # TODO: removed, insert back?
+        for island in self.islands:
+            image_name = "Island.001"
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-            bake([uvface.face.index for uvface in island.faces], tex, image)
+            bake(island.faces.keys(), tex, image)
             if embed:
                 island.embedded_image = embed(image)
             else:
@@ -648,8 +644,6 @@ class Mesh:
                 island.image_path = image_path
             image.user_clear()
             bpy.data.images.remove(image)
-        for texface, img in recall.items():
-            texface.image = img
 
 
 class Edge:
@@ -728,14 +722,14 @@ class Edge:
 
 class Island:
     """Part of the net to be exported"""
-    __slots__ = ('mesh', 'faces', 'edges', 'vertices', 'fake_vertices', 'uvverts_by_id', 'boundary', 'markers',
+    __slots__ = ('mesh', 'faces', 'edges', 'vertices', 'fake_vertices', 'boundary', 'markers',
         'pos', 'bounding_box',
         'image_path', 'embedded_image',
         'number', 'label', 'abbreviation', 'title',
         'has_safe_geometry', 'is_inside_out',
         'sticker_numbering')
 
-    def __init__(self, mesh, face):
+    def __init__(self, mesh, face, matrix, normal_matrix):
         """Create an Island from a single Face"""
         self.mesh = mesh
         self.faces = dict()  # face -> uvface
@@ -753,15 +747,13 @@ class Island:
         self.has_safe_geometry = True
         self.sticker_numbering = 0
         
-        uvface = UVFace(face, self)
+        uvface = UVFace(face, self, matrix, normal_matrix)
         self.vertices.update(uvface.vertices)
         self.edges.update(uvface.edges)
         self.faces[face] = uvface
-        # speedup for Island.join
-        self.uvverts_by_id = {loop.vert.index: [uvvertex] for loop, uvvertex in self.vertices.items()}
         # UVEdges on the boundary
         self.boundary = list(self.edges.values())
-
+    
     def add_marker(self, marker):
         self.fake_vertices.extend(marker.bounds)
         self.markers.append(marker)
@@ -777,25 +769,21 @@ class Island:
 
     def save_uv(self, tex, cage_size):
         """Save UV Coordinates of all UVFaces to a given UV texture
-        tex: UV Texture layer to use (BPy MeshUVLoopLayer struct)
+        tex: UV Texture layer to use (BMLayerItem)
         page_size: size of the page in pixels (vector)"""
-        texface = tex.data
-        for uvface in self.faces:
-            for i, uvvertex in enumerate(uvface.vertices):
-                uv = uvvertex.co + self.pos
-                texface[uvface.face.loop_start + i].uv[0] = uv.x / cage_size.x
-                texface[uvface.face.loop_start + i].uv[1] = uv.y / cage_size.y
+        scale_x, scale_y = 1 / cage_size.x, 1 / cage_size.y
+        for loop, uvvertex in self.vertices.items():
+            uv = uvvertex.co + self.pos
+            co = uv.x * scale_x, uv.y * scale_y
+            loop[tex].uv = co
 
     def save_uv_separate(self, tex):
         """Save UV Coordinates of all UVFaces to a given UV texture, spanning from 0 to 1
-        tex: UV Texture layer to use (BPy MeshUVLoopLayer struct)
+        tex: UV Texture layer to use (BMLayerItem)
         page_size: size of the page in pixels (vector)"""
-        texface = tex.data
         scale_x, scale_y = 1 / self.bounding_box.x, 1 / self.bounding_box.y
-        for uvface in self.faces:
-            for i, uvvertex in enumerate(uvface.vertices):
-                texface[uvface.face.loop_start + i].uv[0] = uvvertex.co.x * scale_x
-                texface[uvface.face.loop_start + i].uv[1] = uvvertex.co.y * scale_y
+        for loop, uvvertex in self.vertices.items():
+            loop[tex].uv = uvvertex.co.x * scale_x, uvvertex.co.y * scale_y
 
 def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     """
@@ -921,7 +909,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         uvedge_a, uvedge_b = uvedge_b, uvedge_a
         island_a, island_b = island_b, island_a
     # check if vertices and normals are aligned correctly
-    verts_flipped = uvedge_b.va.loop.vert is uvedge_a.va.loop.vert
+    verts_flipped = uvedge_b.loop.vert is uvedge_a.loop.vert
     flipped = verts_flipped ^ uvedge_a.uvface.flipped ^ uvedge_b.uvface.flipped
     # determine rotation
     # NOTE: if the edges differ in length, the matrix will involve uniform scaling.
@@ -933,8 +921,8 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         flip = M.Matrix(((-1, 0), (0, 1)))
         rot = fitting_matrix(flip * (first_b.co - second_b.co), uvedge_a.vb.co - uvedge_a.va.co) * flip
     trans = uvedge_a.vb.co - rot * first_b.co
-    # extract and transform island_b's boundary
-    phantoms = {uvvertex: UVVertex(rot*uvvertex.co + trans, uvvertex.loop) for uvvertex in island_b.vertices.values()}
+    # preview of island_b's vertices after the join operation
+    phantoms = {uvvertex: UVVertex(rot*uvvertex.co + trans) for uvvertex in island_b.vertices.values()}
 
     # check the size of the resulting island
     if size_limit:
@@ -961,25 +949,22 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     # uvvertices will be merged only in cases island_b->island_a and island_a->island_a
     # all resulting groups are merged together to a uvvertex of island_a
     is_merged_mine = False
-    shared_vertices = island_a.uvverts_by_id.keys() & island_b.uvverts_by_id.keys()
-    for vertex_id in shared_vertices:
-        uvs = island_a.uvverts_by_id[vertex_id] + island_b.uvverts_by_id[vertex_id]
-        len_mine = len(island_a.uvverts_by_id[vertex_id])
-        merged = dict()
-        for i, a in enumerate(uvs[:len_mine]):
-            i = root_find(i, merged)
-            for j, b in enumerate(uvs[i+1:], i+1):
-                b = b if j < len_mine else phantoms[b]
-                j = root_find(j, merged)
-                if i == j:
-                    continue
-                i, j = (j, i) if j < i else (i, j)
-                if (a.co - b.co).length_squared < distance_limit:
-                    merged[j] = i
-        for source, target in merged.items():
-            target = root_find(target, merged)
-            phantoms[uvs[source]] = uvs[target]
-            is_merged_mine |= (source < len_mine)  # remember that a vertex of this island has been merged
+    shared_vertices = {loop.vert for loop in chain(island_a.vertices, island_b.vertices)}
+    for vertex in shared_vertices:
+        uvs_a = {island_a.vertices.get(loop) for loop in vertex.link_loops} - {None}
+        uvs_b = {island_b.vertices.get(loop) for loop in vertex.link_loops} - {None}
+        for a, b in product(uvs_a, uvs_b):
+            if (a.co - phantoms[b].co).length_squared < distance_limit:
+                phantoms[b] = root_find(a, phantoms)
+        for a1, a2 in combinations(uvs_a, 2):
+            if (a1.co - a2.co).length_squared < distance_limit:
+                a1, a2 = (root_find(a, phantoms) for a in (a1, a2))
+                if a1 is not a2:
+                    phantoms[a2] = a1
+                    is_merged_mine = True
+        for source, target in phantoms.items():
+            target = root_find(target, phantoms)
+            phantoms[source] = target
 
     for uvedge in (chain(island_a.boundary, island_b.boundary) if is_merged_mine else island_b.boundary):
         for loop in uvedge.loop.link_loops:
@@ -1040,19 +1025,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         island_a.mesh.edges[uvedge.loop.edge].is_main_cut = False
 
     # include all trasformed vertices as mine
-    island_a.vertices.update({orig_vert.loop: phantom_vert for orig_vert, phantom_vert in phantoms.items()})
-
-    # update the uvverts_by_id dictionary
-    for source, target in phantoms.items():
-        present = island_a.uvverts_by_id.get(target.loop.vert.index)
-        if not present:
-            island_a.uvverts_by_id[target.loop.vert.index] = [target]
-        else:
-            # emulation of set behavior... sorry, it is faster
-            if source in present:
-                present.remove(source)
-            if target not in present:
-                present.append(target)
+    island_a.vertices.update({loop: phantoms[uvvertex] for loop, uvvertex in island_b.vertices.items()})
 
     # re-link uvedges and uvfaces to their transformed locations
     for uvedge in island_b.edges.values():
@@ -1083,7 +1056,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     for uvedge, partner in merged_uvedge_pairs:
         # make sure that main faces are the ones actually merged (this changes nothing in most cases)
         edge = island_a.mesh.edges[uvedge.loop.edge]
-        edge.main_faces[:] = uvedge.loop, partner.loop
+        edge.main_faces = uvedge.loop, partner.loop
         assert all(loop.edge is edge.data for loop in edge.main_faces)
 
     # everything seems to be OK
@@ -1102,11 +1075,10 @@ class Page:
 
 class UVVertex:
     """Vertex in 2D"""
-    __slots__ = ('co', 'loop', 'tup')
+    __slots__ = ('co', 'tup')
 
-    def __init__(self, vector, loop=None):
+    def __init__(self, vector):
         self.co = vector.xy
-        self.loop = loop
         self.tup = tuple(self.co)
 
 
@@ -1160,13 +1132,13 @@ class UVFace:
     """Face in 2D"""
     __slots__ = ('vertices', 'edges', 'face', 'island', 'flipped')
 
-    def __init__(self, face: bmesh.types.BMFace, island: Island):
+    def __init__(self, face: bmesh.types.BMFace, island: Island, matrix=1, normal_matrix=1):
         self.face = face
         self.island = island
         self.flipped = False  # a flipped UVFace has edges clockwise
 
-        rot = z_up_matrix(face.normal)
-        self.vertices = {loop: UVVertex(rot * loop.vert.co, loop) for loop in face.loops}
+        flatten = z_up_matrix(normal_matrix * face.normal) * matrix
+        self.vertices = {loop: UVVertex(flatten * loop.vert.co) for loop in face.loops}
         self.edges = {loop: UVEdge(self.vertices[loop], self.vertices[loop.link_loop_next], self, loop) for loop in face.loops}
 
 
@@ -1715,8 +1687,8 @@ class PDF:
                     data_uvedge = line_through((uvedge.va, uvedge.vb)) + "S"
                     if edge.freestyle:
                         data_freestyle.append(data_uvedge)
-                    # each uvedge is in two opposite-oriented variants; we want to add each only once
-                    if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.loop.index > uvedge.vb.loop.index):
+                    # each uvedge exists in two opposite-oriented variants; we want to add each only once
+                    if uvedge.sticker or uvedge.uvface.flipped != (id(uvedge.va) > id(uvedge.vb)):
                         if edge.angle > self.angle_epsilon:
                             data_convex.append(data_uvedge)
                         elif edge.angle < -self.angle_epsilon:
@@ -1817,11 +1789,11 @@ class Unfold(bpy.types.Operator):
         sce = bpy.context.scene
         settings = sce.paper_model
         recall_mode = context.object.mode
-        bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.mode_set(mode='EDIT')
         recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 
-        self.object = context.active_object
-        mesh = self.object.data
+        self.object = context.object
+        bm = bmesh.from_edit_mesh(self.object.data) # TODO put me to Mesh class
 
         cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
         priority_effect = {
@@ -1829,21 +1801,22 @@ class Unfold(bpy.types.Operator):
             'CONCAVE': self.priority_effect_concave,
             'LENGTH': self.priority_effect_length}
         try:
-            unfolder = Unfolder(self.object, sce)
+            unfolder = Unfolder(self.object, self.do_create_uvmap)
             scale = sce.unit_settings.scale_length / settings.scale
-            unfolder.prepare(cage_size, self.do_create_uvmap, priority_effect, scale)
-            for edge_id in unfolder.cuts_indices():
-                mesh.edges[edge_id].use_seam = True
+            unfolder.prepare(cage_size, priority_effect, scale)
+            bm.edges.ensure_lookup_table()
+            for edge_id in unfolder.cuts_indices(): # TODO put me to Mesh class
+                bm.edges[edge_id].seam = True
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             if len(error.args) > 1:
-                mesh_select(mesh, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
+                mesh_select(bm, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
             bpy.ops.object.mode_set(mode=recall_mode)
             sce.paper_model.display_islands = recall_display_islands
             return {'CANCELLED'}
+        mesh = self.object.data
         if mesh.paper_island_list:
             unfolder.copy_island_names(mesh.paper_island_list)
-
         island_list = mesh.paper_island_list
         attributes = {item.label: (item.abbreviation, item.auto_label, item.auto_abbrev) for item in island_list}
         island_list.clear()  # remove previously defined islands
@@ -1854,15 +1827,13 @@ class Unfold(bpy.types.Operator):
             for face in island.faces:
                 lface = list_item.faces.add()
                 lface.id = face.index
-
             list_item["label"] = island.label
             list_item["abbreviation"], list_item["auto_label"], list_item["auto_abbrev"] = attributes.get(
                 island.label,
                 (island.abbreviation, True, True))
             island_item_changed(list_item, context)
-
-        mesh.paper_island_index = -1
-        mesh.show_edge_seams = True
+            mesh.paper_island_index = -1
+            mesh.show_edge_seams = True
 
         bpy.ops.object.mode_set(mode=recall_mode)
         sce.paper_model.display_islands = recall_display_islands
@@ -2077,6 +2048,9 @@ class ExportPaperModel(bpy.types.Operator):
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             return {'CANCELLED'}
+        finally:            
+            bpy.ops.object.mode_set(mode=self.recall_mode)
+
 
     def get_scale_ratio(self, sce):
         margin = self.output_margin + self.sticker_width + 1e-5
@@ -2088,30 +2062,26 @@ class ExportPaperModel(bpy.types.Operator):
 
     def invoke(self, context, event):
         sce = context.scene
-        recall_mode = context.object.mode
-        bpy.ops.object.mode_set(mode='OBJECT')
+        self.recall_mode = context.object.mode
+        bpy.ops.object.mode_set(mode='EDIT')
 
         self.scale = sce.paper_model.scale
         self.object = context.active_object
         cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
         try:
-            self.unfolder = Unfolder(self.object, sce)
-            self.unfolder.prepare(
-                cage_size, create_uvmap=self.do_create_uvmap,
-                scale=sce.unit_settings.scale_length/self.scale)
+            self.unfolder = Unfolder(self.object, self.do_create_uvmap)
+            self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             if len(error.args) > 1:
                 mesh_select(mesh, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
-            bpy.ops.object.mode_set(mode=recall_mode)
+            bpy.ops.object.mode_set(mode=self.recall_mode)
             return {'CANCELLED'}
         scale_ratio = self.get_scale_ratio(sce)
         if scale_ratio > 1:
             self.scale = ceil(self.scale * scale_ratio)
         wm = context.window_manager
         wm.fileselect_add(self)
-
-        bpy.ops.object.mode_set(mode=recall_mode)
         return {'RUNNING_MODAL'}
 
     def draw(self, context):
