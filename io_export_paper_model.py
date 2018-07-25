@@ -416,41 +416,41 @@ class Mesh:
             face = uvedge.uvface.face
             return face.calc_area() / face.calc_perimeter()
 
-        def add_sticker(uvedge, index, target_island):
-            uvedge.sticker = Sticker(uvedge, default_width, index, target_island)
+        def add_sticker(uvedge, index, target_uvedge):
+            uvedge.sticker = Sticker(uvedge, default_width, index, target_uvedge)
             uvedge.uvface.island.add_marker(uvedge.sticker)
 
         for edge in self.edges.values():
             if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.vector.length_squared > 0:
-                uvedge_a, uvedge_b = edge.uvedges[:2]
-                if uvedge_priority(uvedge_a) < uvedge_priority(uvedge_b):
-                    uvedge_a, uvedge_b = uvedge_b, uvedge_a
-                target_island = uvedge_a.uvface.island
-                left_loop, right_loop = uvedge_a.neighbor_left.loop, uvedge_a.neighbor_right.loop
+                target, source = edge.uvedges[:2]
+                if uvedge_priority(target) < uvedge_priority(source):
+                    target, source = source, target
+                target_island = target.uvface.island
+                left_loop, right_loop = target.neighbor_left.loop, target.neighbor_right.loop
                 if do_create_numbers:
-                    for uvedge in [uvedge_b] + edge.uvedges[2:]:
+                    for uvedge in [source] + edge.uvedges[2:]:
                         if ((uvedge.neighbor_left.loop is not right_loop or uvedge.neighbor_right.loop is not left_loop) and
-                                uvedge not in (uvedge_a.neighbor_left, uvedge_a.neighbor_right)):
+                                uvedge not in (target.neighbor_left, target.neighbor_right)):
                             # it will not be clear to see that these uvedges should be sticked together
                             # So, create an arrow and put the index on all stickers
                             target_island.sticker_numbering += 1
                             index = str(target_island.sticker_numbering)
                             if is_upsidedown_wrong(index):
                                 index += "."
-                            target_island.add_marker(Arrow(uvedge_a, default_width, index))
+                            target_island.add_marker(Arrow(target, default_width, index))
                             break
                     else:
                         # if all uvedges to be sticked are easy to see, create no numbers
                         index = None
                 else:
                     index = None
-                add_sticker(uvedge_b, index, target_island)
+                add_sticker(source, index, target)
             elif len(edge.uvedges) > 2:
                 index = None
-                target_island = edge.uvedges[0].island
+                target = edge.uvedges[0]
             if len(edge.uvedges) > 2:
-                for uvedge in edge.uvedges[2:]:
-                    add_sticker(uvedge, index, target_island)
+                for source in edge.uvedges[2:]:
+                    add_sticker(source, index, target)
 
     def generate_numbers_alone(self, size):
         global_numbering = 0
@@ -1160,14 +1160,11 @@ class Sticker:
     """Mark in the document: sticker tab"""
     __slots__ = ('bounds', 'center', 'rot', 'text', 'width', 'vertices')
 
-    def __init__(self, uvedge, default_width=0.005, index=None, target_island=None):
+    def __init__(self, uvedge, default_width, index, other: UVEdge):
         """Sticker is directly attached to the given UVEdge"""
         first_vertex, second_vertex = (uvedge.va, uvedge.vb) if not uvedge.uvface.flipped else (uvedge.vb, uvedge.va)
         edge = first_vertex.co - second_vertex.co
         sticker_width = min(default_width, edge.length / 2)
-        #TODO FIXME this need not be true if more than 2 faces are connected
-        other = target_island.edges[uvedge.loop.link_loop_radial_next]  # This is the other uvedge - the sticking target
-
         other_first, other_second = (other.va, other.vb) if not other.uvface.flipped else (other.vb, other.va)
         other_edge = other_second.co - other_first.co
 
@@ -1211,8 +1208,8 @@ class Sticker:
         sin, cos = edge.y / edge.length, edge.x / edge.length
         self.rot = M.Matrix(((cos, -sin), (sin, cos)))
         self.width = sticker_width * 0.9
-        if index and target_island is not uvedge.uvface.island:
-            self.text = "{}:{}".format(target_island.abbreviation, index)
+        if index and uvedge.uvface.island is not other.uvface.island:
+            self.text = "{}:{}".format(other.uvface.island.abbreviation, index)
         else:
             self.text = index
         self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot*M.Vector((0, self.width*0.2))
