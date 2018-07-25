@@ -287,7 +287,6 @@ class Mesh:
     def delete_uvmap(self):
         self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
         self.data.faces.layers.tex.remove(self.facetex) if self.facetex else None
-        
 
     def check_correct(self, epsilon=1e-6):
         """Check for invalid geometry"""
@@ -609,11 +608,11 @@ class Mesh:
         if not (self.looptex and self.facetex):
             raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
         is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
+        ob = bpy.context.active_object
+        me = ob.data
         if is_cycles:
             # please excuse the following mess. Cycles baking API does not seem to allow better.
-            ob = bpy.context.active_object
-            me = ob.data
-            # add a disconnected image node that defines the bake target
+            # start by adding a disconnected image node that defines the bake target
             temp_nodes = dict()
             for mat in me.materials:
                 mat.use_nodes = True
@@ -637,6 +636,7 @@ class Mesh:
             for uv in ignored_uvs:
                 uv *= -1
         else:
+            me.uv_textures.active = me.uv_textures[self.facetex.name]
             for face in faces:
                 face[self.facetex].image = image
             bpy.ops.object.bake_image()
@@ -1833,6 +1833,7 @@ class Unfold(bpy.types.Operator):
             mesh.paper_island_index = -1
             mesh.show_edge_seams = True
 
+        del unfolder
         bpy.ops.object.mode_set(mode=recall_mode)
         sce.paper_model.display_islands = recall_display_islands
         return {'FINISHED'}
@@ -2046,7 +2047,8 @@ class ExportPaperModel(bpy.types.Operator):
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             return {'CANCELLED'}
-        finally:            
+        finally:
+            del self.unfolder
             bpy.ops.object.mode_set(mode=self.recall_mode)
 
 
@@ -2072,7 +2074,7 @@ class ExportPaperModel(bpy.types.Operator):
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             if len(error.args) > 1:
-                mesh_select(mesh, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
+                mesh_select(bmesh.from_edit_mesh(self.object.data), *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
             bpy.ops.object.mode_set(mode=self.recall_mode)
             return {'CANCELLED'}
         scale_ratio = self.get_scale_ratio(sce)
