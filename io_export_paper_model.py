@@ -138,50 +138,6 @@ def create_blank_image(image_name, dimensions, alpha=1):
     return image
 
 
-def bake(faces, tex, image):
-    import bpy
-    is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
-    if is_cycles:
-        # please excuse the following mess. Cycles baking API does not seem to allow better.
-        ob = bpy.context.active_object
-        me = ob.data
-        # add a disconnected image node that defines the bake target
-        temp_nodes = dict()
-        for mat in me.materials:
-            mat.use_nodes = True
-            img = mat.node_tree.nodes.new('ShaderNodeTexImage')
-            img.image = image
-            temp_nodes[mat] = img
-            mat.node_tree.nodes.active = img
-            tex.active = True
-        # move all excess faces to negative numbers (that is the only way to disable them)
-        loop = me.uv_layers[me.uv_layers.active_index].data
-        face_indices = set(face_indices)
-        ignored_uvs = [
-            face.loop_start + i
-            for face in me.polygons if face.index not in face_indices
-            for i, v in enumerate(face.vertices)]
-        for vid in ignored_uvs:
-            loop[vid].uv *= -1
-        bake_type = bpy.context.scene.cycles.bake_type
-        sta = bpy.context.scene.render.bake.use_selected_to_active
-        try:
-            bpy.ops.object.bake(type=bake_type, margin=1, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
-        except RuntimeError as e:
-            raise UnfoldError(*e.args)
-        finally:
-            for mat, node in temp_nodes.items():
-                mat.node_tree.nodes.remove(node)
-        for vid in ignored_uvs:
-            loop[vid].uv *= -1
-    else:
-        for face in faces:
-            face[tex].image = image
-        bpy.ops.object.bake_image()
-        for face in faces:
-            face[tex].image = None
-
-
 def mesh_select(mesh, vertex_ids, edge_ids, polygon_ids):
     bpy.context.tool_settings.mesh_select_mode = bool(vertex_ids), bool(edge_ids), bool(polygon_ids)
     for vertex in mesh.verts:
@@ -199,15 +155,13 @@ class UnfoldError(ValueError):
 class Unfolder:
     def __init__(self, ob, do_create_uvmap=False):
         bm = bmesh.from_edit_mesh(ob.data)
-        if do_create_uvmap or True:
-            self.looptex = bm.loops.layers.uv.new("Unfolded")
-            self.facetex = bm.faces.layers.tex.new("Unfolded")
-            if not (self.looptex and self.facetex):
-                raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
-        else:
-            self.looptex = self.facetex = None
         self.mesh = Mesh(bm, ob.matrix_world)
         self.mesh.check_correct()
+        self.do_create_uvmap = do_create_uvmap
+    
+    def __del__(self):
+        if not self.do_create_uvmap:
+            self.mesh.delete_uvmap()
 
     def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1):
         """Create the islands of the net"""
@@ -215,8 +169,7 @@ class Unfolder:
         is_landscape = cage_size and cage_size.x > cage_size.y
         self.mesh.finalize_islands(is_landscape)
         self.mesh.enumerate_islands()
-        if self.looptex:
-            self.mesh.save_uv(self.looptex)
+        self.mesh.save_uv()
 
     def copy_island_names(self, island_list):
         """Copy island label and abbreviation from the best matching island in the list"""
@@ -267,7 +220,7 @@ class Unfolder:
             # bake an image and save it as a PNG to disk or into memory
             image_packing = properties.image_packing if properties.file_format == 'SVG' else 'ISLAND_EMBED'
             use_separate_images = image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
-            self.mesh.save_uv(self.looptex, cage_size=printable_size, separate_image=use_separate_images)
+            self.mesh.save_uv(cage_size=printable_size, separate_image=use_separate_images)
 
             sce = bpy.context.scene
             rd = sce.render
@@ -289,12 +242,12 @@ class Unfolder:
                 rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 1, 0, 0.001, False, False
 
             if image_packing == 'PAGE_LINK':
-                self.mesh.save_image(self.facetex, printable_size * ppm, filepath)
+                self.mesh.save_image(printable_size * ppm, filepath)
             elif image_packing == 'ISLAND_LINK':
                 image_dir = filepath[:filepath.rfind(".")]
-                self.mesh.save_separate_images(self.facetex, ppm, image_dir)
+                self.mesh.save_separate_images(ppm, image_dir)
             elif image_packing == 'ISLAND_EMBED':
-                self.mesh.save_separate_images(self.facetex, ppm, filepath, embed=Exporter.encode_image)
+                self.mesh.save_separate_images(ppm, filepath, embed=Exporter.encode_image)
 
             # revoke settings
             if rd.engine == 'CYCLES':
@@ -321,6 +274,8 @@ class Mesh:
     def __init__(self, bmesh, matrix):
         self.data = bmesh
         self.matrix = matrix.to_3x3()
+        self.looptex = bmesh.loops.layers.uv.new("Unfolded")
+        self.facetex = bmesh.faces.layers.tex.new("Unfolded")
         self.edges = {bmedge: Edge(bmedge) for bmedge in bmesh.edges}
         self.islands = list()
         self.pages = list()
@@ -328,6 +283,11 @@ class Mesh:
             edge.choose_main_faces()
             if edge.main_faces:
                 edge.calculate_angle()
+    
+    def delete_uvmap(self):
+        self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
+        self.data.faces.layers.tex.remove(self.facetex) if self.facetex else None
+        
 
     def check_correct(self, epsilon=1e-6):
         """Check for invalid geometry"""
@@ -607,31 +567,31 @@ class Mesh:
             remaining_islands = [island for island in remaining_islands if island not in page.islands]
             self.pages.append(page)
 
-    def save_uv(self, tex, cage_size=M.Vector((1, 1)), separate_image=False):
+    def save_uv(self, cage_size=M.Vector((1, 1)), separate_image=False):
         if separate_image:
             for island in self.islands:
-                island.save_uv_separate(tex)
+                island.save_uv_separate(self.looptex)
         else:
             for island in self.islands:
-                island.save_uv(tex, cage_size)
+                island.save_uv(self.looptex, cage_size)
 
-    def save_image(self, tex, page_size_pixels: M.Vector, filename):
+    def save_image(self, page_size_pixels: M.Vector, filename):
         for page in self.pages:
             image = create_blank_image("{} {} Unfolded".format(self.data.name[:14], page.name), page_size_pixels, alpha=1)
             image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
             faces = [uvface.face.index for island in page.islands for uvface in island.faces]
-            bake(faces, tex, image)
+            self.bake(faces, image)
             image.save()
             image.user_clear()
             bpy.data.images.remove(image)
 
-    def save_separate_images(self, tex, scale, filepath, embed=None):
+    def save_separate_images(self, scale, filepath, embed=None):
         # omitting this may cause a "Circular reference in texture stack" error
         # TODO: removed, insert back?
         for island in self.islands:
             image_name = "Island.001"
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
-            bake(island.faces.keys(), tex, image)
+            self.bake(island.faces.keys(), image)
             if embed:
                 island.embedded_image = embed(image)
             else:
@@ -644,6 +604,44 @@ class Mesh:
                 island.image_path = image_path
             image.user_clear()
             bpy.data.images.remove(image)
+    
+    def bake(self, faces, image):
+        if not (self.looptex and self.facetex):
+            raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
+        is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
+        if is_cycles:
+            # please excuse the following mess. Cycles baking API does not seem to allow better.
+            ob = bpy.context.active_object
+            me = ob.data
+            # add a disconnected image node that defines the bake target
+            temp_nodes = dict()
+            for mat in me.materials:
+                mat.use_nodes = True
+                img = mat.node_tree.nodes.new('ShaderNodeTexImage')
+                img.image = image
+                temp_nodes[mat] = img
+                mat.node_tree.nodes.active = img
+            # move all excess faces to negative numbers (that is the only way to disable them)
+            ignored_uvs = [loop[self.looptex].uv for f in self.data.faces if f not in faces for loop in f.loops]
+            for uv in ignored_uvs:
+                uv *= -1
+            bake_type = bpy.context.scene.cycles.bake_type
+            sta = bpy.context.scene.render.bake.use_selected_to_active
+            try:
+                bpy.ops.object.bake(type=bake_type, margin=1, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
+            except RuntimeError as e:
+                raise UnfoldError(*e.args)
+            finally:
+                for mat, node in temp_nodes.items():
+                    mat.node_tree.nodes.remove(node)
+            for uv in ignored_uvs:
+                uv *= -1
+        else:
+            for face in faces:
+                face[self.facetex].image = image
+            bpy.ops.object.bake_image()
+            for face in faces:
+                face[self.facetex].image = None
 
 
 class Edge:
