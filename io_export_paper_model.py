@@ -461,7 +461,7 @@ class Mesh:
                 if is_upsidedown_wrong(index):
                     index += "."
                 for uvedge in edge.uvedges:
-                    uvedge.island.add_marker(NumberAlone(uvedge, index, size))
+                    uvedge.uvface.island.add_marker(NumberAlone(uvedge, index, size))
 
     def enumerate_islands(self):
         for num, island in enumerate(self.islands, 1):
@@ -585,8 +585,6 @@ class Mesh:
             bpy.data.images.remove(image)
 
     def save_separate_images(self, scale, filepath, embed=None):
-        # omitting this may cause a "Circular reference in texture stack" error
-        # TODO: removed, insert back?
         for island in self.islands:
             image_name = "Island.001"
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
@@ -1181,13 +1179,18 @@ class Sticker:
             cos_b = max(cos_b, (edge*other_edge) / (edge.length_squared))  # angles between pi/3 and 0
 
         # Fix tabs for sticking targets with small angles
-        other_face_neighbor_left = other.neighbor_left
-        other_face_neighbor_right = other.neighbor_right
-        other_edge_neighbor_a = other_face_neighbor_left.vb.co - other.vb.co
-        other_edge_neighbor_b = other_face_neighbor_right.va.co - other.va.co
-        # Adjacent angles in the face
-        cos_a = max(cos_a, (-other_edge*other_edge_neighbor_a) / (other_edge.length*other_edge_neighbor_a.length))
-        cos_b = max(cos_b, (other_edge*other_edge_neighbor_b) / (other_edge.length*other_edge_neighbor_b.length))
+        try:
+            other_face_neighbor_left = other.neighbor_left
+            other_face_neighbor_right = other.neighbor_right
+            other_edge_neighbor_a = other_face_neighbor_left.vb.co - other.vb.co
+            other_edge_neighbor_b = other_face_neighbor_right.va.co - other.va.co
+            # Adjacent angles in the face
+            cos_a = max(cos_a, (-other_edge*other_edge_neighbor_a) / (other_edge.length*other_edge_neighbor_a.length))
+            cos_b = max(cos_b, (other_edge*other_edge_neighbor_b) / (other_edge.length*other_edge_neighbor_b.length))
+        except AttributeError:  # neighbor data may be missing for edges with 3+ faces
+            pass
+        except ZeroDivisionError:
+            pass
 
         # Calculate the lengths of the glue tab edges using the possibly smaller angles
         sin_a = abs(1 - cos_a**2)**0.5
