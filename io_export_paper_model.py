@@ -138,18 +138,15 @@ def create_blank_image(image_name, dimensions, alpha=1):
     return image
 
 
-def mesh_select(mesh, vertex_ids, edge_ids, polygon_ids):
-    bpy.context.tool_settings.mesh_select_mode = bool(vertex_ids), bool(edge_ids), bool(polygon_ids)
-    for vertex in mesh.verts:
-        vertex.select = (vertex.index in vertex_ids)
-    for edge in mesh.edges:
-        edge.select = (edge.index in edge_ids)
-    for face in mesh.faces:
-        face.select = (face.index in polygon_ids)
-
-
 class UnfoldError(ValueError):
-    pass
+    def mesh_select(self):
+        if len(self.args) > 1:
+            elems, bm = self.args[1:3]
+            bpy.context.tool_settings.mesh_select_mode = [bool(elems[key]) for key in ("verts", "edges", "faces")]
+            for elem in chain(bm.verts, bm.edges, bm.faces):
+                elem.select = False
+            for elem in chain(*elems.values()):
+                elem.select_set(True)
 
 
 class Unfolder:
@@ -160,7 +157,7 @@ class Unfolder:
         self.do_create_uvmap = do_create_uvmap
     
     def __del__(self):
-        if not self.do_create_uvmap:
+        if not getattr(self, "do_create_uvmap", False):
             self.mesh.delete_uvmap()
 
     def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1):
@@ -263,9 +260,6 @@ class Unfolder:
         exporter.do_create_stickers = properties.do_create_stickers
         exporter.text_size = properties.sticker_width
         exporter.write(self.mesh, filepath)
-    
-    def cuts_indices(self):
-        return [bmedge.index for bmedge, edge in self.mesh.edges.items() if len(edge.uvedges) > 1 and edge.is_main_cut]
 
 
 class Mesh:
@@ -287,6 +281,11 @@ class Mesh:
     def delete_uvmap(self):
         self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
         self.data.faces.layers.tex.remove(self.facetex) if self.facetex else None
+    
+    def mark_cuts(self):
+        for bmedge, edge in self.edges.items():
+            if edge.is_main_cut and not bmedge.is_boundary:
+                bmedge.seam = True
 
     def check_correct(self, epsilon=1e-6):
         """Check for invalid geometry"""
@@ -301,7 +300,7 @@ class Mesh:
                         return True
             return False
         
-        null_edges = {e.data for e in self.edges.values() if e.vector.length < epsilon and e.data.link_faces}
+        null_edges = {e for e in self.edges.keys() if e.calc_length() < epsilon and e.link_faces}
         null_faces = {f for f in self.data.faces if f.calc_area() < epsilon}
         twisted_faces = {f for f in self.data.faces if is_twisted(f)}
         if not (null_edges or null_faces or twisted_faces):
@@ -314,7 +313,7 @@ class Mesh:
             (" {} zero-area face(s)\n".format(len(null_faces)) if null_faces else "") +
             (" {} twisted polygon(s)\n".format(len(twisted_faces)) if twisted_faces else "") +
             "The offenders are selected and you can use {} to fix them. Export failed.".format(cure),
-            {"verts": set(), "edges": null_edges, "faces": null_faces | twisted_faces})
+            {"verts": set(), "edges": null_edges, "faces": null_faces | twisted_faces}, self.data)
 
     def generate_cuts(self, page_size, priority_effect):
         """Cut the mesh so that it can be unfolded to a flat net."""
@@ -673,11 +672,9 @@ class Edge:
             return abs(pair[0].face.normal.dot(pair[1].face.normal))
         if len(loops) == 2:
             self.main_faces = list(loops)
-            assert all(loop.edge is self.data for loop in self.main_faces) #TODO DELETE ME
         elif len(loops) > 2:
             # find (with brute force) the pair of indices whose loops have the most similar normals
             self.main_faces = max(combinations(loops, 2), key=score)
-            assert all(loop.edge is self.data for loop in self.main_faces) #TODO DELETE ME
 
     def calculate_angle(self):
         """Calculate the angle between the main faces"""
@@ -703,7 +700,6 @@ class Edge:
         """Return False if this edge will the given face to another one in the resulting net
         (useful for edges with more than two faces connected)"""
         # Return whether there is a cut between the two main faces
-        #TODO FIXME constructing a set on the fly is ugly and slow
         if self.main_faces and face in {loop.face for loop in self.main_faces}:
             return self.is_main_cut
         # All other faces (third and more) are automatically treated as cut
@@ -1053,7 +1049,6 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         # make sure that main faces are the ones actually merged (this changes nothing in most cases)
         edge = island_a.mesh.edges[uvedge.loop.edge]
         edge.main_faces = uvedge.loop, partner.loop
-        assert all(loop.edge is edge.data for loop in edge.main_faces)
 
     # everything seems to be OK
     return island_b
@@ -1408,8 +1403,6 @@ class SVG:
                                 data_convex.append(data_uvedge)
                             elif edge.angle < -self.angle_epsilon:
                                 data_concave.append(data_uvedge)
-                            else:
-                                print("no angle:", edge.angle)
                     if island.is_inside_out:
                         data_convex, data_concave = data_concave, data_convex
 
@@ -1791,7 +1784,6 @@ class Unfold(bpy.types.Operator):
         recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 
         self.object = context.object
-        bm = bmesh.from_edit_mesh(self.object.data) # TODO put me to Mesh class
 
         cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
         priority_effect = {
@@ -1802,13 +1794,10 @@ class Unfold(bpy.types.Operator):
             unfolder = Unfolder(self.object, self.do_create_uvmap)
             scale = sce.unit_settings.scale_length / settings.scale
             unfolder.prepare(cage_size, priority_effect, scale)
-            bm.edges.ensure_lookup_table()
-            for edge_id in unfolder.cuts_indices(): # TODO put me to Mesh class
-                bm.edges[edge_id].seam = True
+            unfolder.mesh.mark_cuts()
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
-            if len(error.args) > 1:
-                mesh_select(bm, *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
+            error.mesh_select()
             bpy.ops.object.mode_set(mode=recall_mode)
             sce.paper_model.display_islands = recall_display_islands
             return {'CANCELLED'}
@@ -2073,8 +2062,7 @@ class ExportPaperModel(bpy.types.Operator):
             self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
-            if len(error.args) > 1:
-                mesh_select(bmesh.from_edit_mesh(self.object.data), *({item.index for item in error.args[1][key]} for key in ("verts", "edges", "faces")))
+            error.mesh_select()
             bpy.ops.object.mode_set(mode=self.recall_mode)
             return {'CANCELLED'}
         scale_ratio = self.get_scale_ratio(sce)
