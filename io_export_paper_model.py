@@ -46,7 +46,8 @@ import bmesh
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain, repeat, product, combinations
-from math import pi, ceil
+from operator import itemgetter
+from math import pi, ceil, atan2
 
 try:
     import os.path as os_path
@@ -124,6 +125,41 @@ def z_up_matrix(n):
         ))
 
 
+def cage_fit(points, aspect):
+    """Find rotation for a minimum bounding box with a given aspect ratio
+    returns a tuple: rotation angle, box height"""
+    def guesses(polygon):
+        """Yield all tentative extrema of the bounding box height wrt. polygon rotation"""
+        for a, b in pairs(polygon):
+            if a == b:
+                continue
+            sinx, cosx = -(b - a).y, (b - a).x
+            rot = M.Matrix(((cosx, -sinx), (sinx, cosx))) * (1 / (b - a).length)
+            rot_polygon = [rot * p for p in polygon]
+            left, right = [fn(rot_polygon, key=itemgetter(0)) for fn in (min, max)]
+            bottom, top = [fn(rot_polygon, key=itemgetter(1)) for fn in (min, max)]
+            horz, vert = right - left, top - bottom
+            # solve (rot * a).y == (rot * b).y
+            yield max(aspect * horz.x, vert.y), sinx, cosx
+            # solve (rot * a).x == (rot * b).x
+            yield max(horz.x, aspect * vert.y), -cosx, sinx
+            # solve aspect * (rot * (right - left)).x == (rot * (top - bottom)).y
+            # using substitution t = tan(rot / 2)
+            q = aspect * horz.x - vert.y
+            r = vert.x + aspect * horz.y
+            t = ((r**2 + q**2)**0.5 - r) / q if q != 0 else 0
+            t = -1 / t if abs(t) > 1 else t  # pick the positive solution
+            sinx, cosx = 2 * t / (1 + t**2), (1 - t**2) / (1 + t**2)
+            rot = M.Matrix(((cosx, -sinx), (sinx, cosx)))
+            for p in rot_polygon:
+                p[:] = rot * p  # note: this also modifies left, right, bottom, top
+            if left.x < right.x and bottom.y < top.y and all(left.x <= p.x <= right.x and bottom.y <= p.y <= top.y for p in rot_polygon):
+                yield max(aspect * (right - left).x, (top - bottom).y), sinx, cosx
+    polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
+    height, sinx, cosx = min(guesses(polygon))
+    return atan2(sinx, cosx), height
+
+
 def create_blank_image(image_name, dimensions, alpha=1):
     """Create a new image and assign white color to all its pixels"""
     image_name = image_name[:64]
@@ -163,8 +199,7 @@ class Unfolder:
     def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1):
         """Create the islands of the net"""
         self.mesh.generate_cuts(cage_size / scale if cage_size else None, priority_effect)
-        is_landscape = cage_size and cage_size.x > cage_size.y
-        self.mesh.finalize_islands(is_landscape)
+        self.mesh.finalize_islands(cage_size or M.Vector((1, 1)))
         self.mesh.enumerate_islands()
         self.mesh.save_uv()
 
@@ -208,10 +243,9 @@ class Unfolder:
             self.mesh.generate_numbers_alone(properties.sticker_width)
 
         text_height = properties.sticker_width if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
-        aspect_ratio = printable_size.x / printable_size.y
         # title height must be somewhat larger that text size, glyphs go below the baseline
-        self.mesh.finalize_islands(is_landscape=(printable_size.x > printable_size.y), title_height=text_height * 1.2)
-        self.mesh.fit_islands(cage_size=printable_size)
+        self.mesh.finalize_islands(printable_size, title_height=text_height * 1.2)
+        self.mesh.fit_islands(printable_size)
 
         if properties.output_type != 'NONE':
             # bake an image and save it as a PNG to disk or into memory
@@ -473,18 +507,14 @@ class Mesh:
             for point in chain((vertex.co for vertex in vertices), island.fake_vertices):
                 point *= scale
 
-    def finalize_islands(self, is_landscape=False, title_height=0):
+    def finalize_islands(self, cage_size, title_height=0):
         for island in self.islands:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
             vertices = set(island.vertices.values())
             points = list(vertex.co for vertex in vertices) + island.fake_vertices
-            angle = M.geometry.box_fit_2d(points)
+            angle, _ = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
             rot = M.Matrix.Rotation(angle, 2)
-            # ensure that the island matches page orientation (portrait/landscape)
-            dimensions = M.Vector(max(r * v for v in points) - min(r * v for v in points) for r in rot)
-            if dimensions.x > dimensions.y != is_landscape:
-                rot = M.Matrix.Rotation(angle + pi / 2, 2)
             for point in points:
                 # note: we need an in-place operation, and Vector.rotate() seems to work for 3d vectors only
                 point[:] = rot * point
@@ -495,13 +525,13 @@ class Mesh:
                 point -= bottom_left
             island.bounding_box = M.Vector((max(v.x for v in points), max(v.y for v in points)))
 
-    def largest_island_ratio(self, page_size):
-        return max(i / p for island in self.islands for (i, p) in zip(island.bounding_box, page_size))
+    def largest_island_ratio(self, cage_size):
+        return max(i / p for island in self.islands for (i, p) in zip(island.bounding_box, cage_size))
 
     def fit_islands(self, cage_size):
         """Move islands so that they fit onto pages, based on their bounding boxes"""
 
-        def try_emplace(island, page_islands, cage_size, stops_x, stops_y, occupied_cache):
+        def try_emplace(island, page_islands, stops_x, stops_y, occupied_cache):
             """Tries to put island to each pair from stops_x, stops_y
             and checks if it overlaps with any islands present on the page.
             Returns True and positions the given island on success."""
@@ -548,7 +578,7 @@ class Mesh:
                 "Export failed, sorry.")
         # sort islands by their diagonal... just a guess
         remaining_islands = sorted(self.islands, reverse=True, key=lambda island: island.bounding_box.length_squared)
-        page_num = 1
+        page_num = 1  # TODO delete me
 
         while remaining_islands:
             # create a new page and try to fit as many islands onto it as possible
@@ -557,7 +587,7 @@ class Mesh:
             occupied_cache = set()
             stops_x, stops_y = [0], [0]
             for island in remaining_islands:
-                try_emplace(island, page.islands, cage_size, stops_x, stops_y, occupied_cache)
+                try_emplace(island, page.islands, stops_x, stops_y, occupied_cache)
                 # if overwhelmed with stops, drop a quarter of them
                 if len(stops_x)**2 > 4 * len(self.islands) + 100:
                     stops_x = drop_portion(stops_x, cage_size.x, 4)
@@ -918,19 +948,16 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
 
     # check the size of the resulting island
     if size_limit:
-        # first check: bounding box
-        left = min(min(seg.min.co.x for seg in island_a.boundary), min(vertex.co.x for vertex in phantoms))
-        right = max(max(seg.max.co.x for seg in island_a.boundary), max(vertex.co.x for vertex in phantoms))
-        bottom = min(min(seg.bottom for seg in island_a.boundary), min(vertex.co.y for vertex in phantoms))
-        top = max(max(seg.top for seg in island_a.boundary), max(vertex.co.y for vertex in phantoms))
+        points = [vert.co for vert in chain(island_a.vertices.values(), phantoms.values())]
+        left, right, bottom, top = (fn(co[i] for co in points) for i in (0, 1) for fn in (min, max))
         bbox_width = right - left
         bbox_height = top - bottom
         if min(bbox_width, bbox_height)**2 > size_limit.x**2 + size_limit.y**2:
             return False
         if (bbox_width > size_limit.x or bbox_height > size_limit.y) and (bbox_height > size_limit.x or bbox_width > size_limit.y):
-            # further checks (TODO!)
-            # for the time being, just throw this piece away
-            return False
+            _, height = cage_fit(points, size_limit.y / size_limit.x)
+            if height > size_limit.y:
+                return False
 
     distance_limit = uvedge_a.loop.edge.calc_length() * epsilon
     # try and merge UVVertices closer than sqrt(distance_limit)
@@ -1060,7 +1087,7 @@ class Page:
 
     def __init__(self, num=1):
         self.islands = list()
-        self.name = "page{}".format(num)
+        self.name = "page{}".format(num)  # TODO delete me
         self.image_path = None
 
 
@@ -2020,7 +2047,6 @@ class ExportPaperModel(bpy.types.Operator):
     style = bpy.props.PointerProperty(type=PaperModelStyle)
 
     unfolder = None
-    largest_island_ratio = 0
 
     @classmethod
     def poll(cls, context):
@@ -2042,7 +2068,7 @@ class ExportPaperModel(bpy.types.Operator):
 
 
     def get_scale_ratio(self, sce):
-        margin = self.output_margin + self.sticker_width + 1e-5
+        margin = self.output_margin + self.sticker_width
         if min(self.output_size_x, self.output_size_y) <= 2 * margin:
             return False
         output_inner_size = M.Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin))
@@ -2065,9 +2091,8 @@ class ExportPaperModel(bpy.types.Operator):
             error.mesh_select()
             bpy.ops.object.mode_set(mode=self.recall_mode)
             return {'CANCELLED'}
-        scale_ratio = self.get_scale_ratio(sce)
-        if scale_ratio > 1:
-            self.scale = ceil(self.scale * scale_ratio)
+        if self.scale == 1:
+            self.scale = ceil(self.get_scale_ratio(sce))
         wm = context.window_manager
         wm.fileselect_add(self)
         return {'RUNNING_MODAL'}
