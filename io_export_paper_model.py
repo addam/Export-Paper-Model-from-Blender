@@ -136,8 +136,9 @@ def cage_fit(points, aspect):
             sinx, cosx = -(b - a).y, (b - a).x
             rot = M.Matrix(((cosx, -sinx), (sinx, cosx))) * (1 / (b - a).length)
             rot_polygon = [rot * p for p in polygon]
-            left, right = [fn(rot_polygon, key=itemgetter(0)) for fn in (min, max)]
-            bottom, top = [fn(rot_polygon, key=itemgetter(1)) for fn in (min, max)]
+            left, right = [fn(rot_polygon, key=lambda p: p.to_tuple()) for fn in (min, max)]
+            bottom, top = [fn(rot_polygon, key=lambda p: p.yx.to_tuple()) for fn in (min, max)]
+            print(f"{rot_polygon.index(left)}-{rot_polygon.index(right)}, {rot_polygon.index(bottom)}-{rot_polygon.index(top)}")
             horz, vert = right - left, top - bottom
             # solve (rot * a).y == (rot * b).y
             yield max(aspect * horz.x, vert.y), sinx, cosx
@@ -153,7 +154,9 @@ def cage_fit(points, aspect):
             rot = M.Matrix(((cosx, -sinx), (sinx, cosx)))
             for p in rot_polygon:
                 p[:] = rot * p  # note: this also modifies left, right, bottom, top
+            print(f"solve {aspect * (right - left).x} == {(top - bottom).y} with aspect = {aspect}")
             if left.x < right.x and bottom.y < top.y and all(left.x <= p.x <= right.x and bottom.y <= p.y <= top.y for p in rot_polygon):
+                print(f"yield {max(aspect * (right - left).x, (top - bottom).y)}")
                 yield max(aspect * (right - left).x, (top - bottom).y), sinx, cosx
     polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
     height, sinx, cosx = min(guesses(polygon))
@@ -511,8 +514,7 @@ class Mesh:
         for island in self.islands:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
-            vertices = set(island.vertices.values())
-            points = list(vertex.co for vertex in vertices) + island.fake_vertices
+            points = [vertex.co for vertex in set(island.vertices.values())] + island.fake_vertices
             angle, _ = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
             rot = M.Matrix.Rotation(angle, 2)
             for point in points:
@@ -521,6 +523,9 @@ class Mesh:
             for marker in island.markers:
                 marker.rot = rot * marker.rot
             bottom_left = M.Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
+            #DEBUG
+            top_right = M.Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
+            print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
             for point in points:
                 point -= bottom_left
             island.bounding_box = M.Vector((max(v.x for v in points), max(v.y for v in points)))
