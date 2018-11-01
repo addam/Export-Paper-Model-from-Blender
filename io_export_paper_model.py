@@ -13,7 +13,7 @@ bl_info = {
     "name": "Export Paper Model",
     "author": "Addam Dominec",
     "version": (1, 0),
-    "blender": (2, 73, 0),
+    "blender": (2, 80, 0),
     "location": "File > Export > Paper Model",
     "warning": "",
     "description": "Export printable net of the active mesh",
@@ -135,7 +135,7 @@ def cage_fit(points, aspect):
                 continue
             sinx, cosx = -(b - a).y, (b - a).x
             rot = M.Matrix(((cosx, -sinx), (sinx, cosx))) * (1 / (b - a).length)
-            rot_polygon = [rot * p for p in polygon]
+            rot_polygon = [rot @ p for p in polygon]
             left, right = [fn(rot_polygon, key=lambda p: p.to_tuple()) for fn in (min, max)]
             bottom, top = [fn(rot_polygon, key=lambda p: p.yx.to_tuple()) for fn in (min, max)]
             print(f"{rot_polygon.index(left)}-{rot_polygon.index(right)}, {rot_polygon.index(bottom)}-{rot_polygon.index(top)}")
@@ -519,9 +519,9 @@ class Mesh:
             rot = M.Matrix.Rotation(angle, 2)
             for point in points:
                 # note: we need an in-place operation, and Vector.rotate() seems to work for 3d vectors only
-                point[:] = rot * point
+                point[:] = rot @ point
             for marker in island.markers:
-                marker.rot = rot * marker.rot
+                marker.rot = rot @ marker.rot
             bottom_left = M.Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
             #DEBUG
             top_right = M.Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
@@ -946,10 +946,10 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         rot = fitting_matrix(first_b.co - second_b.co, uvedge_a.vb.co - uvedge_a.va.co)
     else:
         flip = M.Matrix(((-1, 0), (0, 1)))
-        rot = fitting_matrix(flip * (first_b.co - second_b.co), uvedge_a.vb.co - uvedge_a.va.co) * flip
-    trans = uvedge_a.vb.co - rot * first_b.co
+        rot = fitting_matrix(flip @ (first_b.co - second_b.co), uvedge_a.vb.co - uvedge_a.va.co) @ flip
+    trans = uvedge_a.vb.co - rot @ first_b.co
     # preview of island_b's vertices after the join operation
-    phantoms = {uvvertex: UVVertex(rot*uvvertex.co + trans) for uvvertex in island_b.vertices.values()}
+    phantoms = {uvvertex: UVVertex(rot @ uvvertex.co + trans) for uvvertex in island_b.vertices.values()}
 
     # check the size of the resulting island
     if size_limit:
@@ -1160,8 +1160,8 @@ class UVFace:
         self.island = island
         self.flipped = False  # a flipped UVFace has edges clockwise
 
-        flatten = z_up_matrix(normal_matrix * face.normal) * matrix
-        self.vertices = {loop: UVVertex(flatten * loop.vert.co) for loop in face.loops}
+        flatten = z_up_matrix(normal_matrix @ face.normal) @ matrix
+        self.vertices = {loop: UVVertex(flatten @ loop.vert.co) for loop in face.loops}
         self.edges = {loop: UVEdge(self.vertices[loop], self.vertices[loop.link_loop_next], self, loop) for loop in face.loops}
 
 
@@ -1178,7 +1178,7 @@ class Arrow:
         cos, sin = tangent
         self.rot = M.Matrix(((cos, -sin), (sin, cos)))
         normal = M.Vector((sin, -cos))
-        self.bounds = [self.center, self.center + (1.2*normal + tangent)*size, self.center + (1.2*normal - tangent)*size]
+        self.bounds = [self.center, self.center + (1.2 * normal + tangent) * size, self.center + (1.2 * normal - tangent) * size]
 
 
 class Sticker:
@@ -1228,8 +1228,8 @@ class Sticker:
         len_a = min(len_a, (edge.length * sin_b) / (sin_a * cos_b + sin_b * cos_a))
         len_b = 0 if sin_b == 0 else min(sticker_width / sin_b, (edge.length - len_a * cos_a) / cos_b)
 
-        v3 = UVVertex(second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) * edge * len_b / edge.length)
-        v4 = UVVertex(first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) * edge * len_a / edge.length)
+        v3 = UVVertex(second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) @ edge * len_b / edge.length)
+        v4 = UVVertex(first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) @ edge * len_a / edge.length)
         if v3.co != v4.co:
             self.vertices = [second_vertex, v3, v4, first_vertex]
         else:
@@ -1242,7 +1242,7 @@ class Sticker:
             self.text = "{}:{}".format(other.uvface.island.abbreviation, index)
         else:
             self.text = index
-        self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot*M.Vector((0, self.width*0.2))
+        self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot @ M.Vector((0, self.width * 0.2))
         self.bounds = [v3.co, v4.co, self.center] if v3.co != v4.co else [v3.co, self.center]
 
 
@@ -1258,7 +1258,7 @@ class NumberAlone:
         sin, cos = edge.y / edge.length, edge.x / edge.length
         self.rot = M.Matrix(((cos, -sin), (sin, cos)))
         self.text = index
-        self.center = (uvedge.va.co + uvedge.vb.co) / 2 - self.rot*M.Vector((0, self.size*1.2))
+        self.center = (uvedge.va.co + uvedge.vb.co) / 2 - self.rot @ M.Vector((0, self.size * 1.2))
         self.bounds = [self.center]
 
 
@@ -1388,7 +1388,7 @@ class SVG:
                                     size=marker.width * 1000))
                         elif isinstance(marker, Arrow):
                             size = marker.size * 1000
-                            position = marker.center + marker.rot*marker.size*M.Vector((0, -0.9))
+                            position = marker.center + marker.size * marker.rot @ M.Vector((0, -0.9))
                             data_markers.append(self.arrow_marker_tag.format(
                                 index=marker.text,
                                 arrow_pos=self.format_vertex(marker.center, island.pos),
@@ -1778,17 +1778,17 @@ class Unfold(bpy.types.Operator):
     bl_label = "Unfold"
     bl_description = "Mark seams so that the mesh can be exported as a paper model"
     bl_options = {'REGISTER', 'UNDO'}
-    edit = bpy.props.BoolProperty(default=False, options={'HIDDEN'})
-    priority_effect_convex = bpy.props.FloatProperty(
+    edit: bpy.props.BoolProperty(default=False, options={'HIDDEN'})
+    priority_effect_convex: bpy.props.FloatProperty(
         name="Priority Convex", description="Priority effect for edges in convex angles",
         default=default_priority_effect['CONVEX'], soft_min=-1, soft_max=10, subtype='FACTOR')
-    priority_effect_concave = bpy.props.FloatProperty(
+    priority_effect_concave: bpy.props.FloatProperty(
         name="Priority Concave", description="Priority effect for edges in concave angles",
         default=default_priority_effect['CONCAVE'], soft_min=-1, soft_max=10, subtype='FACTOR')
-    priority_effect_length = bpy.props.FloatProperty(
+    priority_effect_length: bpy.props.FloatProperty(
         name="Priority Length", description="Priority effect of edge length",
         default=default_priority_effect['LENGTH'], soft_min=-10, soft_max=1, subtype='FACTOR')
-    do_create_uvmap = bpy.props.BoolProperty(
+    do_create_uvmap: bpy.props.BoolProperty(
         name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
     object = None
 
@@ -1908,69 +1908,69 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         ('LONGDASH', "Long Dashes (-- --)", "Solid line"),
         ('DASHDOT', "Dash-dotted (-- .)", "Solid line")
     ]
-    outer_color = bpy.props.FloatVectorProperty(
+    outer_color: bpy.props.FloatVectorProperty(
         name="Outer Lines", description="Color of net outline",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    outer_style = bpy.props.EnumProperty(
+    outer_style: bpy.props.EnumProperty(
         name="Outer Lines Drawing Style", description="Drawing style of net outline",
         default='SOLID', items=line_styles)
-    line_width = bpy.props.FloatProperty(
+    line_width: bpy.props.FloatProperty(
         name="Base Lines Thickness", description="Base thickness of net lines, each actual value is a multiple of this length",
         default=1e-4, min=0, soft_max=5e-3, precision=5, step=1e-2, subtype="UNSIGNED", unit="LENGTH")
-    outer_width = bpy.props.FloatProperty(
+    outer_width: bpy.props.FloatProperty(
         name="Outer Lines Thickness", description="Relative thickness of net outline",
         default=3, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
-    use_outbg = bpy.props.BoolProperty(
+    use_outbg: bpy.props.BoolProperty(
         name="Highlight Outer Lines", description="Add another line below every line to improve contrast",
         default=True)
-    outbg_color = bpy.props.FloatVectorProperty(
+    outbg_color: bpy.props.FloatVectorProperty(
         name="Outer Highlight", description="Color of the highlight for outer lines",
         default=(1.0, 1.0, 1.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    outbg_width = bpy.props.FloatProperty(
+    outbg_width: bpy.props.FloatProperty(
         name="Outer Highlight Thickness", description="Relative thickness of the highlighting lines",
         default=5, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
 
-    convex_color = bpy.props.FloatVectorProperty(
+    convex_color: bpy.props.FloatVectorProperty(
         name="Inner Convex Lines", description="Color of lines to be folded to a convex angle",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    convex_style = bpy.props.EnumProperty(
+    convex_style: bpy.props.EnumProperty(
         name="Convex Lines Drawing Style", description="Drawing style of lines to be folded to a convex angle",
         default='DASH', items=line_styles)
-    convex_width = bpy.props.FloatProperty(
+    convex_width: bpy.props.FloatProperty(
         name="Convex Lines Thickness", description="Relative thickness of concave lines",
         default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
-    concave_color = bpy.props.FloatVectorProperty(
+    concave_color: bpy.props.FloatVectorProperty(
         name="Inner Concave Lines", description="Color of lines to be folded to a concave angle",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    concave_style = bpy.props.EnumProperty(
+    concave_style: bpy.props.EnumProperty(
         name="Concave Lines Drawing Style", description="Drawing style of lines to be folded to a concave angle",
         default='DASHDOT', items=line_styles)
-    concave_width = bpy.props.FloatProperty(
+    concave_width: bpy.props.FloatProperty(
         name="Concave Lines Thickness", description="Relative thickness of concave lines",
         default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
-    freestyle_color = bpy.props.FloatVectorProperty(
+    freestyle_color: bpy.props.FloatVectorProperty(
         name="Freestyle Edges", description="Color of lines marked as Freestyle Edge",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    freestyle_style = bpy.props.EnumProperty(
+    freestyle_style: bpy.props.EnumProperty(
         name="Freestyle Edges Drawing Style", description="Drawing style of Freestyle Edges",
         default='SOLID', items=line_styles)
-    freestyle_width = bpy.props.FloatProperty(
+    freestyle_width: bpy.props.FloatProperty(
         name="Freestyle Edges Thickness", description="Relative thickness of Freestyle edges",
         default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
-    use_inbg = bpy.props.BoolProperty(
+    use_inbg: bpy.props.BoolProperty(
         name="Highlight Inner Lines", description="Add another line below every line to improve contrast",
         default=True)
-    inbg_color = bpy.props.FloatVectorProperty(
+    inbg_color: bpy.props.FloatVectorProperty(
         name="Inner Highlight", description="Color of the highlight for inner lines",
         default=(1.0, 1.0, 1.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    inbg_width = bpy.props.FloatProperty(
+    inbg_width: bpy.props.FloatProperty(
         name="Inner Highlight Thickness", description="Relative thickness of the highlighting lines",
         default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
 
-    sticker_fill = bpy.props.FloatVectorProperty(
+    sticker_fill: bpy.props.FloatVectorProperty(
         name="Tabs Fill", description="Fill color of sticking tabs",
         default=(0.9, 0.9, 0.9, 1.0), min=0, max=1, subtype='COLOR', size=4)
-    text_color = bpy.props.FloatVectorProperty(
+    text_color: bpy.props.FloatVectorProperty(
         name="Text Color", description="Color of all text used in the document",
         default=(0.0, 0.0, 0.0, 1.0), min=0, max=1, subtype='COLOR', size=4)
 bpy.utils.register_class(PaperModelStyle)
@@ -1982,25 +1982,25 @@ class ExportPaperModel(bpy.types.Operator):
     bl_idname = "export_mesh.paper_model"
     bl_label = "Export Paper Model"
     bl_description = "Export the selected object's net and optionally bake its texture"
-    filepath = bpy.props.StringProperty(
+    filepath: bpy.props.StringProperty(
         name="File Path", description="Target file to save the SVG", options={'SKIP_SAVE'})
-    filename = bpy.props.StringProperty(
+    filename: bpy.props.StringProperty(
         name="File Name", description="Name of the file", options={'SKIP_SAVE'})
-    directory = bpy.props.StringProperty(
+    directory: bpy.props.StringProperty(
         name="Directory", description="Directory of the file", options={'SKIP_SAVE'})
-    page_size_preset = bpy.props.EnumProperty(
+    page_size_preset: bpy.props.EnumProperty(
         name="Page Size", description="Size of the exported document",
         default='A4', update=page_size_preset_changed, items=global_paper_sizes)
-    output_size_x = bpy.props.FloatProperty(
+    output_size_x: bpy.props.FloatProperty(
         name="Page Width", description="Width of the exported document",
         default=0.210, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
-    output_size_y = bpy.props.FloatProperty(
+    output_size_y: bpy.props.FloatProperty(
         name="Page Height", description="Height of the exported document",
         default=0.297, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
-    output_margin = bpy.props.FloatProperty(
+    output_margin: bpy.props.FloatProperty(
         name="Page Margin", description="Distance from page borders to the printable area",
         default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH")
-    output_type = bpy.props.EnumProperty(
+    output_type: bpy.props.EnumProperty(
         name="Textures", description="Source of a texture for the model",
         default='NONE', items=[
             ('NONE', "No Texture", "Export the net only"),
@@ -2009,47 +2009,47 @@ class ExportPaperModel(bpy.types.Operator):
             ('RENDER', "Full Render", "Render the material in actual scene illumination"),
             ('SELECTED_TO_ACTIVE', "Selected to Active", "Render all selected surrounding objects as a texture")
         ])
-    do_create_stickers = bpy.props.BoolProperty(
+    do_create_stickers: bpy.props.BoolProperty(
         name="Create Tabs", description="Create gluing tabs around the net (useful for paper)",
         default=True)
-    do_create_numbers = bpy.props.BoolProperty(
+    do_create_numbers: bpy.props.BoolProperty(
         name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together",
         default=True)
-    sticker_width = bpy.props.FloatProperty(
+    sticker_width: bpy.props.FloatProperty(
         name="Tabs and Text Size", description="Width of gluing tabs and their numbers",
         default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
-    angle_epsilon = bpy.props.FloatProperty(
+    angle_epsilon: bpy.props.FloatProperty(
         name="Hidden Edge Angle", description="Folds with angle below this limit will not be drawn",
         default=pi/360, min=0, soft_max=pi/4, step=0.01, subtype="ANGLE", unit="ROTATION")
-    output_dpi = bpy.props.FloatProperty(
+    output_dpi: bpy.props.FloatProperty(
         name="Resolution (DPI)", description="Resolution of images in pixels per inch",
         default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
-    file_format = bpy.props.EnumProperty(
+    file_format: bpy.props.EnumProperty(
         name="Document Format", description="File format of the exported net",
         default='PDF', items=[
             ('PDF', "PDF", "Adobe Portable Document Format 1.4"),
             ('SVG', "SVG", "W3C Scalable Vector Graphics"),
         ])
-    image_packing = bpy.props.EnumProperty(
+    image_packing: bpy.props.EnumProperty(
         name="Image Packing Method", description="Method of attaching baked image(s) to the SVG",
         default='ISLAND_EMBED', items=[
             ('PAGE_LINK', "Single Linked", "Bake one image per page of output and save it separately"),
             ('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
             ('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")
         ])
-    scale = bpy.props.FloatProperty(
+    scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
-    do_create_uvmap = bpy.props.BoolProperty(
+    do_create_uvmap: bpy.props.BoolProperty(
         name="Create UVMap", description="Create a new UV Map showing the islands and page layout",
         default=False, options={'SKIP_SAVE'})
-    ui_expanded_document = bpy.props.BoolProperty(
+    ui_expanded_document: bpy.props.BoolProperty(
         name="Show Document Settings Expanded", description="Shows the box 'Document Settings' expanded in user interface",
         default=True, options={'SKIP_SAVE'})
-    ui_expanded_style = bpy.props.BoolProperty(
+    ui_expanded_style: bpy.props.BoolProperty(
         name="Show Style Settings Expanded", description="Shows the box 'Colors and Style' expanded in user interface",
         default=False, options={'SKIP_SAVE'})
-    style = bpy.props.PointerProperty(type=PaperModelStyle)
+    style: bpy.props.PointerProperty(type=PaperModelStyle)
 
     unfolder = None
 
@@ -2395,56 +2395,66 @@ def island_item_changed(self, context):
 
 
 class FaceList(bpy.types.PropertyGroup):
-    id = bpy.props.IntProperty(name="Face ID")
-bpy.utils.register_class(FaceList)
+    id: bpy.props.IntProperty(name="Face ID")
 
 
 class IslandList(bpy.types.PropertyGroup):
-    faces = bpy.props.CollectionProperty(
+    faces: bpy.props.CollectionProperty(
         name="Faces", description="Faces belonging to this island", type=FaceList)
-    label = bpy.props.StringProperty(
+    label: bpy.props.StringProperty(
         name="Label", description="Label on this island",
         default="", update=label_changed)
-    abbreviation = bpy.props.StringProperty(
+    abbreviation: bpy.props.StringProperty(
         name="Abbreviation", description="Three-letter label to use when there is not enough space",
         default="", update=island_item_changed)
-    auto_label = bpy.props.BoolProperty(
+    auto_label: bpy.props.BoolProperty(
         name="Auto Label", description="Generate the label automatically",
         default=True, update=island_item_changed)
-    auto_abbrev = bpy.props.BoolProperty(
+    auto_abbrev: bpy.props.BoolProperty(
         name="Auto Abbreviation", description="Generate the abbreviation automatically",
         default=True, update=island_item_changed)
-bpy.utils.register_class(IslandList)
 
 
 class PaperModelSettings(bpy.types.PropertyGroup):
-    display_islands = bpy.props.BoolProperty(
+    display_islands: bpy.props.BoolProperty(
         name="Highlight selected island", description="Highlight faces corresponding to the selected island in the 3D View",
         options={'SKIP_SAVE'}, update=display_islands_changed)
-    islands_alpha = bpy.props.FloatProperty(
+    islands_alpha: bpy.props.FloatProperty(
         name="Opacity", description="Opacity of island highlighting",
         min=0.0, max=1.0, default=0.3)
-    limit_by_page = bpy.props.BoolProperty(
+    limit_by_page: bpy.props.BoolProperty(
         name="Limit Island Size", description="Do not create islands larger than given dimensions",
         default=False, update=page_size_preset_changed)
-    page_size_preset = bpy.props.EnumProperty(
+    page_size_preset: bpy.props.EnumProperty(
         name="Page Size", description="Maximal size of an island",
         default='A4', update=page_size_preset_changed, items=global_paper_sizes)
-    output_size_x = bpy.props.FloatProperty(
+    output_size_x: bpy.props.FloatProperty(
         name="Width", description="Maximal width of an island",
         default=0.2, soft_min=0.105, soft_max=0.841, subtype="UNSIGNED", unit="LENGTH")
-    output_size_y = bpy.props.FloatProperty(
+    output_size_y: bpy.props.FloatProperty(
         name="Height", description="Maximal height of an island",
         default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
-    scale = bpy.props.FloatProperty(
+    scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
-bpy.utils.register_class(PaperModelSettings)
+
+
+module_classes = (
+    Unfold,
+    ExportPaperModel,
+    ClearAllSeams,
+    FaceList,
+    IslandList,
+    PaperModelSettings,
+    VIEW3D_MT_paper_model_presets,
+    VIEW3D_PT_paper_model_islands,
+    VIEW3D_PT_paper_model_tools,
+)
 
 
 def register():
-    bpy.utils.register_module(__name__)
-
+    for cls in module_classes:
+        bpy.utils.register_class(cls)
     bpy.types.Scene.paper_model = bpy.props.PointerProperty(
         name="Paper Model", description="Settings of the Export Paper Model script",
         type=PaperModelSettings, options={'SKIP_SAVE'})
@@ -2457,11 +2467,12 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_module(__name__)
     bpy.types.INFO_MT_file_export.remove(menu_func)
     if display_islands.handle:
         bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
         display_islands.handle = None
+    for cls in reversed(module_classes):
+        bpy.utils.unregister_class(cls)
 
 
 if __name__ == "__main__":
