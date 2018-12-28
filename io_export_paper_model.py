@@ -138,7 +138,7 @@ def cage_fit(points, aspect):
             rot_polygon = [rot @ p for p in polygon]
             left, right = [fn(rot_polygon, key=lambda p: p.to_tuple()) for fn in (min, max)]
             bottom, top = [fn(rot_polygon, key=lambda p: p.yx.to_tuple()) for fn in (min, max)]
-            print(f"{rot_polygon.index(left)}-{rot_polygon.index(right)}, {rot_polygon.index(bottom)}-{rot_polygon.index(top)}")
+            #print(f"{rot_polygon.index(left)}-{rot_polygon.index(right)}, {rot_polygon.index(bottom)}-{rot_polygon.index(top)}")
             horz, vert = right - left, top - bottom
             # solve (rot * a).y == (rot * b).y
             yield max(aspect * horz.x, vert.y), sinx, cosx
@@ -153,10 +153,10 @@ def cage_fit(points, aspect):
             sinx, cosx = 2 * t / (1 + t**2), (1 - t**2) / (1 + t**2)
             rot = M.Matrix(((cosx, -sinx), (sinx, cosx)))
             for p in rot_polygon:
-                p[:] = rot * p  # note: this also modifies left, right, bottom, top
-            print(f"solve {aspect * (right - left).x} == {(top - bottom).y} with aspect = {aspect}")
+                p[:] = rot @ p  # note: this also modifies left, right, bottom, top
+            #print(f"solve {aspect * (right - left).x} == {(top - bottom).y} with aspect = {aspect}")
             if left.x < right.x and bottom.y < top.y and all(left.x <= p.x <= right.x and bottom.y <= p.y <= top.y for p in rot_polygon):
-                print(f"yield {max(aspect * (right - left).x, (top - bottom).y)}")
+                #print(f"yield {max(aspect * (right - left).x, (top - bottom).y)}")
                 yield max(aspect * (right - left).x, (top - bottom).y), sinx, cosx
     polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
     height, sinx, cosx = min(guesses(polygon))
@@ -288,10 +288,6 @@ class Unfolder:
                 sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear, bk.use_pass_direct, bk.use_pass_indirect = recall
             else:
                 rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
-            if not properties.do_create_uvmap and False:
-                bm = self.mesh.data
-                bm.loops.layers.uv.remove(self.looptex)
-                bm.faces.layers.tex.remove(self.facetex)
 
         exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'), properties.angle_epsilon)
         exporter.do_create_stickers = properties.do_create_stickers
@@ -306,7 +302,6 @@ class Mesh:
         self.data = bmesh
         self.matrix = matrix.to_3x3()
         self.looptex = bmesh.loops.layers.uv.new("Unfolded")
-        self.facetex = bmesh.faces.layers.tex.new("Unfolded")
         self.edges = {bmedge: Edge(bmedge) for bmedge in bmesh.edges}
         self.islands = list()
         self.pages = list()
@@ -317,7 +312,6 @@ class Mesh:
     
     def delete_uvmap(self):
         self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
-        self.data.faces.layers.tex.remove(self.facetex) if self.facetex else None
     
     def mark_cuts(self):
         for bmedge, edge in self.edges.items():
@@ -637,7 +631,7 @@ class Mesh:
             bpy.data.images.remove(image)
     
     def bake(self, faces, image):
-        if not (self.looptex and self.facetex):
+        if not self.looptex:
             raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
         is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
         ob = bpy.context.active_object
@@ -668,12 +662,7 @@ class Mesh:
             for uv in ignored_uvs:
                 uv *= -1
         else:
-            me.uv_textures.active = me.uv_textures[self.facetex.name]
-            for face in faces:
-                face[self.facetex].image = image
             bpy.ops.object.bake_image()
-            for face in faces:
-                face[self.facetex].image = None
 
 
 class Edge:
@@ -1201,9 +1190,9 @@ class Sticker:
 
         # fix overlaps with the most often neighbour - its sticking target
         if first_vertex == other_second:
-            cos_a = max(cos_a, (edge*other_edge) / (edge.length_squared))  # angles between pi/3 and 0
+            cos_a = max(cos_a, edge.dot(other_edge) / (edge.length_squared))  # angles between pi/3 and 0
         elif second_vertex == other_first:
-            cos_b = max(cos_b, (edge*other_edge) / (edge.length_squared))  # angles between pi/3 and 0
+            cos_b = max(cos_b, edge.dot(other_edge) / (edge.length_squared))  # angles between pi/3 and 0
 
         # Fix tabs for sticking targets with small angles
         try:
@@ -1212,8 +1201,8 @@ class Sticker:
             other_edge_neighbor_a = other_face_neighbor_left.vb.co - other.vb.co
             other_edge_neighbor_b = other_face_neighbor_right.va.co - other.va.co
             # Adjacent angles in the face
-            cos_a = max(cos_a, (-other_edge*other_edge_neighbor_a) / (other_edge.length*other_edge_neighbor_a.length))
-            cos_b = max(cos_b, (other_edge*other_edge_neighbor_b) / (other_edge.length*other_edge_neighbor_b.length))
+            cos_a = max(cos_a, -other_edge.dot(other_edge_neighbor_a) / (other_edge.length*other_edge_neighbor_a.length))
+            cos_b = max(cos_b, other_edge.dot(other_edge_neighbor_b) / (other_edge.length*other_edge_neighbor_b.length))
         except AttributeError:  # neighbor data may be missing for edges with 3+ faces
             pass
         except ZeroDivisionError:
@@ -1672,7 +1661,7 @@ class PDF:
                                 size=1000*marker.width))
                     elif isinstance(marker, Arrow):
                         size = 1000 * marker.size
-                        position = 1000 * (marker.center + marker.rot*marker.size*M.Vector((0, -0.9)))
+                        position = 1000 * (marker.center + marker.size * marker.rot @ M.Vector((0, -0.9)))
                         data_markers.append(self.command_arrow.format(
                             index=marker.text,
                             arrow_pos=1000 * marker.center,
@@ -1799,7 +1788,7 @@ class Unfold(bpy.types.Operator):
     def draw(self, context):
         layout = self.layout
         col = layout.column()
-        col.active = not self.object or len(self.object.data.uv_textures) < 8
+        col.active = not self.object or len(self.object.data.uv_layers) < 8
         col.prop(self.properties, "do_create_uvmap")
         layout.label(text="Edge Cutting Factors:")
         col = layout.column(align=True)
@@ -1834,6 +1823,7 @@ class Unfold(bpy.types.Operator):
             sce.paper_model.display_islands = recall_display_islands
             return {'CANCELLED'}
         mesh = self.object.data
+        mesh.update()
         if mesh.paper_island_list:
             unfolder.copy_island_names(mesh.paper_island_list)
         island_list = mesh.paper_island_list
@@ -1852,7 +1842,6 @@ class Unfold(bpy.types.Operator):
                 (island.abbreviation, True, True))
             island_item_changed(list_item, context)
             mesh.paper_island_index = -1
-            mesh.show_edge_seams = True
 
         del unfolder
         bpy.ops.object.mode_set(mode=recall_mode)
@@ -2109,8 +2098,8 @@ class ExportPaperModel(bpy.types.Operator):
 
         row = layout.row(align=True)
         row.menu("VIEW3D_MT_paper_model_presets", text=bpy.types.VIEW3D_MT_paper_model_presets.bl_label)
-        row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMIN')
-        row.operator("export_mesh.paper_model_preset_add", text="", icon='ZOOMOUT').remove_active = True
+        row.operator("export_mesh.paper_model_preset_add", text="", icon='ADD')
+        row.operator("export_mesh.paper_model_preset_add", text="", icon='REMOVE').remove_active = True
 
         # a little hack: this prints out something like "Scale: 1: 72"
         layout.prop(self.properties, "scale", text="Scale: 1")
@@ -2152,7 +2141,7 @@ class ExportPaperModel(bpy.types.Operator):
             box.prop(self.properties, "output_type")
             col = box.column()
             col.active = (self.output_type != 'NONE')
-            if len(self.object.data.uv_textures) == 8:
+            if len(self.object.data.uv_layers) == 8:
                 col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
             elif context.scene.render.engine not in ('BLENDER_RENDER', 'CYCLES') and self.output_type != 'NONE':
                 col.label(text="Blender Internal engine will be used for texture baking.", icon='ERROR')
@@ -2206,8 +2195,12 @@ class ExportPaperModel(bpy.types.Operator):
             box.prop(self.style, "text_color")
 
 
-def menu_func(self, context):
-    self.layout.operator("export_mesh.paper_model", text="Paper Model (.svg)")
+def menu_func_export(self, context):
+    self.layout.operator("export_mesh.paper_model", text="Paper Model (.pdf/.svg)")
+
+
+def menu_func_unfold(self, context):
+    self.layout.operator("mesh.unfold", text="Unfold")
 
 
 class VIEW3D_MT_paper_model_presets(bpy.types.Menu):
@@ -2250,7 +2243,7 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
         layout.operator("export_mesh.paper_model")
 
         col = layout.column(align=True)
-        col.label("Customization:")
+        col.label(text="Customization:")
         col.operator("mesh.unfold")
 
         if context.mode == 'EDIT_MESH':
@@ -2273,11 +2266,12 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
         sub.prop(props, "output_size_y")
 
 
-class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
-    bl_label = "Islands"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "TOOLS"
-    bl_category = "Paper Model"
+class DATA_PT_paper_model_islands(bpy.types.Panel):
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "data"
+    bl_label = "Paper Model Islands"
+    COMPAT_ENGINES = {'BLENDER_RENDER', 'BLENDER_EEVEE', 'BLENDER_WORKBENCH'}
 
     def draw(self, context):
         layout = self.layout
@@ -2303,10 +2297,10 @@ class VIEW3D_PT_paper_model_islands(bpy.types.Panel):
                 row.prop(list_item, "abbreviation")
         else:
             layout.label(text="Not unfolded")
-            layout.box().label("Use the 'Unfold' tool")
+            layout.box().label(text="Use the 'Unfold' tool")
         sub = layout.column(align=True)
         sub.active = bool(mesh and mesh.paper_island_list)
-        sub.prop(sce.paper_model, "display_islands", icon='RESTRICT_VIEW_OFF')
+        sub.prop(sce.paper_model, "display_islands", icon='UV_ISLANDSEL')
         row = sub.row(align=True)
         row.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
         row.prop(sce.paper_model, "islands_alpha", slider=True)
@@ -2443,12 +2437,13 @@ module_classes = (
     Unfold,
     ExportPaperModel,
     ClearAllSeams,
+    AddPresetPaperModel,
     FaceList,
     IslandList,
     PaperModelSettings,
     VIEW3D_MT_paper_model_presets,
-    VIEW3D_PT_paper_model_islands,
-    VIEW3D_PT_paper_model_tools,
+    DATA_PT_paper_model_islands,
+    #VIEW3D_PT_paper_model_tools,
 )
 
 
@@ -2463,11 +2458,13 @@ def register():
     bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(
         name="Island List Index",
         default=-1, min=-1, max=100, options={'SKIP_SAVE'})
-    bpy.types.INFO_MT_file_export.append(menu_func)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
+    bpy.types.VIEW3D_MT_edit_mesh.prepend(menu_func_unfold)
 
 
 def unregister():
-    bpy.types.INFO_MT_file_export.remove(menu_func)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+    bpy.types.VIEW3D_MT_edit_mesh.remove(menu_func_unfold)
     if display_islands.handle:
         bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
         display_islands.handle = None
