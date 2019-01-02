@@ -189,14 +189,14 @@ class UnfoldError(ValueError):
 
 
 class Unfolder:
-    def __init__(self, ob, do_create_uvmap=False):
+    def __init__(self, ob):
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
         self.mesh.check_correct()
-        self.do_create_uvmap = do_create_uvmap
+        self.do_create_uvmap = False
     
     def __del__(self):
-        if not getattr(self, "do_create_uvmap", False):
+        if not self.do_create_uvmap:
             self.mesh.delete_uvmap()
 
     def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1):
@@ -259,21 +259,16 @@ class Unfolder:
             sce = bpy.context.scene
             rd = sce.render
             bk = rd.bake
-            if rd.engine == 'CYCLES':
-                recall = sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear, bk.use_pass_direct, bk.use_pass_indirect
-                # recall use_pass...
-                lookup = {'TEXTURE': 'DIFFUSE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
-                sce.cycles.bake_type = lookup[properties.output_type]
-                bk.use_pass_direct = bk.use_pass_indirect = (properties.output_type != 'TEXTURE')
-                bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
-                bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 1, 10, False, False
-            else:
-                recall = rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear
-                rd.engine = 'BLENDER_RENDER'
-                lookup = {'TEXTURE': 'TEXTURE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'FULL', 'SELECTED_TO_ACTIVE': 'FULL'}
-                rd.bake_type = lookup[properties.output_type]
-                rd.use_bake_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
-                rd.bake_margin, rd.bake_distance, rd.bake_bias, rd.use_bake_to_vertex_color, rd.use_bake_clear = 1, 0, 0.001, False, False
+            # TODO: do we really need all this recollection?
+            recall = rd.engine, sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear
+            rd.engine = 'CYCLES'
+            recall_pass = {p: getattr(bk, f"use_pass_{p}") for p in ('ambient_occlusion', 'color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'subsurface', 'transmission')}
+            for p in recall_pass:
+                setattr(bk, f"use_pass_{p}", (properties.output_type != 'TEXTURE'))
+            lookup = {'TEXTURE': 'DIFFUSE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
+            sce.cycles.bake_type = lookup[properties.output_type]
+            bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
+            bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 1, 10, False, False
 
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(printable_size * ppm, filepath)
@@ -283,11 +278,9 @@ class Unfolder:
             elif image_packing == 'ISLAND_EMBED':
                 self.mesh.save_separate_images(ppm, filepath, embed=Exporter.encode_image)
 
-            # revoke settings
-            if rd.engine == 'CYCLES':
-                sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear, bk.use_pass_direct, bk.use_pass_indirect = recall
-            else:
-                rd.engine, rd.bake_type, rd.use_bake_to_vertex_color, rd.use_bake_selected_to_active, rd.bake_distance, rd.bake_bias, rd.bake_margin, rd.use_bake_clear = recall
+            rd.engine, sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = recall
+            for p, v in recall_pass.items():
+                setattr(bk, f"use_pass_{p}", v)
 
         exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'), properties.angle_epsilon)
         exporter.do_create_stickers = properties.do_create_stickers
@@ -519,7 +512,7 @@ class Mesh:
             bottom_left = M.Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
             #DEBUG
             top_right = M.Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
-            print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
+            #print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
             for point in points:
                 point -= bottom_left
             island.bounding_box = M.Vector((max(v.x for v in points), max(v.y for v in points)))
@@ -604,9 +597,9 @@ class Mesh:
 
     def save_image(self, page_size_pixels: M.Vector, filename):
         for page in self.pages:
-            image = create_blank_image("{} {} Unfolded".format(self.data.name[:14], page.name), page_size_pixels, alpha=1)
+            image = create_blank_image("Page {}".format(page.name), page_size_pixels, alpha=1)
             image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
-            faces = [uvface.face.index for island in page.islands for uvface in island.faces]
+            faces = [face.index for island in page.islands for face in island.faces]
             self.bake(faces, image)
             image.save()
             image.user_clear()
@@ -633,36 +626,33 @@ class Mesh:
     def bake(self, faces, image):
         if not self.looptex:
             raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
-        is_cycles = (bpy.context.scene.render.engine == 'CYCLES')
         ob = bpy.context.active_object
         me = ob.data
-        if is_cycles:
-            # please excuse the following mess. Cycles baking API does not seem to allow better.
-            # start by adding a disconnected image node that defines the bake target
-            temp_nodes = dict()
-            for mat in me.materials:
-                mat.use_nodes = True
-                img = mat.node_tree.nodes.new('ShaderNodeTexImage')
-                img.image = image
-                temp_nodes[mat] = img
-                mat.node_tree.nodes.active = img
-            # move all excess faces to negative numbers (that is the only way to disable them)
-            ignored_uvs = [loop[self.looptex].uv for f in self.data.faces if f not in faces for loop in f.loops]
-            for uv in ignored_uvs:
-                uv *= -1
-            bake_type = bpy.context.scene.cycles.bake_type
-            sta = bpy.context.scene.render.bake.use_selected_to_active
-            try:
-                bpy.ops.object.bake(type=bake_type, margin=1, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
-            except RuntimeError as e:
-                raise UnfoldError(*e.args)
-            finally:
-                for mat, node in temp_nodes.items():
-                    mat.node_tree.nodes.remove(node)
-            for uv in ignored_uvs:
-                uv *= -1
-        else:
-            bpy.ops.object.bake_image()
+        # in Cycles, the image for baking is defined by the active Image Node
+        temp_nodes = dict()
+        for mat in me.materials:
+            mat.use_nodes = True
+            img = mat.node_tree.nodes.new('ShaderNodeTexImage')
+            img.image = image
+            temp_nodes[mat] = img
+            mat.node_tree.nodes.active = img
+        # move all excess faces to negative numbers (that is the only way to disable them)
+        ignored_uvs = [loop[self.looptex].uv for f in self.data.faces if f not in faces for loop in f.loops]
+        for uv in ignored_uvs:
+            uv *= -1
+        bake_type = bpy.context.scene.cycles.bake_type
+        sta = bpy.context.scene.render.bake.use_selected_to_active
+        try:
+            ob.update_from_editmode()
+            me.uv_layers.active = me.uv_layers[self.looptex.name]
+            bpy.ops.object.bake(type=bake_type, margin=1, use_selected_to_active=sta, cage_extrusion=100, use_clear=False)
+        except RuntimeError as e:
+            raise UnfoldError(*e.args)
+        finally:
+            for mat, node in temp_nodes.items():
+                mat.node_tree.nodes.remove(node)
+        for uv in ignored_uvs:
+            uv *= -1
 
 
 class Edge:
@@ -790,8 +780,7 @@ class Island:
         scale_x, scale_y = 1 / cage_size.x, 1 / cage_size.y
         for loop, uvvertex in self.vertices.items():
             uv = uvvertex.co + self.pos
-            co = uv.x * scale_x, uv.y * scale_y
-            loop[tex].uv = co
+            loop[tex].uv = uv.x * scale_x, uv.y * scale_y
 
     def save_uv_separate(self, tex):
         """Save UV Coordinates of all UVFaces to a given UV texture, spanning from 0 to 1
@@ -1410,6 +1399,7 @@ class SVG:
                                 break
                         data_outer.append("M {} Z".format(line_through(data_loop)))
 
+                    visited_edges = set()
                     for loop, uvedge in island.edges.items():
                         edge = mesh.edges[loop.edge]
                         if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
@@ -1419,7 +1409,9 @@ class SVG:
                         if edge.freestyle:
                             data_freestyle.append(data_uvedge)
                         # each uvedge is in two opposite-oriented variants; we want to add each only once
-                        if uvedge.sticker or uvedge.uvface.flipped != (uvedge.va.loop.index > uvedge.vb.loop.index):
+                        vertex_pair = frozenset((uvedge.va, uvedge.vb))
+                        if vertex_pair not in visited_edges:
+                            visited_edges.add(vertex_pair)
                             if edge.angle > self.angle_epsilon:
                                 data_convex.append(data_uvedge)
                             elif edge.angle < -self.angle_epsilon:
@@ -2047,6 +2039,7 @@ class ExportPaperModel(bpy.types.Operator):
         return context.active_object and context.active_object.type == 'MESH'
 
     def execute(self, context):
+        self.unfolder.do_create_uvmap = self.do_create_uvmap
         try:
             if self.object.data.paper_island_list:
                 self.unfolder.copy_island_names(self.object.data.paper_island_list)
@@ -2078,7 +2071,7 @@ class ExportPaperModel(bpy.types.Operator):
         self.object = context.active_object
         cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
         try:
-            self.unfolder = Unfolder(self.object, self.do_create_uvmap)
+            self.unfolder = Unfolder(self.object)
             self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale)
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
@@ -2143,8 +2136,8 @@ class ExportPaperModel(bpy.types.Operator):
             col.active = (self.output_type != 'NONE')
             if len(self.object.data.uv_layers) == 8:
                 col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
-            elif context.scene.render.engine not in ('BLENDER_RENDER', 'CYCLES') and self.output_type != 'NONE':
-                col.label(text="Blender Internal engine will be used for texture baking.", icon='ERROR')
+            elif context.scene.render.engine != 'CYCLES' and self.output_type != 'NONE':
+                col.label(text="Cycles will be used for texture baking.", icon='ERROR')
             col.prop(self.properties, "output_dpi")
             row = col.row()
             row.active = self.file_format == 'SVG'
