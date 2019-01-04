@@ -599,15 +599,15 @@ class Mesh:
         for page in self.pages:
             image = create_blank_image("Page {}".format(page.name), page_size_pixels, alpha=1)
             image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
-            faces = [face.index for island in page.islands for face in island.faces]
+            faces = [face for island in page.islands for face in island.faces]
             self.bake(faces, image)
             image.save()
             image.user_clear()
             bpy.data.images.remove(image)
 
     def save_separate_images(self, scale, filepath, embed=None):
-        for island in self.islands:
-            image_name = "Island.001"
+        for i, island in enumerate(self.islands):
+            image_name = "Island {}".format(i)
             image = create_blank_image(image_name, island.bounding_box * scale, alpha=0)
             self.bake(island.faces.keys(), image)
             if embed:
