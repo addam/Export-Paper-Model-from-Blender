@@ -41,6 +41,8 @@ bl_info = {
 
 import bpy
 import bl_operators
+import gpu
+from gpu_extras.batch import batch_for_shader
 import bgl
 import bmesh
 import mathutils as M
@@ -1804,7 +1806,8 @@ class Unfold(bpy.types.Operator):
             'CONCAVE': self.priority_effect_concave,
             'LENGTH': self.priority_effect_length}
         try:
-            unfolder = Unfolder(self.object, self.do_create_uvmap)
+            unfolder = Unfolder(self.object)
+            unfolder.do_create_uvmap = self.do_create_uvmap
             scale = sce.unit_settings.scale_length / settings.scale
             unfolder.prepare(cage_size, priority_effect, scale)
             unfolder.mesh.mark_cuts()
@@ -2290,7 +2293,7 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
                 row.prop(list_item, "abbreviation")
         else:
             layout.label(text="Not unfolded")
-            layout.box().label(text="Use the 'Unfold' tool")
+            layout.box().label(text="Use the 'Mesh -> Unfold' tool")
         sub = layout.column(align=True)
         sub.active = bool(mesh and mesh.paper_island_list)
         sub.prop(sce.paper_model, "display_islands", icon='UV_ISLANDSEL')
@@ -2307,31 +2310,24 @@ def display_islands(self, context):
     mesh = ob.data
     if not mesh.paper_island_list or mesh.paper_island_index == -1:
         return
-
-    bgl.glMatrixMode(bgl.GL_PROJECTION)
-    perspMatrix = context.space_data.region_3d.perspective_matrix
-    perspBuff = bgl.Buffer(bgl.GL_FLOAT, (4, 4), perspMatrix.transposed())
-    bgl.glLoadMatrixf(perspBuff)
-    bgl.glMatrixMode(bgl.GL_MODELVIEW)
-    objectBuff = bgl.Buffer(bgl.GL_FLOAT, (4, 4), ob.matrix_world.transposed())
-    bgl.glLoadMatrixf(objectBuff)
+    if not display_islands.shader:
+        display_islands.shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
+    if not display_islands.batch:
+        island = mesh.paper_island_list[mesh.paper_island_index]
+        faces = {face.id for face in island.faces}
+        mesh.calc_loop_triangles()
+        positions = [v.co for v in mesh.vertices]
+        indices = [list(tri.vertices) for tri in mesh.loop_triangles if tri.polygon_index in faces]
+        display_islands.batch = batch_for_shader(display_islands.shader, 'TRIS', {"pos": positions}, indices=indices)
+    alpha = context.scene.paper_model.islands_alpha
     bgl.glEnable(bgl.GL_BLEND)
     bgl.glBlendFunc(bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA)
-    bgl.glEnable(bgl.GL_POLYGON_OFFSET_FILL)
-    bgl.glPolygonOffset(0, -10)  # offset in Zbuffer to remove flicker
-    bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
-    bgl.glColor4f(1.0, 0.4, 0.0, self.islands_alpha)
-    island = mesh.paper_island_list[mesh.paper_island_index]
-    for lface in island.faces:
-        face = mesh.polygons[lface.id]
-        bgl.glBegin(bgl.GL_POLYGON)
-        for vertex_id in face.vertices:
-            vertex = mesh.vertices[vertex_id]
-            bgl.glVertex4f(*vertex.co.to_4d())
-        bgl.glEnd()
-    bgl.glPolygonOffset(0.0, 0.0)
-    bgl.glDisable(bgl.GL_POLYGON_OFFSET_FILL)
-    bgl.glLoadIdentity()
+    shader = display_islands.shader
+    shader.bind()
+    shader.uniform_float("color", (1, 0.4, 0, alpha))
+    display_islands.batch.draw(shader)
+display_islands.shader = None
+display_islands.batch = None
 display_islands.handle = None
 
 
