@@ -2303,21 +2303,27 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
 
 
 def display_islands(self, context):
-    # TODO: save the vertex positions and don't recalculate them always?
     ob = context.active_object
     if not ob or ob.type != 'MESH':
         return
-    mesh = ob.data
-    if not mesh.paper_island_list or mesh.paper_island_index == -1:
+    me = ob.data
+    if not me.paper_island_list or me.paper_island_index == -1:
         return
+    if ob.mode == 'EDIT':
+        bm = bmesh.from_edit_mesh(me)
+    else:
+        bm = bmesh.new()
+        bm.from_mesh(me)
     if not display_islands.shader:
         display_islands.shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
     if not display_islands.batch:
-        island = mesh.paper_island_list[mesh.paper_island_index]
+        from functools import partial
+        from collections import defaultdict
+        island = me.paper_island_list[me.paper_island_index]
         faces = {face.id for face in island.faces}
-        mesh.calc_loop_triangles()
-        positions = [v.co for v in mesh.vertices]
-        indices = [list(tri.vertices) for tri in mesh.loop_triangles if tri.polygon_index in faces]
+        triangles = [tri for tri in bm.calc_loop_triangles() if tri[0].face.index in faces]
+        positions = [v.co for v in bm.verts]
+        indices = [[l.vert.index for l in tri] for tri in triangles]
         display_islands.batch = batch_for_shader(display_islands.shader, 'TRIS', {"pos": positions}, indices=indices)
     alpha = context.scene.paper_model.islands_alpha
     bgl.glEnable(bgl.GL_BLEND)
