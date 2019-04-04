@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This script is Free software. Please share and reuse.
-# ♡2010-2018 Adam Dominec <adominec@gmail.com>
+# ♡2010-2019 Adam Dominec <adominec@gmail.com>
 
 ## Code structure
 # This file consists of several components, in this order:
