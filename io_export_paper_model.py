@@ -2196,6 +2196,59 @@ def menu_func_unfold(self, context):
     self.layout.operator("mesh.unfold", text="Unfold")
 
 
+class SelectIsland(bpy.types.Operator):
+    """Blender Operator: select all faces of the active island"""
+
+    bl_idname = "mesh.select_paper_island"
+    bl_label = "Select Island"
+    bl_description = "Select an island of the paper model net"
+    
+    operation: bpy.props.EnumProperty(
+        name="Operation", description="Operation with the current selection",
+        default='ADD', items=[
+            ('ADD', "Add", "Add to current selection"),
+            ('REMOVE', "Remove", "Remove from selection"),
+            ('REPLACE', "Replace", "Select only the ")
+        ])
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and context.active_object.type == 'MESH' and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        ob = context.active_object
+        me = ob.data
+        bm = bmesh.from_edit_mesh(me)
+        island = me.paper_island_list[me.paper_island_index]
+        faces = {face.id for face in island.faces}
+        edges = set()
+        verts = set()
+        if self.operation == 'REPLACE':
+            for face in bm.faces:
+                selected = face.index in faces
+                face.select = selected
+                if selected:
+                    edges.update(face.edges)
+                    verts.update(face.verts)
+            for edge in bm.edges:
+                edge.select = edge in edges
+            for vert in bm.verts:
+                vert.select = vert in verts
+        else:
+            selected = (self.operation == 'ADD')
+            for index in faces:
+                face = bm.faces[index]
+                face.select = selected
+                edges.update(face.edges)
+                verts.update(face.verts)
+            for edge in edges:
+                edge.select = any(face.select for face in edge.link_faces)
+            for vert in verts:
+                vert.select = any(edge.select for edge in vert.link_edges)
+        bmesh.update_edit_mesh(me, False, False)
+        return {'FINISHED'}
+
+
 class VIEW3D_MT_paper_model_presets(bpy.types.Menu):
     bl_label = "Paper Model Presets"
     preset_subdir = "export_mesh"
@@ -2273,12 +2326,16 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
         mesh = obj.data if obj and obj.type == 'MESH' else None
 
         if mesh and mesh.paper_island_list:
+            layout.operator("mesh.unfold", icon='FILE_REFRESH')
             layout.label(
                 text="1 island:" if len(mesh.paper_island_list) == 1 else
                 "{} islands:".format(len(mesh.paper_island_list)))
             layout.template_list(
                 'UI_UL_list', 'paper_model_island_list', mesh,
                 'paper_island_list', mesh, 'paper_island_index', rows=1, maxrows=5)
+            sub = layout.split(align=True)
+            sub.operator("mesh.select_paper_island", text="Select").operation = 'ADD'
+            sub.operator("mesh.select_paper_island", text="Deselect").operation = 'REMOVE'
             if mesh.paper_island_index >= 0:
                 list_item = mesh.paper_island_list[mesh.paper_island_index]
                 sub = layout.column(align=True)
@@ -2370,6 +2427,7 @@ module_classes = (
     Unfold,
     ExportPaperModel,
     ClearAllSeams,
+    SelectIsland,
     AddPresetPaperModel,
     FaceList,
     IslandList,
