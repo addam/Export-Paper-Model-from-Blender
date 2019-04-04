@@ -2336,6 +2336,7 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
             sub = layout.split(align=True)
             sub.operator("mesh.select_paper_island", text="Select").operation = 'ADD'
             sub.operator("mesh.select_paper_island", text="Deselect").operation = 'REMOVE'
+            sub.prop(sce.paper_model, "sync_island", toggle=True)
             if mesh.paper_island_index >= 0:
                 list_item = mesh.paper_island_list[mesh.paper_island_index]
                 sub = layout.column(align=True)
@@ -2384,6 +2385,12 @@ def island_item_changed(self, context):
         self.abbreviation, self.label, len(self.faces), "faces" if len(self.faces) > 1 else "face")
 
 
+def island_index_changed(self, context):
+    """The active island was changed"""
+    if context.scene.paper_model.sync_island:
+        bpy.ops.mesh.select_paper_island(operation='REPLACE')
+
+
 class FaceList(bpy.types.PropertyGroup):
     id: bpy.props.IntProperty(name="Face ID")
 
@@ -2406,6 +2413,9 @@ class IslandList(bpy.types.PropertyGroup):
 
 
 class PaperModelSettings(bpy.types.PropertyGroup):
+    sync_island: bpy.props.BoolProperty(
+        name="Sync", description="Keep faces of the active island selected",
+        default=False, update=island_index_changed)
     limit_by_page: bpy.props.BoolProperty(
         name="Limit Island Size", description="Do not create islands larger than given dimensions",
         default=False, update=page_size_preset_changed)
@@ -2448,7 +2458,7 @@ def register():
         name="Island List", type=IslandList)
     bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(
         name="Island List Index",
-        default=-1, min=-1, max=100, options={'SKIP_SAVE'})
+        default=-1, min=-1, max=100, options={'SKIP_SAVE'}, update=island_index_changed)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
     bpy.types.VIEW3D_MT_edit_mesh.prepend(menu_func_unfold)
 
