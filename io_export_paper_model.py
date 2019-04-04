@@ -2325,8 +2325,8 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
         obj = context.active_object
         mesh = obj.data if obj and obj.type == 'MESH' else None
 
+        layout.operator("mesh.unfold", icon='FILE_REFRESH')
         if mesh and mesh.paper_island_list:
-            layout.operator("mesh.unfold", icon='FILE_REFRESH')
             layout.label(
                 text="1 island:" if len(mesh.paper_island_list) == 1 else
                 "{} islands:".format(len(mesh.paper_island_list)))
@@ -2347,8 +2347,7 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
                 row.active = not list_item.auto_abbrev
                 row.prop(list_item, "abbreviation")
         else:
-            layout.label(text="Not unfolded")
-            layout.box().label(text="Use the 'Mesh -> Unfold' tool")
+            layout.box().label(text="Not unfolded")
 
 
 def label_changed(self, context):
