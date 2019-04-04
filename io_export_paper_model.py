@@ -700,7 +700,7 @@ class Edge:
             self.angle = -3  # just a very sharp angle
         else:
             self.angle = normal_a.angle(normal_b)
-            if loop_a.link_loop_next.vert == loop_b.link_loop_next.vert:
+            if loop_a.link_loop_next.vert == loop_b.vert:
                 self.angle *= 1 if normal_b.cross(normal_a).dot(self.vector) > 0 else -1
 
     def generate_priority(self, priority_effect, average_length):
