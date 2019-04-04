@@ -41,20 +41,13 @@ bl_info = {
 
 import bpy
 import bl_operators
-import gpu
-from gpu_extras.batch import batch_for_shader
-import bgl
 import bmesh
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain, repeat, product, combinations
-from operator import itemgetter
 from math import pi, ceil, atan2
+import os.path as os_path
 
-try:
-    import os.path as os_path
-except ImportError:
-    os_path = None
 
 try:
     from blist import blist
