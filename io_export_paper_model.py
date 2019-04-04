@@ -1503,7 +1503,7 @@ class SVG:
         fill-opacity: {sticker_alpha:.2};
     }}
     path.arrow {{
-        fill: #000;
+        fill: {text_color};
     }}
     text {{
         font-style: normal;
