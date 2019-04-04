@@ -1796,7 +1796,6 @@ class Unfold(bpy.types.Operator):
         settings = sce.paper_model
         recall_mode = context.object.mode
         bpy.ops.object.mode_set(mode='EDIT')
-        recall_display_islands, sce.paper_model.display_islands = sce.paper_model.display_islands, False
 
         self.object = context.object
 
@@ -1815,7 +1814,6 @@ class Unfold(bpy.types.Operator):
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             error.mesh_select()
             bpy.ops.object.mode_set(mode=recall_mode)
-            sce.paper_model.display_islands = recall_display_islands
             return {'CANCELLED'}
         mesh = self.object.data
         mesh.update()
@@ -1840,7 +1838,6 @@ class Unfold(bpy.types.Operator):
 
         del unfolder
         bpy.ops.object.mode_set(mode=recall_mode)
-        sce.paper_model.display_islands = recall_display_islands
         return {'FINISHED'}
 
 
@@ -2294,59 +2291,6 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
         else:
             layout.label(text="Not unfolded")
             layout.box().label(text="Use the 'Mesh -> Unfold' tool")
-        sub = layout.column(align=True)
-        sub.active = bool(mesh and mesh.paper_island_list)
-        sub.prop(sce.paper_model, "display_islands", icon='UV_ISLANDSEL')
-        row = sub.row(align=True)
-        row.active = bool(sce.paper_model.display_islands and mesh and mesh.paper_island_list)
-        row.prop(sce.paper_model, "islands_alpha", slider=True)
-
-
-def display_islands(self, context):
-    ob = context.active_object
-    if not ob or ob.type != 'MESH':
-        return
-    me = ob.data
-    if not me.paper_island_list or me.paper_island_index == -1:
-        return
-    if ob.mode == 'EDIT':
-        bm = bmesh.from_edit_mesh(me)
-    else:
-        bm = bmesh.new()
-        bm.from_mesh(me)
-    if not display_islands.shader:
-        display_islands.shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
-    if not display_islands.batch:
-        from functools import partial
-        from collections import defaultdict
-        island = me.paper_island_list[me.paper_island_index]
-        faces = {face.id for face in island.faces}
-        triangles = [tri for tri in bm.calc_loop_triangles() if tri[0].face.index in faces]
-        positions = [v.co for v in bm.verts]
-        indices = [[l.vert.index for l in tri] for tri in triangles]
-        display_islands.batch = batch_for_shader(display_islands.shader, 'TRIS', {"pos": positions}, indices=indices)
-    alpha = context.scene.paper_model.islands_alpha
-    bgl.glEnable(bgl.GL_BLEND)
-    bgl.glBlendFunc(bgl.GL_SRC_ALPHA, bgl.GL_ONE_MINUS_SRC_ALPHA)
-    shader = display_islands.shader
-    shader.bind()
-    shader.uniform_float("color", (1, 0.4, 0, alpha))
-    display_islands.batch.draw(shader)
-display_islands.shader = None
-display_islands.batch = None
-display_islands.handle = None
-
-
-def display_islands_changed(self, context):
-    """Switch highlighting islands on/off"""
-    if self.display_islands:
-        if not display_islands.handle:
-            display_islands.handle = bpy.types.SpaceView3D.draw_handler_add(
-                display_islands, (self, context), 'WINDOW', 'POST_VIEW')
-    else:
-        if display_islands.handle:
-            bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
-            display_islands.handle = None
 
 
 def label_changed(self, context):
@@ -2405,12 +2349,6 @@ class IslandList(bpy.types.PropertyGroup):
 
 
 class PaperModelSettings(bpy.types.PropertyGroup):
-    display_islands: bpy.props.BoolProperty(
-        name="Highlight selected island", description="Highlight faces corresponding to the selected island in the 3D View",
-        options={'SKIP_SAVE'}, update=display_islands_changed)
-    islands_alpha: bpy.props.FloatProperty(
-        name="Opacity", description="Opacity of island highlighting",
-        min=0.0, max=1.0, default=0.3)
     limit_by_page: bpy.props.BoolProperty(
         name="Limit Island Size", description="Do not create islands larger than given dimensions",
         default=False, update=page_size_preset_changed)
@@ -2460,9 +2398,6 @@ def register():
 def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
     bpy.types.VIEW3D_MT_edit_mesh.remove(menu_func_unfold)
-    if display_islands.handle:
-        bpy.types.SpaceView3D.draw_handler_remove(display_islands.handle, 'WINDOW')
-        display_islands.handle = None
     for cls in reversed(module_classes):
         bpy.utils.unregister_class(cls)
 
