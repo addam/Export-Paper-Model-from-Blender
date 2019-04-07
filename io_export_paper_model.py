@@ -31,7 +31,7 @@ bl_info = {
 # The Exporter classes should take parameters as a whole pack, and parse it themselves
 # remember objects selected before baking (except selected to active)
 # add 'estimated number of pages' to the export UI
-# profile QuickSweepline vs. BruteSweepline with/without blist: for which nets is it faster?
+# QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
 # rotate islands to minimize area -- and change that only if necessary to fill the page size
 # Sticker.vertices should be of type Vector
 
@@ -47,12 +47,6 @@ from re import compile as re_compile
 from itertools import chain, repeat, product, combinations
 from math import pi, ceil, atan2
 import os.path as os_path
-
-
-try:
-    from blist import blist
-except ImportError:
-    blist = list
 
 default_priority_effect = {
     'CONVEX': 0.5,
@@ -840,7 +834,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     class QuickSweepline:
         """Efficient sweepline based on binary search, checking neighbors only"""
         def __init__(self):
-            self.children = blist()
+            self.children = list()
 
         def add(self, item, cmp=is_below):
             low, high = 0, len(self.children)
@@ -864,8 +858,6 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         """Safe sweepline which checks all its members pairwise"""
         def __init__(self):
             self.children = set()
-            self.last_min = None, []
-            self.last_max = None, []
 
         def add(self, item, cmp=is_below):
             for child in self.children:
