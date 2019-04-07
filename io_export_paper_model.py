@@ -175,14 +175,15 @@ class UnfoldError(ValueError):
                 elem.select = False
             for elem in chain(*elems.values()):
                 elem.select_set(True)
+            bmesh.update_edit_mesh(bpy.context.object.data, False, False)
 
 
 class Unfolder:
     def __init__(self, ob):
+        self.do_create_uvmap = False
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
         self.mesh.check_correct()
-        self.do_create_uvmap = False
     
     def __del__(self):
         if not self.do_create_uvmap:
