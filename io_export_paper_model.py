@@ -122,8 +122,9 @@ def cage_fit(points, aspect):
         for a, b in pairs(polygon):
             if a == b:
                 continue
-            sinx, cosx = -(b - a).y, (b - a).x
-            rot = M.Matrix(((cosx, -sinx), (sinx, cosx))) * (1 / (b - a).length)
+            direction = (b - a).normalized()
+            sinx, cosx = -direction.y, direction.x
+            rot = M.Matrix(((cosx, -sinx), (sinx, cosx)))
             rot_polygon = [rot @ p for p in polygon]
             left, right = [fn(rot_polygon, key=lambda p: p.to_tuple()) for fn in (min, max)]
             bottom, top = [fn(rot_polygon, key=lambda p: p.yx.to_tuple()) for fn in (min, max)]
@@ -139,14 +140,14 @@ def cage_fit(points, aspect):
             r = vert.x + aspect * horz.y
             t = ((r**2 + q**2)**0.5 - r) / q if q != 0 else 0
             t = -1 / t if abs(t) > 1 else t  # pick the positive solution
-            sinx, cosx = 2 * t / (1 + t**2), (1 - t**2) / (1 + t**2)
-            rot = M.Matrix(((cosx, -sinx), (sinx, cosx)))
+            siny, cosy = 2 * t / (1 + t**2), (1 - t**2) / (1 + t**2)
+            rot = M.Matrix(((cosy, -siny), (siny, cosy)))
             for p in rot_polygon:
                 p[:] = rot @ p  # note: this also modifies left, right, bottom, top
             #print(f"solve {aspect * (right - left).x} == {(top - bottom).y} with aspect = {aspect}")
             if left.x < right.x and bottom.y < top.y and all(left.x <= p.x <= right.x and bottom.y <= p.y <= top.y for p in rot_polygon):
                 #print(f"yield {max(aspect * (right - left).x, (top - bottom).y)}")
-                yield max(aspect * (right - left).x, (top - bottom).y), sinx, cosx
+                yield max(aspect * (right - left).x, (top - bottom).y), sinx*cosy + cosx*siny, cosx*cosy - sinx*siny
     polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
     height, sinx, cosx = min(guesses(polygon))
     return atan2(sinx, cosx), height
@@ -189,9 +190,9 @@ class Unfolder:
         if not self.do_create_uvmap:
             self.mesh.delete_uvmap()
 
-    def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1):
+    def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1, limit_by_page=False):
         """Create the islands of the net"""
-        self.mesh.generate_cuts(cage_size / scale if cage_size else None, priority_effect)
+        self.mesh.generate_cuts(cage_size / scale if limit_by_page and cage_size else None, priority_effect)
         self.mesh.finalize_islands(cage_size or M.Vector((1, 1)))
         self.mesh.enumerate_islands()
         self.mesh.save_uv()
@@ -1785,7 +1786,7 @@ class Unfold(bpy.types.Operator):
 
         self.object = context.object
 
-        cage_size = M.Vector((settings.output_size_x, settings.output_size_y)) if settings.limit_by_page else None
+        cage_size = M.Vector((settings.output_size_x, settings.output_size_y))
         priority_effect = {
             'CONVEX': self.priority_effect_convex,
             'CONCAVE': self.priority_effect_concave,
@@ -1794,7 +1795,7 @@ class Unfold(bpy.types.Operator):
             unfolder = Unfolder(self.object)
             unfolder.do_create_uvmap = self.do_create_uvmap
             scale = sce.unit_settings.scale_length / settings.scale
-            unfolder.prepare(cage_size, priority_effect, scale)
+            unfolder.prepare(cage_size, priority_effect, scale, settings.limit_by_page)
             unfolder.mesh.mark_cuts()
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
@@ -2031,8 +2032,8 @@ class ExportPaperModel(bpy.types.Operator):
 
         self.object = context.active_object
         self.unfolder = Unfolder(self.object)
-        cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
-        self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale)
+        cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y))
+        self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale, limit_by_page=sce.paper_model.limit_by_page)
         if self.scale == 1:
             self.scale = ceil(self.get_scale_ratio(sce))
     
@@ -2068,7 +2069,6 @@ class ExportPaperModel(bpy.types.Operator):
             return {'CANCELLED'}
         finally:
             self.recall()
-
 
     def get_scale_ratio(self, sce):
         margin = self.output_margin + self.sticker_width
