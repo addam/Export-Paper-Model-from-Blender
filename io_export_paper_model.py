@@ -2023,8 +2023,39 @@ class ExportPaperModel(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         return context.active_object and context.active_object.type == 'MESH'
+    
+    def prepare(self, context):
+        sce = context.scene
+        self.recall_mode = context.object.mode
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        self.object = context.active_object
+        self.unfolder = Unfolder(self.object)
+        cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
+        self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale)
+        if self.scale == 1:
+            self.scale = ceil(self.get_scale_ratio(sce))
+    
+    def recall(self):
+        del self.unfolder
+        bpy.ops.object.mode_set(mode=self.recall_mode)
+
+    def invoke(self, context, event):
+        self.scale = context.scene.paper_model.scale
+        try:
+            self.prepare(context)
+        except UnfoldError as error:
+            self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            error.mesh_select()
+            self.recall()
+            return {'CANCELLED'}
+        wm = context.window_manager
+        wm.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
     def execute(self, context):
+        if not self.unfolder:
+            self.prepare(context)
         self.unfolder.do_create_uvmap = self.do_create_uvmap
         try:
             if self.object.data.paper_island_list:
@@ -2036,8 +2067,7 @@ class ExportPaperModel(bpy.types.Operator):
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             return {'CANCELLED'}
         finally:
-            del self.unfolder
-            bpy.ops.object.mode_set(mode=self.recall_mode)
+            self.recall()
 
 
     def get_scale_ratio(self, sce):
@@ -2047,28 +2077,6 @@ class ExportPaperModel(bpy.types.Operator):
         output_inner_size = M.Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin))
         ratio = self.unfolder.mesh.largest_island_ratio(output_inner_size)
         return ratio * sce.unit_settings.scale_length / self.scale
-
-    def invoke(self, context, event):
-        sce = context.scene
-        self.recall_mode = context.object.mode
-        bpy.ops.object.mode_set(mode='EDIT')
-
-        self.scale = sce.paper_model.scale
-        self.object = context.active_object
-        cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y)) if sce.paper_model.limit_by_page else None
-        try:
-            self.unfolder = Unfolder(self.object)
-            self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale)
-        except UnfoldError as error:
-            self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
-            error.mesh_select()
-            bpy.ops.object.mode_set(mode=self.recall_mode)
-            return {'CANCELLED'}
-        if self.scale == 1:
-            self.scale = ceil(self.get_scale_ratio(sce))
-        wm = context.window_manager
-        wm.fileselect_add(self)
-        return {'RUNNING_MODAL'}
 
     def draw(self, context):
         layout = self.layout
