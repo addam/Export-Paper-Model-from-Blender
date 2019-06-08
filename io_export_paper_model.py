@@ -2038,7 +2038,8 @@ class ExportPaperModel(bpy.types.Operator):
             self.scale = ceil(self.get_scale_ratio(sce))
     
     def recall(self):
-        del self.unfolder
+        if self.unfolder:
+            del self.unfolder
         bpy.ops.object.mode_set(mode=self.recall_mode)
 
     def invoke(self, context, event):
