@@ -433,18 +433,24 @@ class Mesh:
         def add_sticker(uvedge, index, target_uvedge):
             uvedge.sticker = Sticker(uvedge, default_width, index, target_uvedge)
             uvedge.uvface.island.add_marker(uvedge.sticker)
+        
+        def is_index_obvious(uvedge, target):
+            if uvedge in (target.neighbor_left, target.neighbor_right):
+                return True
+            if uvedge.neighbor_left.loop.edge is target.neighbor_right.loop.edge and uvedge.neighbor_right.loop.edge is target.neighbor_left.loop.edge:
+                return True
+            return False
 
         for edge in self.edges.values():
+            index = None
             if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.vector.length_squared > 0:
                 target, source = edge.uvedges[:2]
                 if uvedge_priority(target) < uvedge_priority(source):
                     target, source = source, target
                 target_island = target.uvface.island
-                left_loop, right_loop = target.neighbor_left.loop, target.neighbor_right.loop
                 if do_create_numbers:
                     for uvedge in [source] + edge.uvedges[2:]:
-                        if ((uvedge.neighbor_left.loop is not right_loop or uvedge.neighbor_right.loop is not left_loop) and
-                                uvedge not in (target.neighbor_left, target.neighbor_right)):
+                        if not is_index_obvious(uvedge, target):
                             # it will not be clear to see that these uvedges should be sticked together
                             # So, create an arrow and put the index on all stickers
                             target_island.sticker_numbering += 1
@@ -453,14 +459,8 @@ class Mesh:
                                 index += "."
                             target_island.add_marker(Arrow(target, default_width, index))
                             break
-                    else:
-                        # if all uvedges to be sticked are easy to see, create no numbers
-                        index = None
-                else:
-                    index = None
                 add_sticker(source, index, target)
             elif len(edge.uvedges) > 2:
-                index = None
                 target = edge.uvedges[0]
             if len(edge.uvedges) > 2:
                 for source in edge.uvedges[2:]:
