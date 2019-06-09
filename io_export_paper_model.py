@@ -252,7 +252,7 @@ class Unfolder:
             rd = sce.render
             bk = rd.bake
             # TODO: do we really need all this recollection?
-            recall = rd.engine, sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear
+            recall = rd.engine, sce.cycles.bake_type, sce.cycles.samples, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear
             rd.engine = 'CYCLES'
             recall_pass = {p: getattr(bk, f"use_pass_{p}") for p in ('ambient_occlusion', 'color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'subsurface', 'transmission')}
             for p in recall_pass:
@@ -261,6 +261,14 @@ class Unfolder:
             sce.cycles.bake_type = lookup[properties.output_type]
             bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
             bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 1, 10, False, False
+            if properties.output_type == 'TEXTURE':
+                bk.use_pass_direct, bk.use_pass_indirect, bk.use_pass_color = False, False, True
+                sce.cycles.samples = 1
+            else:
+                sce.cycles.samples = properties.bake_samples                
+            if sce.cycles.bake_type == 'COMBINED':
+                bk.use_pass_direct, bk.use_pass_indirect = True, True
+                bk.use_pass_diffuse, bk.use_pass_glossy, bk.use_pass_transmission, bk.use_pass_subsurface, bk.use_pass_ambient_occlusion, bk.use_pass_emit = True, False, False, True, True, True
 
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(printable_size * ppm, filepath)
@@ -270,7 +278,7 @@ class Unfolder:
             elif image_packing == 'ISLAND_EMBED':
                 self.mesh.save_separate_images(ppm, filepath, embed=Exporter.encode_image)
 
-            rd.engine, sce.cycles.bake_type, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = recall
+            rd.engine, sce.cycles.bake_type, sce.cycles.samples, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = recall
             for p, v in recall_pass.items():
                 setattr(bk, f"use_pass_{p}", v)
 
@@ -1999,6 +2007,9 @@ class ExportPaperModel(bpy.types.Operator):
     output_dpi: bpy.props.FloatProperty(
         name="Resolution (DPI)", description="Resolution of images in pixels per inch",
         default=90, min=1, soft_min=30, soft_max=600, subtype="UNSIGNED")
+    bake_samples: bpy.props.IntProperty(
+        name="Samples", description="Number of samples to render for each pixel",
+        default=64, min=1, subtype="UNSIGNED")
     file_format: bpy.props.EnumProperty(
         name="Document Format", description="File format of the exported net",
         default='PDF', items=[
@@ -2140,6 +2151,9 @@ class ExportPaperModel(bpy.types.Operator):
                 col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
             elif context.scene.render.engine != 'CYCLES' and self.output_type != 'NONE':
                 col.label(text="Cycles will be used for texture baking.", icon='ERROR')
+            row = col.row()
+            row.active = self.output_type in ('AMBIENT_OCCLUSION', 'RENDER', 'SELECTED_TO_ACTIVE')
+            row.prop(self.properties, "bake_samples")
             col.prop(self.properties, "output_dpi")
             row = col.row()
             row.active = self.file_format == 'SVG'
