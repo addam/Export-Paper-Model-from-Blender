@@ -184,6 +184,7 @@ class Unfolder:
         self.do_create_uvmap = False
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
+        self.mesh.copy_freestyle_marks(ob.data)
         self.mesh.check_correct()
     
     def __del__(self):
@@ -296,6 +297,10 @@ class Mesh:
     
     def delete_uvmap(self):
         self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
+    
+    def copy_freestyle_marks(self, mesh):
+        for bmedge, edge in self.edges.items():
+            edge.freestyle = mesh.edges[bmedge.index].use_freestyle_mark
     
     def mark_cuts(self):
         for bmedge, edge in self.edges.items():
@@ -667,7 +672,7 @@ class Edge:
         self.is_main_cut = True
         self.priority = None
         self.angle = None
-        self.freestyle = getattr(edge, "use_freestyle_mark", False)  # freestyle edges will be highlighted
+        self.freestyle = False
 
     def choose_main_faces(self):
         """Choose two main faces that might get connected in an island"""
