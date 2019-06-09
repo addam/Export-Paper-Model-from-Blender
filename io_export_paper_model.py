@@ -45,7 +45,7 @@ import bmesh
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain, repeat, product, combinations
-from math import pi, ceil, atan2
+from math import pi, ceil, asin, atan2
 import os.path as os_path
 
 default_priority_effect = {
@@ -680,6 +680,8 @@ class Edge:
         elif len(loops) > 2:
             # find (with brute force) the pair of indices whose loops have the most similar normals
             self.main_faces = max(combinations(loops, 2), key=score)
+        if self.main_faces and self.main_faces[1].vert == self.va:
+            self.main_faces = self.main_faces[::-1]
 
     def calculate_angle(self):
         """Calculate the angle between the main faces"""
@@ -688,9 +690,9 @@ class Edge:
         if not normal_a or not normal_b:
             self.angle = -3  # just a very sharp angle
         else:
-            self.angle = normal_a.angle(normal_b)
-            if loop_a.link_loop_next.vert == loop_b.vert:
-                self.angle *= 1 if normal_b.cross(normal_a).dot(self.vector) > 0 else -1
+            self.angle = asin(normal_a.cross(normal_b).dot(self.vector.normalized()))
+            if loop_a.link_loop_next.vert != loop_b.vert or loop_b.link_loop_next.vert != loop_a.vert:
+                self.angle = abs(self.angle)
 
     def generate_priority(self, priority_effect, average_length):
         """Calculate the priority value for cutting"""
