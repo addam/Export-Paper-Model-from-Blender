@@ -2352,7 +2352,7 @@ class DATA_PT_paper_model_islands(bpy.types.Panel):
             sub = layout.split(align=True)
             sub.operator("mesh.select_paper_island", text="Select").operation = 'ADD'
             sub.operator("mesh.select_paper_island", text="Deselect").operation = 'REMOVE'
-            sub.prop(sce.paper_model, "sync_island", toggle=True)
+            sub.prop(sce.paper_model, "sync_island", icon='UV_SYNC_SELECT', toggle=True)
             if mesh.paper_island_index >= 0:
                 list_item = mesh.paper_island_list[mesh.paper_island_index]
                 sub = layout.column(align=True)
@@ -2402,7 +2402,7 @@ def island_item_changed(self, context):
 
 def island_index_changed(self, context):
     """The active island was changed"""
-    if context.scene.paper_model.sync_island:
+    if context.scene.paper_model.sync_island and SelectIsland.poll(context):
         bpy.ops.mesh.select_paper_island(operation='REPLACE')
 
 
