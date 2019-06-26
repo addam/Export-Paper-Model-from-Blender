@@ -31,33 +31,33 @@
       <section>
         <div id="title">
           <h1>Export Paper Model from Blender</h1>
-          <p>A Python script for Blender 2.7 designed for creating paper models</p>
+          <p>Blender add-on for creating paper models</p>
         </div>
 
-        <h1>
-<a id="jump-in" class="anchor" href="#jump-in" aria-hidden="true"><span class="octicon octicon-link"></span></a><a href="https://github.com/addam/Export-Paper-Model-from-Blender/raw/master/io_export_paper_model.py"><strong>&gt;&nbsp;Jump In&nbsp;&lt;</strong></a></h1>
+<img src="header.png">
 
 <h3>
 <a id="install" class="anchor" href="#install" aria-hidden="true"><span class="octicon octicon-link"></span></a>Install</h3>
 
-<p>To make it work, you need <a href="http://www.blender.org/download">blender 2.70 or later</a>. In <em>User Preferences</em> &gt; <em>Add-Ons</em>, use the <em>Import Add-on</em> tool. Then in the list of available add-ons, look for <em>Export Paper Model</em> and enable it.
-If you just want to see some action quickly, the export is done from menu <em>File</em> &gt; <em>Export</em> &gt; <em>Paper Model</em>.</p>
+<p>The script is included in Blender 2.80. Just enable <i>Import-Export: Export Paper Model</i> in Blender Preferences &rarr; Addons.</p>
+
+<p>If you need something special and know what you’re doing, you may download and install a <a href="https://raw.githubusercontent.com/addam/Export-Paper-Model-from-Blender/master/io_export_paper_model.py">recent version</a>. There is also another <a href="https://raw.githubusercontent.com/addam/Export-Paper-Model-from-Blender/blender-279/io_export_paper_model.py">version</a> for Blender 2.79.</p>
 
 <h3>
 <a id="how-to-use" class="anchor" href="#how-to-use" aria-hidden="true"><span class="octicon octicon-link"></span></a>How to Use</h3>
 
-<p>An optional step before start is to mark edges where the model will be cut. From the Toolbox panel, call the Unfold operator on the selected model. The edges will get marked as Edit mode <em>Seams</em>, you can edit them in any way you like. The script will use the seams you mark and mark some more as necessary.</p>
+<p>An optional step before start is to mark edges where the model will be cut. From the Properties editor, call the Unfold operator on the selected model. The edges will get marked as Edit mode <em>Seams</em>, you can edit them in any way you like. The script will use the seams you mark and mark some more as necessary.</p>
 
-<p>All the show happens when you press the <em>Export Paper Model</em> button in the Toolbox. A File Browser appears, which also allows you to change the export settings in its bottom-left corner.</p>
+<p>All the show happens when you choose File &rarr; <em>Export</em> &rarr; <em>Paper Model</em>. A File Browser appears, which also allows you to change the export settings in its bottom-left corner.</p>
 
-<p>Then (if everything goes well), the script saves the file without talking. In the settings, if you switch <em>No Texture</em> to something else, Blender's <em>Bake Render</em> functionality will be exploited to create the images: that may take some time.</p>
+<p>Then (if everything goes well), the script saves the file without talking. In the settings, if you switch <em>No Texture</em> to something else, Cycles' <em>Bake</em> functionality will be exploited to render the images. That may take some time.</p>
 
 <p>The file format is PDF and should be ready to print. If you want to edit the net by hand, you may prefer exporting to SVG and using a vector editor such as <a href="http://inkscape.org">Inkscape</a>.</p>
 
 <h3>
 <a id="advanced-usage" class="anchor" href="#advanced-usage" aria-hidden="true"><span class="octicon octicon-link"></span></a>Advanced Usage</h3>
 
-<p>A humble panel is in the 3d View Toolbox. Currently it gives you an overview of how the net will be split into parts (aka. islands). It can show one of them directly in the 3D view, highlighted in orange. You can edit the name of each island and give it a three-letter abbreviation that will be used on the sticking tabs.</p>
+<p>A humble panel is in the Properties panel in Object Data section. Currently it gives you an overview of how the net will be split into parts (aka. islands). It can show one of them directly in the 3D view, highlighted in orange. You can edit the name of each island and give it a three-letter abbreviation that will be used on the sticking tabs.</p>
 
 <h1>
 <a id="dive-in" class="anchor" href="#dive-in" aria-hidden="true"><span class="octicon octicon-link"></span></a>Comment and Consult</h1>
@@ -86,21 +86,20 @@ If you just want to see some action quickly, the export is done from menu <em>Fi
 <a id="success-stories" class="anchor" href="#success-stories" aria-hidden="true"><span class="octicon octicon-link"></span></a>Success Stories</h1>
 
 <p>Obviously, people have been using this script for making of paper models. Examples posted on the forum include
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=2896139&viewfull=1#post2896139">F-16 fighter plane</a>,
-<a href="http://forum.blender.org.il/showthread.php?tid=1139">a standing tiger</a> (available for <a href="https://dl.dropboxusercontent.com/content_link/1ArxFHXIsR3j7189sXhoDp0usBndGsRxszoYzlZD2BF4JkOQq4gsZC2qTxq902lr?dl=1">download</a>),
-<a href="blenderartists.org/forum/showthread.php?318787-Fox-(paper-model)">a lying fox</a>,
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=2546082&viewfull=1#post2546082">WALL-E</a>,
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=1924697&viewfull=1#post1924697">simplified Suzanne</a> (available for <a href="http://adam.dominec.eu/fajly/suzanne.pdf">download</a>),
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=1863455&viewfull=1#post1863455">Gormiti head</a>,
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=1870064&viewfull=1#post1870064">Tremulous trapper</a>
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=2184546&viewfull=1#post2184546">wolf head</a> and
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=2669696&viewfull=1#post2669696">a little fox</a>.
+<a href="https://blenderartists.org/t/export-paper-model/476597/291">F-16 fighter plane</a>,
+a <a href="http://forum.blender.org.il/showthread.php?tid=1139">standing tiger</a> (unfortunately not visible to the public),
+a <a href="https://blenderartists.org/t/fox-paper-model/593666">lying fox</a>,
+<a href="https://blenderartists.org/t/export-paper-model/476597/213">WALL-E</a>,
+<a href="https://www.youtube.com/watch?v=-WBGxLB2NEg">Suzanne</a>,
+<a href="https://blenderartists.org/t/export-paper-model/476597/71">Gormiti head</a>,
+<a href="https://blenderartists.org/t/export-paper-model/476597/75">Tremulous trapper</a> and
+a <a href="https://blenderartists.org/t/export-paper-model/476597/134">wolf head</a>.
 </p>
 
-<p>Less common use cases include
+<p>More involved use cases include
 <a href="https://vimeo.com/130446414">folding out of metal sheets</a> &ndash; a full-size human figure,
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=1823412&viewfull=1#post1823412">packaging design</a> (in conjunction with the Convert to Armature script) and
-<a href="http://blenderartists.org/forum/showthread.php?186071-Export-Paper-Model&p=2839427&viewfull=1#post2839427">architectonic prototyping</a>. (I do not have the rights to publish all the professional usage of my script.)
+<a href="https://blenderartists.org/t/advice-rigging-a-plane-mesh-into-a-box-wrapping-paper/549883">packaging design</a> (in conjunction with the Convert to Armature script), cloth design and
+architectonic prototyping. (I do not have the rights to publish all the professional usage of my script.)
 </p>
 
 <p>If you used the script to make something cool, you would be most welcome on this list. Just drop me <a href="mailto:&quot;Adam Dominec&quot; &lt;adominec@gmail.com&gt;?subject=Paper%20Model">an e-mail</a>.</p>
