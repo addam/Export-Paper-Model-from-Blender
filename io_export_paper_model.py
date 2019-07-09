@@ -703,7 +703,9 @@ class Edge:
         if not normal_a or not normal_b:
             self.angle = -3  # just a very sharp angle
         else:
-            self.angle = asin(normal_a.cross(normal_b).dot(self.vector.normalized()))
+            s = normal_a.cross(normal_b).dot(self.vector.normalized())
+            s = max(min(s, 1.0), -1.0) # deal with rounding errors
+            self.angle = asin(s)
             if loop_a.link_loop_next.vert != loop_b.vert or loop_b.link_loop_next.vert != loop_a.vert:
                 self.angle = abs(self.angle)
 
