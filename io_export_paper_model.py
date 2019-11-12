@@ -12,7 +12,7 @@
 bl_info = {
     "name": "Export Paper Model",
     "author": "Addam Dominec",
-    "version": (1, 0),
+    "version": (1, 1),
     "blender": (2, 80, 0),
     "location": "File > Export > Paper Model",
     "warning": "",
@@ -215,7 +215,7 @@ class Unfolder:
 
     def save(self, properties):
         """Export the document"""
-        # Note about scale: input is direcly in blender length
+        # Note about scale: input is directly in blender length
         # Mesh.scale_islands multiplies everything by a user-defined ratio
         # exporters (SVG or PDF) multiply everything by 1000 (output in millimeters)
         Exporter = SVG if properties.file_format == 'SVG' else PDF
@@ -335,7 +335,7 @@ class Mesh:
         twisted_faces = {f for f in self.data.faces if is_twisted(f)}
         inverted_scale = self.matrix.determinant() <= 0
         if not (null_edges or null_faces or twisted_faces or inverted_scale):
-            return
+            return True
         if inverted_scale:
             raise UnfoldError("The object is flipped inside-out.\n"
             "You can use Object -> Apply -> Scale to fix it. Export failed.")
@@ -444,7 +444,7 @@ class Mesh:
     def generate_stickers(self, default_width, do_create_numbers=True):
         """Add sticker faces where they are needed."""
         def uvedge_priority(uvedge):
-            """Retuns whether it is a good idea to stick something on this edge's face"""
+            """Returns whether it is a good idea to stick something on this edge's face"""
             # TODO: it should take into account overlaps with faces and with other stickers
             face = uvedge.uvface.face
             return face.calc_area() / face.calc_perimeter()
