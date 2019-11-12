@@ -184,7 +184,6 @@ class Unfolder:
         self.do_create_uvmap = False
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
-        self.mesh.copy_freestyle_marks(ob.data)
         self.mesh.check_correct()
     
     def __del__(self):
@@ -302,13 +301,18 @@ class Mesh:
             edge.choose_main_faces()
             if edge.main_faces:
                 edge.calculate_angle()
+        self.copy_freestyle_marks()
     
     def delete_uvmap(self):
         self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
     
-    def copy_freestyle_marks(self, mesh):
+    def copy_freestyle_marks(self):
+        # NOTE: this is a workaround for NotImplementedError on bmesh.edges.layers.freestyle
+        mesh = bpy.data.meshes.new("unfolder_temp")
+        self.data.to_mesh(mesh)
         for bmedge, edge in self.edges.items():
             edge.freestyle = mesh.edges[bmedge.index].use_freestyle_mark
+        bpy.data.meshes.remove(mesh)
     
     def mark_cuts(self):
         for bmedge, edge in self.edges.items():
