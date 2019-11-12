@@ -318,15 +318,13 @@ class Mesh:
     def check_correct(self, epsilon=1e-6):
         """Check for invalid geometry"""
         def is_twisted(face):
-            if len(face.verts) > 3:
-                center = sum((vertex.co for vertex in face.verts), M.Vector((0, 0, 0))) / len(face.verts)
-                plane_d = center.dot(face.normal)
-                diameter = max((center - vertex.co).length for vertex in face.verts)
-                for vertex in face.verts:
-                    # check coplanarity
-                    if abs(vertex.co.dot(face.normal) - plane_d) > diameter * 0.01:
-                        return True
-            return False
+            if len(face.verts) <= 3:
+                return False
+            center = face.calc_center_median()
+            plane_d = center.dot(face.normal)
+            diameter = max((center - vertex.co).length for vertex in face.verts)
+            threshold = 0.01 * diameter
+            return any(abs(v.co.dot(face.normal) - plane_d) > threshold for v in face.verts)
         
         null_edges = {e for e in self.edges.keys() if e.calc_length() < epsilon and e.link_faces}
         null_faces = {f for f in self.data.faces if f.calc_area() < epsilon}
@@ -1041,7 +1039,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         uvedge.vb = phantoms[uvedge.vb]
         uvedge.update()
     if is_merged_mine:
-        for uvedge in island_a.edges:
+        for uvedge in island_a.edges.values():
             uvedge.va = phantoms.get(uvedge.va, uvedge.va)
             uvedge.vb = phantoms.get(uvedge.vb, uvedge.vb)
     island_a.edges.update(island_b.edges)
