@@ -333,8 +333,12 @@ class Mesh:
         null_edges = {e for e in self.edges.keys() if e.calc_length() < epsilon and e.link_faces}
         null_faces = {f for f in self.data.faces if f.calc_area() < epsilon}
         twisted_faces = {f for f in self.data.faces if is_twisted(f)}
-        if not (null_edges or null_faces or twisted_faces):
+        inverted_scale = self.matrix.determinant() <= 0
+        if not (null_edges or null_faces or twisted_faces or inverted_scale):
             return
+        if inverted_scale:
+            raise UnfoldError("The object is flipped inside-out.\n"
+            "You can use Object -> Apply -> Scale to fix it. Export failed.")
         disease = [("Remove Doubles", null_edges or null_faces), ("Triangulate", twisted_faces)]
         cure = " and ".join(s for s, k in disease if k)
         raise UnfoldError(
