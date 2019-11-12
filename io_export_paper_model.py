@@ -2029,7 +2029,7 @@ class ExportPaperModel(bpy.types.Operator):
         ])
     scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
-        default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
+        default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1)
     do_create_uvmap: bpy.props.BoolProperty(
         name="Create UVMap", description="Create a new UV Map showing the islands and page layout",
         default=False, options={'SKIP_SAVE'})
@@ -2111,8 +2111,7 @@ class ExportPaperModel(bpy.types.Operator):
         row.operator("export_mesh.paper_model_preset_add", text="", icon='ADD')
         row.operator("export_mesh.paper_model_preset_add", text="", icon='REMOVE').remove_active = True
 
-        # a little hack: this prints out something like "Scale: 1: 72"
-        layout.prop(self.properties, "scale", text="Scale: 1")
+        layout.prop(self.properties, "scale", text="Scale: 1/")
         scale_ratio = self.get_scale_ratio(context.scene)
         if scale_ratio > 1:
             layout.label(
@@ -2295,10 +2294,10 @@ class AddPresetPaperModel(bl_operators.presets.AddPresetBase, bpy.types.Operator
 
 
 class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
-    bl_label = "Tools"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "TOOLS"
-    bl_category = "Paper Model"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Paper'
+    bl_label = "Unfold"
 
     def draw(self, context):
         layout = self.layout
@@ -2306,11 +2305,7 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
         obj = context.active_object
         mesh = obj.data if obj and obj.type == 'MESH' else None
 
-        layout.operator("export_mesh.paper_model")
-
-        col = layout.column(align=True)
-        col.label(text="Customization:")
-        col.operator("mesh.unfold")
+        layout.operator("mesh.unfold")
 
         if context.mode == 'EDIT_MESH':
             row = layout.row(align=True)
@@ -2319,8 +2314,22 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
         else:
             layout.operator("mesh.clear_all_seams")
 
+
+class VIEW3D_PT_paper_model_settings(bpy.types.Panel):
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Paper'
+    bl_label = "Export"
+
+    def draw(self, context):
+        layout = self.layout
+        sce = context.scene
+        obj = context.active_object
+        mesh = obj.data if obj and obj.type == 'MESH' else None
+
+        layout.operator("export_mesh.paper_model")
         props = sce.paper_model
-        layout.prop(props, "scale", text="Model Scale: 1")
+        layout.prop(props, "scale", text="Model Scale:  1/")
 
         layout.prop(props, "limit_by_page")
         col = layout.column()
@@ -2449,7 +2458,7 @@ class PaperModelSettings(bpy.types.PropertyGroup):
         default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
     scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
-        default=1, soft_min=1.0, soft_max=10000.0, step=100, subtype='UNSIGNED', precision=1)
+        default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1)
 
 
 module_classes = (
@@ -2463,7 +2472,8 @@ module_classes = (
     PaperModelSettings,
     VIEW3D_MT_paper_model_presets,
     DATA_PT_paper_model_islands,
-    #VIEW3D_PT_paper_model_tools,
+    VIEW3D_PT_paper_model_tools,
+    VIEW3D_PT_paper_model_settings,
 )
 
 
