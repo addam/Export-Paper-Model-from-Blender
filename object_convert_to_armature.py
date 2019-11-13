@@ -16,45 +16,9 @@ bl_info = {
 }
 
 import bpy
+import bmesh
 from itertools import repeat
-from functools import reduce
-from mathutils import Vector
 from math import asin, pi
-
-
-faces_by_edge=dict();
-edge_by_verts=dict();
-
-
-def pairs(sequence):
-    return zip(sequence, sequence[1:]+sequence[:1])
-
-
-def get_edge(verts):
-    global edge_by_verts
-    va, vb = verts
-    if va > vb:
-        va, vb = vb, va
-    if (va, vb) not in edge_by_verts:
-        print("Verts %i %i not in list" % (va, vb))
-    return edge_by_verts.get((va, vb), None)
-
-
-def get_edges(face, exclude=None):
-    edges = map(get_edge, pairs(face.vertices))
-    return filter(lambda edge: edge and edge is not exclude, edges)
-
-
-def get_faces(edge, exclude=None):
-    global faces_by_edge
-    if exclude:
-        return [face for face in faces_by_edge.get(edge, ()) if face != exclude]
-    else:
-        return faces_by_edge.get(edge, [])
-
-
-def vertex_avg(mesh, indices):
-    return reduce(Vector.__add__, [mesh.vertices[i].co for i in indices]) / len(indices)
 
 
 def add_bone(name, armature, head, tail):
@@ -65,46 +29,33 @@ def add_bone(name, armature, head, tail):
 
 
 def main(context):
-    global faces_by_edge
-    global edge_by_verts
-    faces_by_edge.clear()
-    edge_by_verts.clear()
-    visited_faces = set()
-    loops = 0
-    
-    bpy.ops.object.mode_set()
-    mesh_object = context.active_object
-    mesh = mesh_object.data
-    
-    #Create a nicer structure above the mesh data
-    for edge in mesh.edges:
-        if not edge.use_seam:
-            va, vb = edge.vertices
-            if va > vb:
-                va, vb = vb, va
-            edge_by_verts[(va, vb)] = edge
-    for face in mesh.polygons:
-        for edge in get_edges(face):
-            if edge not in faces_by_edge:
-                faces_by_edge[edge]=list()
-            faces_by_edge[edge].append(face)
+    mesh_object = context.object
+    if context.mode == 'EDIT':
+        bm = bmesh.from_edit_mesh(mesh_object.data)
+    else:
+        bm = bmesh.new()
+        bm.from_mesh(mesh_object.data)
+    bm.verts.ensure_lookup_table()
     
     #Create an armature
     armature = bpy.data.armatures.new(f"{mesh_object.name} Armature")
     armature_object = bpy.data.objects.new(armature.name, object_data=armature)
-    context.scene.collection.objects.link(armature_object)
     armature_object.matrix_local = mesh_object.matrix_local
+    context.scene.collection.objects.link(armature_object)
     
     modifier = mesh_object.modifiers.new("Folding Armature", 'ARMATURE')
     modifier.use_bone_envelopes = False
     modifier.use_vertex_groups = True
     modifier.object = armature_object
     
+    visited_faces = set()
+    loops = 0
     #Generate the bones
-    context.view_layer.objects.active = armature_object
-    bpy.ops.object.mode_set(mode='EDIT')
     angles = dict() #bone -> folding angle
-    queue = [(None, mesh.polygons[mesh.polygons.active], None, None)] #Edge, face and a bone connecting these two and parent in the tree
+    queue = [(None, bm.faces.active, None, None)] #Edge, face and a bone connecting these two and parent in the tree
+    context.view_layer.objects.active = armature_object
+    recall_mode = context.mode
+    bpy.ops.object.mode_set(mode='EDIT')
     while queue:
         edge, face, parent_bone, parent_face = queue.pop()
         if face in visited_faces:
@@ -112,34 +63,27 @@ def main(context):
             continue
         visited_faces.add(face)
         vgroup = mesh_object.vertex_groups.new(name=f"Face {face.index}") #Create a vertex group for this face
-        vgroup.add(face.vertices, 1, 'ADD')
+        vgroup.add([v.index for v in face.verts], 1, 'ADD')
+        tail = face.calc_center_median_weighted()
         if edge:
-            edge_vector = mesh.vertices[edge.vertices[0]].co - mesh.vertices[edge.vertices[1]].co
-            head = vertex_avg(mesh, edge.vertices)
-            tail = vertex_avg(mesh, face.vertices)
-            tail -= (tail-head).project(edge_vector)
+            a, b = [v.co for v in edge.verts]
+            edge_vector = b - a
+            head = (a + b) / 2
+            tail -= (tail - head).project(edge_vector)
         else: #root bone
-            tail = vertex_avg(mesh, face.vertices)
+            tail = vertex_avg(face.verts)
             head = tail.copy()
             head.z -= 1
         bone = add_bone(vgroup.name, armature, head, tail)
         bone.align_roll(face.normal)
         bone.parent = parent_bone
         if edge: #all except the root bone
-            depth = bone.vector.dot(parent_face.normal)/parent_face.normal.length
-            clamped = min(1, max(-1, depth/bone.vector.length))
-            try:
-                angle = asin(clamped)
-            except ValueError:
-                print("Depth: {}, |vector|: {}".format(depth, bone.vector.length))
-                angle = 0
-            if face.normal.dot(parent_face.normal) < 0:
-                angle = pi - angle
-            angles[bone.name] = angle
-        for next_edge in get_edges(face, exclude=edge):
-            queue += zip(repeat(next_edge), get_faces(next_edge, exclude=face), repeat(bone), repeat(face))
-    bpy.ops.object.mode_set()
+            angles[bone.name] = -edge.calc_face_angle_signed(0)
+        for loop in face.loops:
+            if loop.edge is not edge:
+                queue += [(loop.edge, l.face, bone, face) for l in loop.link_loops]
     #Set transform locks (must be done in object mode)
+    bpy.ops.object.mode_set(mode='OBJECT')
     pose_bone = armature_object.pose.bones[0]
     pose_bone.lock_scale[0:3] = True, True, True
     for pose_bone in armature_object.pose.bones[1:]: 
@@ -150,6 +94,7 @@ def main(context):
         pose_bone.rotation_mode = 'XYZ'
         pose_bone.rotation_euler.x = -angles[pose_bone.name]
     context.view_layer.objects.active = mesh_object
+    bpy.ops.object.mode_set(mode=recall_mode)
     if loops:
         raise ValueError(loops)
 
