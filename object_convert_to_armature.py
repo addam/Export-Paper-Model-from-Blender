@@ -64,7 +64,7 @@ def prepare_bones(init_face):
         for loop in face.loops:
             if loop.edge is not edge:
                 queue.extend((loop.edge, l.face, face) for l in loop.link_loops)
-    return bones
+    return bones, loops
 
 
 def lock_pose_rotation(pose_bone):
@@ -84,7 +84,7 @@ def main(context):
     bm.verts.ensure_lookup_table()
     
     armature_object, armature = add_armature(mesh_object)
-    bones = prepare_bones(bm.faces.active or next(iter(bm.faces)))
+    bones, loops = prepare_bones(bm.faces.active or next(iter(bm.faces)))
     context.view_layer.objects.active = armature_object
     recall_mode = context.mode
     # Create bones (requires edit mode)
@@ -117,8 +117,8 @@ def main(context):
             pose_bone.rotation_euler.x = angle
     context.view_layer.objects.active = mesh_object
     bpy.ops.object.mode_set(mode=recall_mode)
-    #if loops:
-    #    raise ValueError(loops)
+    if loops:
+        raise ValueError(loops)
 
 class OBJECT_OT_convert_to_armature(bpy.types.Operator):
     '''Generate an armature with a single bone controlling each face. The mesh must be a tree-like structure for this to make sense. Active face is used for main bone.'''
