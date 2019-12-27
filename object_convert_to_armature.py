@@ -120,6 +120,7 @@ def main(context):
     if loops:
         raise ValueError(loops)
 
+
 class OBJECT_OT_convert_to_armature(bpy.types.Operator):
     '''Generate an armature with a single bone controlling each face. The mesh must be a tree-like structure for this to make sense. Active face is used for main bone.'''
     bl_idname = "object.convert_to_armature"
@@ -135,24 +136,56 @@ class OBJECT_OT_convert_to_armature(bpy.types.Operator):
             main(context)
         except ValueError as E:
             if isinstance(E.args[0], int):
-                self.report({'ERROR', 'ERROR_INVALID_INPUT'}, "There is a loop of connected faces. Use Export Paper Model add-on and EdgeSplit modifier to eliminate them.\n" "Otherwise, the armature may be unusable.")
+                self.report({'ERROR', 'ERROR_INVALID_INPUT'}, "There is a loop of connected faces. Use Export Paper Model add-on and Split Seams operator to eliminate them.\n" "Otherwise, the armature may be unusable.")
             else:
                 raise
+        return {'FINISHED'}
+
+
+class MESH_OT_split_seams(bpy.types.Operator):
+    '''Split along edges marked as Seam.'''
+    bl_idname = "object.split_seams"
+    bl_label = "Split Seams"
+    bl_description = "Split along edges marked as Seam"
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object.type == 'MESH'
+
+    def execute(self, context):
+        mesh = context.object.data
+        recall = dict()
+        recall_mode = {'EDIT_MESH': 'EDIT'}.get(context.mode, context.mode)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for edge in mesh.edges:
+            edge.select, recall[edge.index] = edge.use_seam, edge.select
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.edge_split()
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for edge in mesh.edges:
+            edge.select = recall.get(edge.index, False)
+        bpy.ops.object.mode_set(mode=recall_mode)
         return {'FINISHED'}
 
 
 def menu_func(self, context):
     self.layout.operator(OBJECT_OT_convert_to_armature.bl_idname, text="Convert to Armature")
 
+classes = [
+OBJECT_OT_convert_to_armature,
+MESH_OT_split_seams
+]
 
 def register():
-    bpy.utils.register_class(OBJECT_OT_convert_to_armature)
+    for cls in classes:
+        bpy.utils.register_class(cls)
     bpy.types.VIEW3D_MT_object.append(menu_func)
 
 
 def unregister():
     bpy.types.VIEW3D_MT_object.remove(menu_func)
-    bpy.utils.unregister_class(OBJECT_OT_convert_to_armature)
+    for cls in classes:
+        bpy.utils.unregister_class(cls)
 
 
 if __name__ == "__main__":
