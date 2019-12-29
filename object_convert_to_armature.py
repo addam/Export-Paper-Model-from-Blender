@@ -142,6 +142,12 @@ class OBJECT_OT_convert_to_armature(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def split_seams(bm):
+    verts = [v for v in bm.verts if sum(e.seam for e in v.link_edges) > 1]
+    for vert in verts:
+        bmesh.utils.vert_separate(vert, [e for e in vert.link_edges if e.seam])
+
+
 class MESH_OT_split_seams(bpy.types.Operator):
     '''Split along edges marked as Seam.'''
     bl_idname = "object.split_seams"
@@ -154,17 +160,16 @@ class MESH_OT_split_seams(bpy.types.Operator):
 
     def execute(self, context):
         mesh = context.object.data
-        recall = dict()
-        recall_mode = {'EDIT_MESH': 'EDIT'}.get(context.mode, context.mode)
-        bpy.ops.object.mode_set(mode='OBJECT')
-        for edge in mesh.edges:
-            edge.select, recall[edge.index] = edge.use_seam, edge.select
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.edge_split()
-        bpy.ops.object.mode_set(mode='OBJECT')
-        for edge in mesh.edges:
-            edge.select = recall.get(edge.index, False)
-        bpy.ops.object.mode_set(mode=recall_mode)
+        if context.mode == 'EDIT_MESH':
+            bm = bmesh.from_edit_mesh(mesh)
+        else:
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
+        split_seams(bm)
+        if context.mode == 'EDIT_MESH':
+            bmesh.update_edit_mesh(mesh)
+        else:
+            bm.to_mesh(mesh)
         return {'FINISHED'}
 
 
