@@ -76,18 +76,18 @@ def lock_pose_rotation(pose_bone):
 
 def main(context):
     mesh_object = context.object
-    if context.mode == 'EDIT':
-        bm = bmesh.from_edit_mesh(mesh_object.data)
-    else:
-        bm = bmesh.new()
-        bm.from_mesh(mesh_object.data)
+    recall_mode = {'EDIT_MESH': 'EDIT'}.get(context.mode, context.mode)
+    if context.mode == 'EDIT_MESH':
+        # Vertex groups cannot be added in Mesh Edit mode
+        bpy.ops.object.mode_set(mode='OBJECT')
+    bm = bmesh.new()
+    bm.from_mesh(mesh_object.data)
     bm.verts.ensure_lookup_table()
     
     armature_object, armature = add_armature(mesh_object)
     bones, loops = prepare_bones(bm.faces.active or next(iter(bm.faces)))
     context.view_layer.objects.active = armature_object
-    recall_mode = context.mode
-    # Create bones (requires edit mode)
+    # Create bones (requires Armature in Edit mode)
     bpy.ops.object.mode_set(mode='EDIT')
     face_bone = dict()
     for face, parent_face, head, tail in bones:
@@ -98,7 +98,7 @@ def main(context):
         bone.parent = face_bone.get(parent_face)
         face_bone[face] = bone
     bone_face = {eb.name: f for f, eb in face_bone.items()}
-    # Set transform locks (requires object mode)
+    # Set transform locks (requires Armature in Object mode)
     bpy.ops.object.mode_set(mode='OBJECT')
     for pose_bone in armature_object.pose.bones:
         bone = pose_bone.bone
