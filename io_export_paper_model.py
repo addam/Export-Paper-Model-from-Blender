@@ -1973,6 +1973,8 @@ class ExportPaperModel(bpy.types.Operator):
     bl_idname = "export_mesh.paper_model"
     bl_label = "Export Paper Model"
     bl_description = "Export the selected object's net and optionally bake its texture"
+    bl_options = {'PRESET'}
+    
     filepath: bpy.props.StringProperty(
         name="File Path", description="Target file to save the SVG", options={'SKIP_SAVE'})
     filename: bpy.props.StringProperty(
@@ -2107,14 +2109,7 @@ class ExportPaperModel(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-
         layout.prop(self.properties, "do_create_uvmap")
-
-        row = layout.row(align=True)
-        row.menu("VIEW3D_MT_paper_model_presets", text=bpy.types.VIEW3D_MT_paper_model_presets.bl_label)
-        row.operator("export_mesh.paper_model_preset_add", text="", icon='ADD')
-        row.operator("export_mesh.paper_model_preset_add", text="", icon='REMOVE').remove_active = True
-
         layout.prop(self.properties, "scale", text="Scale: 1/")
         scale_ratio = self.get_scale_ratio(context.scene)
         if scale_ratio > 1:
@@ -2270,31 +2265,6 @@ class SelectIsland(bpy.types.Operator):
                 vert.select = any(edge.select for edge in vert.link_edges)
         bmesh.update_edit_mesh(me, False, False)
         return {'FINISHED'}
-
-
-class VIEW3D_MT_paper_model_presets(bpy.types.Menu):
-    bl_label = "Paper Model Presets"
-    preset_subdir = "export_mesh"
-    preset_operator = "script.execute_preset"
-    draw = bpy.types.Menu.draw_preset
-
-
-class AddPresetPaperModel(bl_operators.presets.AddPresetBase, bpy.types.Operator):
-    """Add or remove a Paper Model Preset"""
-    bl_idname = "export_mesh.paper_model_preset_add"
-    bl_label = "Add Paper Model Preset"
-    preset_menu = "VIEW3D_MT_paper_model_presets"
-    preset_subdir = "export_mesh"
-    preset_defines = ["op = bpy.context.active_operator"]
-
-    @property
-    def preset_values(self):
-        op = bpy.ops.export_mesh.paper_model
-        properties = op.get_rna().bl_rna.properties.items()
-        blacklist = bpy.types.Operator.bl_rna.properties.keys()
-        return [
-            "op.{}".format(prop_id) for (prop_id, prop) in properties
-            if not (prop.is_hidden or prop.is_skip_save or prop_id in blacklist)]
 
 
 class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
@@ -2470,11 +2440,9 @@ module_classes = (
     ExportPaperModel,
     ClearAllSeams,
     SelectIsland,
-    AddPresetPaperModel,
     FaceList,
     IslandList,
     PaperModelSettings,
-    VIEW3D_MT_paper_model_presets,
     DATA_PT_paper_model_islands,
     VIEW3D_PT_paper_model_tools,
     VIEW3D_PT_paper_model_settings,
