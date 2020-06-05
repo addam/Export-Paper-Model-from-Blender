@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This script is Free software. Please share and reuse.
-# ♡2010-2019 Adam Dominec <adominec@gmail.com>
+# ♡2010-2020 Adam Dominec <adominec@gmail.com>
 
 ## Code structure
 # This file consists of several components, in this order:
@@ -2435,6 +2435,32 @@ class PaperModelSettings(bpy.types.PropertyGroup):
         default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1)
 
 
+def factory_update_addon_category(cls, prop):
+    def func(self, context):
+        if hasattr(bpy.types, cls.__name__):
+            bpy.utils.unregister_class(cls)
+        cls.bl_category = self[prop]
+        bpy.utils.register_class(cls)
+    return func
+
+
+class PaperAddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+    unfold_category: bpy.props.StringProperty(
+        name="Unfold Panel Category", description="Category in 3D View Toolbox where the Unfold panel is displayed",
+        default="Paper", update=factory_update_addon_category(VIEW3D_PT_paper_model_tools, 'unfold_category'))
+    export_category: bpy.props.StringProperty(
+        name="Export Panel Category", description="Category in 3D View Toolbox where the Export panel is displayed",
+        default="Paper", update=factory_update_addon_category(VIEW3D_PT_paper_model_settings, 'export_category'))
+    
+    def draw(self, context):
+        sub = self.layout.column(align=True)
+        sub.use_property_split = True
+        sub.label(text="3D View Panel Category:")
+        sub.prop(self, "unfold_category", text="Unfold Panel:")
+        sub.prop(self, "export_category", text="Export Panel:")
+
+
 module_classes = (
     Unfold,
     ExportPaperModel,
@@ -2446,6 +2472,7 @@ module_classes = (
     DATA_PT_paper_model_islands,
     VIEW3D_PT_paper_model_tools,
     VIEW3D_PT_paper_model_settings,
+    PaperAddonPreferences,
 )
 
 
@@ -2462,6 +2489,10 @@ def register():
         default=-1, min=-1, max=100, options={'SKIP_SAVE'}, update=island_index_changed)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
     bpy.types.VIEW3D_MT_edit_mesh.prepend(menu_func_unfold)
+    # Force an update on the panel category properties
+    prefs = bpy.context.preferences.addons[__name__].preferences
+    prefs.unfold_category = prefs.unfold_category
+    prefs.export_category = prefs.export_category
 
 
 def unregister():
