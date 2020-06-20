@@ -521,14 +521,13 @@ class Mesh:
             angle, _ = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
             rot = M.Matrix.Rotation(angle, 2)
             for point in points:
-                # note: we need an in-place operation, and Vector.rotate() seems to work for 3d vectors only
-                point[:] = rot @ point
+                point.rotate(rot)
             for marker in island.markers:
                 marker.rot = rot @ marker.rot
             bottom_left = M.Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
-            #DEBUG
-            top_right = M.Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
-            #print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
+            # DEBUG
+            # top_right = M.Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
+            # print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
             for point in points:
                 point -= bottom_left
             island.bounding_box = M.Vector((max(v.x for v in points), max(v.y for v in points)))
