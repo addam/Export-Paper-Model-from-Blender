@@ -13,7 +13,7 @@ bl_info = {
     "name": "Export Paper Model",
     "author": "Addam Dominec",
     "version": (1, 1),
-    "blender": (2, 80, 0),
+    "blender": (2, 83, 0),
     "location": "File > Export > Paper Model",
     "warning": "",
     "description": "Export printable net of the active mesh",
@@ -167,6 +167,16 @@ def create_blank_image(image_name, dimensions, alpha=1):
     return image
 
 
+def store_rna_properties(*datablocks):
+    return [{prop.identifier: getattr(data, prop.identifier) for prop in data.rna_type.properties if not prop.is_readonly} for data in datablocks]
+
+
+def apply_rna_properties(memory, *datablocks):
+    for recall, data in zip(memory, datablocks):
+        for key, value in recall.items():
+            setattr(data, key, value)
+
+
 class UnfoldError(ValueError):
     def mesh_select(self):
         if len(self.args) > 1:
@@ -250,11 +260,9 @@ class Unfolder:
             sce = bpy.context.scene
             rd = sce.render
             bk = rd.bake
-            # TODO: do we really need all this recollection?
-            recall = rd.engine, sce.cycles.bake_type, sce.cycles.samples, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear
+            recall = store_rna_properties(rd, bk, sce.cycles)
             rd.engine = 'CYCLES'
-            recall_pass = {p: getattr(bk, f"use_pass_{p}") for p in ('ambient_occlusion', 'color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'subsurface', 'transmission')}
-            for p in recall_pass:
+            for p in ('ambient_occlusion', 'color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'transmission'):
                 setattr(bk, f"use_pass_{p}", (properties.output_type != 'TEXTURE'))
             lookup = {'TEXTURE': 'DIFFUSE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
             sce.cycles.bake_type = lookup[properties.output_type]
@@ -267,7 +275,7 @@ class Unfolder:
                 sce.cycles.samples = properties.bake_samples                
             if sce.cycles.bake_type == 'COMBINED':
                 bk.use_pass_direct, bk.use_pass_indirect = True, True
-                bk.use_pass_diffuse, bk.use_pass_glossy, bk.use_pass_transmission, bk.use_pass_subsurface, bk.use_pass_ambient_occlusion, bk.use_pass_emit = True, False, False, True, True, True
+                bk.use_pass_diffuse, bk.use_pass_glossy, bk.use_pass_transmission, bk.use_pass_ambient_occlusion, bk.use_pass_emit = True, False, False, True, True
 
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(printable_size * ppm, filepath)
@@ -277,9 +285,7 @@ class Unfolder:
             elif image_packing == 'ISLAND_EMBED':
                 self.mesh.save_separate_images(ppm, filepath, embed=Exporter.encode_image)
 
-            rd.engine, sce.cycles.bake_type, sce.cycles.samples, bk.use_selected_to_active, bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = recall
-            for p, v in recall_pass.items():
-                setattr(bk, f"use_pass_{p}", v)
+            apply_rna_properties(recall, rd, bk, sce.cycles)
 
         exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'), properties.angle_epsilon)
         exporter.do_create_stickers = properties.do_create_stickers
