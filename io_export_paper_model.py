@@ -2154,7 +2154,7 @@ class ExportPaperModel(bpy.types.Operator):
             box.prop(self.properties, "output_type")
             col = box.column()
             col.active = (self.output_type != 'NONE')
-            if len(self.object.data.uv_layers) == 8:
+            if len(self.object.data.uv_layers) >= 8:
                 col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
             elif context.scene.render.engine != 'CYCLES' and self.output_type != 'NONE':
                 col.label(text="Cycles will be used for texture baking.", icon='ERROR')
