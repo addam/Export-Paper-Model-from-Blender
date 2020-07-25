@@ -27,10 +27,6 @@ bl_info = {
     # sketch out the code for GCODE and two-sided export
 
 # TODO:
-# sanitize the constructors Edge, Face, UVFace so that they don't edit their parent object
-# The Exporter classes should take parameters as a whole pack, and parse it themselves
-# remember objects selected before baking (except selected to active)
-# add 'estimated number of pages' to the export UI
 # QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
 # rotate islands to minimize area -- and change that only if necessary to fill the page size
 # Sticker.vertices should be of type Vector
@@ -228,7 +224,7 @@ class Unfolder:
         # Note about scale: input is directly in blender length
         # Mesh.scale_islands multiplies everything by a user-defined ratio
         # exporters (SVG or PDF) multiply everything by 1000 (output in millimeters)
-        Exporter = SVG if properties.file_format == 'SVG' else PDF
+        Exporter = Svg if properties.file_format == 'SVG' else Pdf
         filepath = properties.filepath
         extension = properties.file_format.lower()
         filepath = bpy.path.ensure_ext(filepath, "." + extension)
@@ -287,7 +283,7 @@ class Unfolder:
 
             apply_rna_properties(recall, rd, bk, sce.cycles)
 
-        exporter = Exporter(page_size, properties.style, properties.output_margin, (properties.output_type == 'NONE'), properties.angle_epsilon)
+        exporter = Exporter(properties)
         exporter.do_create_stickers = properties.do_create_stickers
         exporter.text_size = properties.sticker_width
         exporter.write(self.mesh, filepath)
@@ -1257,19 +1253,16 @@ class NumberAlone:
         self.bounds = [self.center]
 
 
-class SVG:
+class Svg:
     """Simple SVG exporter"""
 
-    def __init__(self, page_size: M.Vector, style, margin, pure_net=True, angle_epsilon=0.01):
-        """Initialize document settings.
-        page_size: document dimensions in meters
-        pure_net: if True, do not use image"""
-        self.page_size = page_size
-        self.pure_net = pure_net
-        self.style = style
-        self.margin = margin
+    def __init__(self, properties):
+        self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+        self.pure_net = (properties.output_type == 'NONE')
+        self.style = properties.style
+        self.margin = properties.output_margin
         self.text_size = 12
-        self.angle_epsilon = angle_epsilon
+        self.angle_epsilon = properties.angle_epsilon
 
     @classmethod
     def encode_image(cls, bpy_image):
@@ -1281,10 +1274,9 @@ class SVG:
             bpy_image.save()
             return base64.encodebytes(open(filename, "rb").read()).decode('ascii')
 
-    def format_vertex(self, vector, pos=M.Vector((0, 0))):
+    def format_vertex(self, vector):
         """Return a string with both coordinates of the given vertex."""
-        x, y = vector + pos
-        return "{:.6f} {:.6f}".format((x + self.margin) * 1000, (self.page_size.y - y - self.margin) * 1000)
+        return "{:.6f} {:.6f}".format((vector.x + self.margin) * 1000, (self.page_size.y - vector.y - self.margin) * 1000)
 
     def write(self, mesh, filename):
         """Write data to a file given by its name."""
@@ -1374,11 +1366,11 @@ class SVG:
                     for marker in island.markers:
                         if isinstance(marker, Sticker):
                             data_stickerfill.append("M {} Z".format(
-                                line_through(self.format_vertex(vertex.co, island.pos) for vertex in marker.vertices)))
+                                line_through(self.format_vertex(vertex.co + island.pos) for vertex in marker.vertices)))
                             if marker.text:
                                 data_markers.append(self.text_transformed_tag.format(
                                     label=marker.text,
-                                    pos=self.format_vertex(marker.center, island.pos),
+                                    pos=self.format_vertex(marker.center + island.pos),
                                     mat=format_matrix(marker.rot),
                                     size=marker.width * 1000))
                         elif isinstance(marker, Arrow):
@@ -1386,14 +1378,14 @@ class SVG:
                             position = marker.center + marker.size * marker.rot @ M.Vector((0, -0.9))
                             data_markers.append(self.arrow_marker_tag.format(
                                 index=marker.text,
-                                arrow_pos=self.format_vertex(marker.center, island.pos),
+                                arrow_pos=self.format_vertex(marker.center + island.pos),
                                 scale=size,
-                                pos=self.format_vertex(position, island.pos - marker.size*M.Vector((0, 0.4))),
+                                pos=self.format_vertex(position + island.pos - marker.size*M.Vector((0, 0.4))),
                                 mat=format_matrix(size * marker.rot)))
                         elif isinstance(marker, NumberAlone):
                             data_markers.append(self.text_transformed_tag.format(
                                 label=marker.text,
-                                pos=self.format_vertex(marker.center, island.pos),
+                                pos=self.format_vertex(marker.center + island.pos),
                                 mat=format_matrix(marker.rot),
                                 size=marker.size * 1000))
                     if data_stickerfill and self.style.sticker_fill[3] > 0:
@@ -1405,10 +1397,10 @@ class SVG:
                         uvedge = outer_edges.pop()
                         while 1:
                             if uvedge.sticker:
-                                data_loop.extend(self.format_vertex(vertex.co, island.pos) for vertex in uvedge.sticker.vertices[1:])
+                                data_loop.extend(self.format_vertex(vertex.co + island.pos) for vertex in uvedge.sticker.vertices[1:])
                             else:
                                 vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
-                                data_loop.append(self.format_vertex(vertex.co, island.pos))
+                                data_loop.append(self.format_vertex(vertex.co + island.pos))
                             uvedge = uvedge.neighbor_right
                             try:
                                 outer_edges.remove(uvedge)
@@ -1422,7 +1414,7 @@ class SVG:
                         if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
                             continue
                         data_uvedge = "M {}".format(
-                            line_through(self.format_vertex(vertex.co, island.pos) for vertex in (uvedge.va, uvedge.vb)))
+                            line_through(self.format_vertex(vertex.co + island.pos) for vertex in (uvedge.va, uvedge.vb)))
                         if edge.freestyle:
                             data_freestyle.append(data_uvedge)
                         # each uvedge is in two opposite-oriented variants; we want to add each only once
@@ -1532,7 +1524,7 @@ class SVG:
     </style>"""
 
 
-class PDF:
+class Pdf:
     """Simple PDF exporter"""
 
     mm_to_pt = 72 / 25.4
@@ -1542,12 +1534,13 @@ class PDF:
         667: '&ABEKPSVXY\x8a\x9fÀÁÂÃÄÅÈÉÊËÝÞ', 722: 'CDHNRUwÇÐÑÙÚÛÜ', 737: '©®', 778: 'GOQÒÓÔÕÖØ', 833: 'Mm¼½¾', 889: '%æ', 944: 'W\x9c', 1000: '\x85\x89\x8c\x97\x99Æ', 1015: '@', }
     character_width = {c: value for (value, chars) in character_width_packed.items() for c in chars}
 
-    def __init__(self, page_size: M.Vector, style, margin, pure_net=True, angle_epsilon=0.01):
-        self.page_size = page_size
-        self.style = style
+    def __init__(self, properties):
+        self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+        self.style = properties.style
+        margin = properties.output_margin
         self.margin = M.Vector((margin, margin))
-        self.pure_net = pure_net
-        self.angle_epsilon = angle_epsilon
+        self.pure_net = (properties.output_type == 'NONE')
+        self.angle_epsilon = properties.angle_epsilon
 
     def text_width(self, text, scale=None):
         return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
