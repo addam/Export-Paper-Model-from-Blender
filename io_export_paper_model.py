@@ -29,7 +29,6 @@ bl_info = {
 # TODO:
 # QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
 # rotate islands to minimize area -- and change that only if necessary to fill the page size
-# Sticker.vertices should be of type Vector
 
 # check conflicts in island naming and either:
 #  * append a number to the conflicting names or
@@ -1174,7 +1173,7 @@ class Arrow:
 
 class Sticker:
     """Mark in the document: sticker tab"""
-    __slots__ = ('bounds', 'center', 'rot', 'text', 'width', 'vertices')
+    __slots__ = ('bounds', 'center', 'points', 'rot', 'text', 'width')
 
     def __init__(self, uvedge, default_width, index, other: UVEdge):
         """Sticker is directly attached to the given UVEdge"""
@@ -1219,12 +1218,12 @@ class Sticker:
         len_a = min(len_a, (edge.length * sin_b) / (sin_a * cos_b + sin_b * cos_a))
         len_b = 0 if sin_b == 0 else min(sticker_width / sin_b, (edge.length - len_a * cos_a) / cos_b)
 
-        v3 = UVVertex(second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) @ edge * len_b / edge.length)
-        v4 = UVVertex(first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) @ edge * len_a / edge.length)
-        if v3.co != v4.co:
-            self.vertices = [second_vertex, v3, v4, first_vertex]
+        v3 = second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) @ edge * len_b / edge.length
+        v4 = first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) @ edge * len_a / edge.length
+        if v3 != v4:
+            self.points = [second_vertex.co, v3, v4, first_vertex.co]
         else:
-            self.vertices = [second_vertex, v3, first_vertex]
+            self.points = [second_vertex.co, v3, first_vertex.co]
 
         sin, cos = edge.y / edge.length, edge.x / edge.length
         self.rot = M.Matrix(((cos, -sin), (sin, cos)))
@@ -1234,7 +1233,7 @@ class Sticker:
         else:
             self.text = index
         self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot @ M.Vector((0, self.width * 0.2))
-        self.bounds = [v3.co, v4.co, self.center] if v3.co != v4.co else [v3.co, self.center]
+        self.bounds = [v3, v4, self.center] if v3 != v4 else [v3, self.center]
 
 
 class NumberAlone:
@@ -1366,7 +1365,7 @@ class Svg:
                     for marker in island.markers:
                         if isinstance(marker, Sticker):
                             data_stickerfill.append("M {} Z".format(
-                                line_through(self.format_vertex(vertex.co + island.pos) for vertex in marker.vertices)))
+                                line_through(self.format_vertex(co + island.pos) for co in marker.points)))
                             if marker.text:
                                 data_markers.append(self.text_transformed_tag.format(
                                     label=marker.text,
@@ -1397,7 +1396,7 @@ class Svg:
                         uvedge = outer_edges.pop()
                         while 1:
                             if uvedge.sticker:
-                                data_loop.extend(self.format_vertex(vertex.co + island.pos) for vertex in uvedge.sticker.vertices[1:])
+                                data_loop.extend(self.format_vertex(co + island.pos) for co in uvedge.sticker.points[1:])
                             else:
                                 vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
                                 data_loop.append(self.format_vertex(vertex.co + island.pos))
@@ -1559,7 +1558,7 @@ class Pdf:
             return "<< " + "".join("/{} {}\n".format(key, format_value(value, refs)) for (key, value) in obj.items()) + ">>"
 
         def line_through(seq):
-            return "".join("{0.x:.6f} {0.y:.6f} {1} ".format(1000*v.co, c) for (v, c) in zip(seq, chain("m", repeat("l"))))
+            return "".join("{0.x:.6f} {0.y:.6f} {1} ".format(1000*co, cmd) for (co, cmd) in zip(seq, chain("m", repeat("l"))))
 
         def format_value(value, refs=tuple()):
             if value in refs:
@@ -1653,7 +1652,7 @@ class Pdf:
                 data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
                 for marker in island.markers:
                     if isinstance(marker, Sticker):
-                        data_stickerfill.append(line_through(marker.vertices) + "f")
+                        data_stickerfill.append(line_through(marker.points) + "f")
                         if marker.text:
                             data_markers.append(self.command_sticker.format(
                                 label=marker.text,
@@ -1683,10 +1682,10 @@ class Pdf:
                     uvedge = outer_edges.pop()
                     while 1:
                         if uvedge.sticker:
-                            data_loop.extend(uvedge.sticker.vertices[1:])
+                            data_loop.extend(uvedge.sticker.points[1:])
                         else:
                             vertex = uvedge.vb if uvedge.uvface.flipped else uvedge.va
-                            data_loop.append(vertex)
+                            data_loop.append(vertex.co)
                         uvedge = uvedge.neighbor_right
                         try:
                             outer_edges.remove(uvedge)
@@ -1698,7 +1697,7 @@ class Pdf:
                     edge = mesh.edges[loop.edge]
                     if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
                         continue
-                    data_uvedge = line_through((uvedge.va, uvedge.vb)) + "S"
+                    data_uvedge = line_through((uvedge.va.co, uvedge.vb.co)) + "S"
                     if edge.freestyle:
                         data_freestyle.append(data_uvedge)
                     # each uvedge exists in two opposite-oriented variants; we want to add each only once
