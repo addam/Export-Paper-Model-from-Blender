@@ -2067,7 +2067,7 @@ class ExportPaperModel(bpy.types.Operator):
         self.unfolder = Unfolder(self.object)
         cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y))
         self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale, limit_by_page=sce.paper_model.limit_by_page)
-        if self.scale == 1:
+        if sce.paper_model.use_auto_scale:
             self.scale = ceil(self.get_scale_ratio(sce))
     
     def recall(self):
@@ -2308,7 +2308,10 @@ class VIEW3D_PT_paper_model_settings(bpy.types.Panel):
 
         layout.operator("export_mesh.paper_model")
         props = sce.paper_model
-        layout.prop(props, "scale", text="Model Scale:  1/")
+        layout.prop(props, "use_auto_scale")
+        sub = layout.row()
+        sub.active = not props.use_auto_scale
+        sub.prop(props, "scale", text="Model Scale:  1/")
 
         layout.prop(props, "limit_by_page")
         col = layout.column()
@@ -2435,9 +2438,13 @@ class PaperModelSettings(bpy.types.PropertyGroup):
     output_size_y: bpy.props.FloatProperty(
         name="Height", description="Maximal height of an island",
         default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+    use_auto_scale: bpy.props.BoolProperty(
+        name="Automatic Scale", description="Scale the net automatically to fit on paper",
+        default=True)
     scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
-        default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1)
+        default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1,
+        update=lambda settings, _: settings.__setattr__('use_auto_scale', False))
 
 
 def factory_update_addon_category(cls, prop):
