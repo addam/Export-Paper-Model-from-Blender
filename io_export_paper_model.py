@@ -283,8 +283,6 @@ class Unfolder:
             apply_rna_properties(recall, rd, bk, sce.cycles)
 
         exporter = Exporter(properties)
-        exporter.do_create_stickers = properties.do_create_stickers
-        exporter.text_size = properties.sticker_width
         exporter.write(self.mesh, filepath)
 
 
@@ -1252,16 +1250,21 @@ class NumberAlone:
         self.bounds = [self.center]
 
 
+def init_exporter(self, properties):
+    self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+    self.style = properties.style
+    margin = properties.output_margin
+    self.margin = M.Vector((margin, margin))
+    self.pure_net = (properties.output_type == 'NONE')
+    self.do_create_stickers = properties.do_create_stickers
+    self.text_size = properties.sticker_width
+    self.angle_epsilon = properties.angle_epsilon
+
 class Svg:
     """Simple SVG exporter"""
 
     def __init__(self, properties):
-        self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
-        self.pure_net = (properties.output_type == 'NONE')
-        self.style = properties.style
-        self.margin = properties.output_margin
-        self.text_size = 12
-        self.angle_epsilon = properties.angle_epsilon
+        init_exporter(self, properties)
 
     @classmethod
     def encode_image(cls, bpy_image):
@@ -1275,7 +1278,7 @@ class Svg:
 
     def format_vertex(self, vector):
         """Return a string with both coordinates of the given vertex."""
-        return "{:.6f} {:.6f}".format((vector.x + self.margin) * 1000, (self.page_size.y - vector.y - self.margin) * 1000)
+        return "{:.6f} {:.6f}".format((vector.x + self.margin.x) * 1000, (self.page_size.y - vector.y - self.margin.y) * 1000)
 
     def write(self, mesh, filename):
         """Write data to a file given by its name."""
@@ -1325,9 +1328,9 @@ class Svg:
                 if page.image_path:
                     print(
                         self.image_linked_tag.format(
-                            pos="{0:.6f} {0:.6f}".format(self.margin*1000),
-                            width=(self.page_size.x - 2 * self.margin)*1000,
-                            height=(self.page_size.y - 2 * self.margin)*1000,
+                            pos="{0:.6f} {0:.6f}".format(self.margin.x*1000),
+                            width=(self.page_size.x - 2 * self.margin.x)*1000,
+                            height=(self.page_size.y - 2 * self.margin.y)*1000,
                             path=path_convert(page.image_path)),
                         file=f)
                 if len(page.islands) > 1:
@@ -1356,8 +1359,8 @@ class Svg:
                         print(
                             self.text_tag.format(
                                 size=1000 * self.text_size,
-                                x=1000 * (island.bounding_box.x*0.5 + island.pos.x + self.margin),
-                                y=1000 * (self.page_size.y - island.pos.y - self.margin - 0.2 * self.text_size),
+                                x=1000 * (island.bounding_box.x*0.5 + island.pos.x + self.margin.x),
+                                y=1000 * (self.page_size.y - island.pos.y - self.margin.y - 0.2 * self.text_size),
                                 label=island.title),
                             file=f)
 
@@ -1534,12 +1537,7 @@ class Pdf:
     character_width = {c: value for (value, chars) in character_width_packed.items() for c in chars}
 
     def __init__(self, properties):
-        self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
-        self.style = properties.style
-        margin = properties.output_margin
-        self.margin = M.Vector((margin, margin))
-        self.pure_net = (properties.output_type == 'NONE')
-        self.angle_epsilon = properties.angle_epsilon
+        init_exporter(self, properties)
 
     def text_width(self, text, scale=None):
         return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
