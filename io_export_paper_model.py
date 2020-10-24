@@ -1306,7 +1306,7 @@ class Svg:
         styleargs = {
             name: format_color(getattr(self.style, name)) for name in (
                 "outer_color", "outbg_color", "convex_color", "concave_color", "freestyle_color",
-                "inbg_color", "sticker_fill", "text_color")}
+                "inbg_color", "sticker_color", "text_color")}
         styleargs.update({
             name: format_style[getattr(self.style, name)] for name in
             ("outer_style", "convex_style", "concave_style", "freestyle_style")})
@@ -1315,7 +1315,7 @@ class Svg:
                 ("outer_alpha", "outer_color"), ("outbg_alpha", "outbg_color"),
                 ("convex_alpha", "convex_color"), ("concave_alpha", "concave_color"),
                 ("freestyle_alpha", "freestyle_color"),
-                ("inbg_alpha", "inbg_color"), ("sticker_alpha", "sticker_fill"),
+                ("inbg_alpha", "inbg_color"), ("sticker_alpha", "sticker_color"),
                 ("text_alpha", "text_color"))})
         styleargs.update({
             name: getattr(self.style, name) * self.style.line_width * 1000 for name in
@@ -1390,7 +1390,7 @@ class Svg:
                                 pos=self.format_vertex(marker.center + island.pos),
                                 mat=format_matrix(marker.rot),
                                 size=marker.size * 1000))
-                    if data_stickerfill and self.style.sticker_fill[3] > 0:
+                    if data_stickerfill and self.style.sticker_color[3] > 0:
                         print("<path class='sticker' d='", rows(data_stickerfill), "'/>", file=f)
 
                     outer_edges = set(island.boundary)
@@ -1507,7 +1507,7 @@ class Svg:
         stroke-width: {inbg_width:.2}
     }}
     path.sticker {{
-        fill: {sticker_fill};
+        fill: {sticker_color};
         stroke: none;
         fill-opacity: {sticker_alpha:.2};
     }}
@@ -1538,9 +1538,31 @@ class Pdf:
 
     def __init__(self, properties):
         init_exporter(self, properties)
+        self.styles = dict()
 
     def text_width(self, text, scale=None):
         return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
+    
+    def styling(self, name, do_stroke=True):
+        s, m, l = (length * self.style.line_width * 1000 for length in (1, 4, 9))
+        format_style = {'SOLID': [], 'DOT': [s, m], 'DASH': [m, l], 'LONGDASH': [l, m], 'DASHDOT': [l, m, s, m]}
+        style, color, width = (getattr(self.style, f"{name}_{arg}", None) for arg in ("style", "color", "width"))
+        style = style or 'SOLID'
+        result = ["q"]
+        if do_stroke:
+            result += [
+                "[ " + " ".join("{:.3f}".format(num) for num in format_style[style]) + " ] 0 d",
+                "{0:.3f} {1:.3f} {2:.3f} RG".format(*color),
+                "{:.3f} w".format(self.style.line_width * 1000 * width),
+                ]
+        else:
+            result.append("{0:.3f} {1:.3f} {2:.3f} rg".format(*color))
+        if color[3] < 1:
+            style_name = "R{:03}".format(round(1000 * color[3]))
+            result.append("/{} gs".format(style_name))
+            if style_name not in self.styles:
+                self.styles[style_name] = {"CA": color[3], "ca": color[3]}
+        return result
 
     @classmethod
     def encode_image(cls, bpy_image):
@@ -1575,77 +1597,59 @@ class Pdf:
                 return "/{}".format(value)  # this script can output only PDF names, no strings
 
         def write_object(index, obj, refs, f, stream=None):
-            byte_count = f.write("{} 0 obj\n".format(index))
+            byte_count = f.write("{} 0 obj\n".format(index).encode())
             if type(obj) is not dict:
                 stream, obj = obj, dict()
             elif "stream" in obj:
                 stream = obj.pop("stream")
             if stream:
-                if True or type(stream) is bytes:
-                    obj["Filter"] = ["ASCII85Decode", "FlateDecode"]
-                    stream = encode(stream)
+                obj["Filter"] = "FlateDecode"
+                stream = encode(stream)
                 obj["Length"] = len(stream)
-            byte_count += f.write(format_dict(obj, refs))
+            byte_count += f.write(format_dict(obj, refs).encode())
             if stream:
-                byte_count += f.write("\nstream\n")
+                byte_count += f.write(b"\nstream\n")
                 byte_count += f.write(stream)
-                byte_count += f.write("\nendstream")
-            return byte_count + f.write("\nendobj\n")
+                byte_count += f.write(b"\nendstream")
+            return byte_count + f.write(b"\nendobj\n")
 
         def encode(data):
-            from base64 import a85encode
             from zlib import compress
             if hasattr(data, "encode"):
                 data = data.encode()
-            return a85encode(compress(data), adobe=True, wrapcol=250)[2:].decode()
+            return compress(data)
 
         page_size_pt = 1000 * self.mm_to_pt * self.page_size
+        reset_style = ["Q"]  # graphic command for later use
         root = {"Type": "Pages", "MediaBox": [0, 0, page_size_pt.x, page_size_pt.y], "Kids": list()}
         catalog = {"Type": "Catalog", "Pages": root}
         font = {
             "Type": "Font", "Subtype": "Type1", "Name": "F1",
             "BaseFont": "Helvetica", "Encoding": "MacRomanEncoding"}
-
-        dl = [length * self.style.line_width * 1000 for length in (1, 4, 9)]
-        format_style = {
-            'SOLID': list(), 'DOT': [dl[0], dl[1]], 'DASH': [dl[1], dl[2]],
-            'LONGDASH': [dl[2], dl[1]], 'DASHDOT': [dl[2], dl[1], dl[0], dl[1]]}
-        styles = {
-            "Gtext": {"ca": self.style.text_color[3], "Font": [font, 1000 * self.text_size]},
-            "Gsticker": {"ca": self.style.sticker_fill[3]}}
-        for name in ("outer", "convex", "concave", "freestyle"):
-            gs = {
-                "LW": self.style.line_width * 1000 * getattr(self.style, name + "_width"),
-                "CA": getattr(self.style, name + "_color")[3],
-                "D": [format_style[getattr(self.style, name + "_style")], 0]}
-            styles["G" + name] = gs
-        for name in ("outbg", "inbg"):
-            gs = {
-                "LW": self.style.line_width * 1000 * getattr(self.style, name + "_width"),
-                "CA": getattr(self.style, name + "_color")[3],
-                "D": [format_style['SOLID'], 0]}
-            styles["G" + name] = gs
-
         objects = [root, catalog, font]
-        objects.extend(styles.values())
 
         for page in mesh.pages:
             commands = ["{0:.6f} 0 0 {0:.6f} 0 0 cm".format(self.mm_to_pt)]
-            resources = {"Font": {"F1": font}, "ExtGState": styles, "XObject": dict()}
+            resources = {"Font": {"F1": font}, "ExtGState": self.styles, "ProcSet": ["PDF"]}
+            if any(island.embedded_image for island in page.islands):
+                resources["XObject"] = dict()
+                resources["ProcSet"].append("ImageC")
             for island in page.islands:
                 commands.append("q 1 0 0 1 {0.x:.6f} {0.y:.6f} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
-                    identifier = "Im{}".format(len(resources["XObject"]) + 1)
+                    identifier = "I{}".format(len(resources["XObject"]) + 1)
                     commands.append(self.command_image.format(1000 * island.bounding_box, identifier))
                     objects.append(island.embedded_image)
                     resources["XObject"][identifier] = island.embedded_image
 
                 if island.title:
+                    commands += self.styling("text", do_stroke=False)
                     commands.append(self.command_label.format(
                         size=1000*self.text_size,
                         x=500 * (island.bounding_box.x - self.text_width(island.title)),
                         y=1000 * 0.2 * self.text_size,
                         label=island.title))
+                    commands += reset_style
 
                 data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
                 for marker in island.markers:
@@ -1707,56 +1711,52 @@ class Pdf:
                 if island.is_inside_out:
                     data_convex, data_concave = data_concave, data_convex
 
-                if data_stickerfill and self.style.sticker_fill[3] > 0:
-                    commands.append("/Gsticker gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} rg".format(self.style.sticker_fill))
-                    commands.extend(data_stickerfill)
+                if data_stickerfill and self.style.sticker_color[3] > 0:
+                    commands += chain(self.styling("sticker", do_stroke=False), data_stickerfill, reset_style)
                 if data_freestyle:
-                    commands.append("/Gfreestyle gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.freestyle_color))
-                    commands.extend(data_freestyle)
+                    commands += chain(self.styling("freestyle"), data_freestyle, reset_style)
                 if (data_convex or data_concave) and not self.pure_net and self.style.use_inbg:
-                    commands.append("/Ginbg gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.inbg_color))
-                    commands.extend(chain(data_convex, data_concave))
+                    commands += chain(self.styling("inbg"), data_convex, data_concave, reset_style)
                 if data_convex:
-                    commands.append("/Gconvex gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.convex_color))
-                    commands.extend(data_convex)
+                    commands += chain(self.styling("convex"), data_convex, reset_style)
                 if data_concave:
-                    commands.append("/Gconcave gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.concave_color))
-                    commands.extend(data_concave)
+                    commands += chain(self.styling("concave"), data_concave, reset_style)
                 if data_outer:
                     if not self.pure_net and self.style.use_outbg:
-                        commands.append("/Goutbg gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.outbg_color))
-                        commands.extend(data_outer)
-                    commands.append("/Gouter gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} RG".format(self.style.outer_color))
-                    commands.extend(data_outer)
-                commands.append("/Gtext gs {0[0]:.3f} {0[1]:.3f} {0[2]:.3f} rg".format(self.style.text_color))
-                commands.extend(data_markers)
-                commands.append("Q")
+                        commands += chain(self.styling("outbg"), data_outer, reset_style)
+                    commands += chain(self.styling("outer"), data_outer, reset_style)
+                if data_markers:
+                    commands += chain(self.styling("text", do_stroke=False), data_markers, reset_style)
+                commands += reset_style  # return from island to page coordinates
             content = "\n".join(commands)
             page = {"Type": "Page", "Parent": root, "Contents": content, "Resources": resources}
             root["Kids"].append(page)
-            objects.extend((page, content))
+            objects += page, content
+            objects.extend(self.styles.values())
 
         root["Count"] = len(root["Kids"])
-        with open(filename, "w+") as f:
+        with open(filename, "wb+") as f:
             xref_table = list()
-            position = f.write("%PDF-1.4\n")
+            position = 0
+            position += f.write(b"%PDF-1.4\n")
+            position += f.write(b"%\xde\xad\xbe\xef\n")
             for index, obj in enumerate(objects, 1):
                 xref_table.append(position)
                 position += write_object(index, obj, objects, f)
             xref_pos = position
-            f.write("xref_table\n0 {}\n".format(len(xref_table) + 1))
-            f.write("{:010} {:05} f\n".format(0, 65536))
+            f.write("xref\n0 {}\n".format(len(xref_table) + 1).encode())
+            f.write("{:010} {:05} f\r\n".format(0, 65535).encode())
             for position in xref_table:
-                f.write("{:010} {:05} n\n".format(position, 0))
-            f.write("trailer\n")
-            f.write(format_dict({"Size": len(xref_table), "Root": catalog}, objects))
-            f.write("\nstartxref\n{}\n%%EOF\n".format(xref_pos))
+                f.write("{:010} {:05} n\r\n".format(position, 0).encode())
+            f.write(b"trailer\n")
+            f.write(format_dict({"Size": len(xref_table) + 1, "Root": catalog}, objects).encode())
+            f.write("\nstartxref\n{}\n%%EOF\n".format(xref_pos).encode())
 
-    command_label = "/Gtext gs BT {x:.6f} {y:.6f} Td ({label}) Tj ET"
+    command_label = "q /F1 {size:.6f} Tf BT {x:.6f} {y:.6f} Td ({label}) Tj ET Q"
     command_image = "q {0.x:.6f} 0 0 {0.y:.6f} 0 0 cm 1 0 0 -1 0 1 cm /{1} Do Q"
-    command_sticker = "q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align:.6f} 0 Td /F1 {size:.6f} Tf ({label}) Tj ET Q"
-    command_arrow = "q BT {pos.x:.6f} {pos.y:.6f} Td /F1 {size:.6f} Tf ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q"
-    command_number = "q {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT /F1 {size:.6f} Tf ({label}) Tj ET Q"
+    command_sticker = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align:.6f} 0 Td ({label}) Tj ET Q"
+    command_arrow = "q /F1 {size:.6f} Tf BT {pos.x:.6f} {pos.y:.6f} Td ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q"
+    command_number = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT ({label}) Tj ET Q"
 
 
 class Unfold(bpy.types.Operator):
@@ -1953,7 +1953,7 @@ class PaperModelStyle(bpy.types.PropertyGroup):
         name="Inner Highlight Thickness", description="Relative thickness of the highlighting lines",
         default=2, min=0, soft_max=10, precision=1, step=10, subtype='FACTOR')
 
-    sticker_fill: bpy.props.FloatVectorProperty(
+    sticker_color: bpy.props.FloatVectorProperty(
         name="Tabs Fill", description="Fill color of sticking tabs",
         default=(0.9, 0.9, 0.9, 1.0), min=0, max=1, subtype='COLOR', size=4)
     text_color: bpy.props.FloatVectorProperty(
@@ -2197,7 +2197,7 @@ class ExportPaperModel(bpy.types.Operator):
             sub.prop(self.style, "inbg_width", text="Relative width")
             col = box.column()
             col.active = self.do_create_stickers
-            col.prop(self.style, "sticker_fill")
+            col.prop(self.style, "sticker_color")
             box.prop(self.style, "text_color")
 
 
