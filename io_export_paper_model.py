@@ -12,14 +12,13 @@
 bl_info = {
     "name": "Export Paper Model",
     "author": "Addam Dominec",
-    "version": (1, 1),
+    "version": (1, 2),
     "blender": (2, 83, 0),
     "location": "File > Export > Paper Model",
     "warning": "",
     "description": "Export printable net of the active mesh",
+    "doc_url": "{BLENDER_MANUAL_URL}/addons/import_export/paper_model.html",
     "category": "Import-Export",
-    "wiki_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/"
-                "Scripts/Import-Export/Paper_Model"
 }
 
 # Task: split into four files (SVG and PDF separately)
