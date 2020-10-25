@@ -23,16 +23,16 @@ bl_info = {
 }
 
 # Task: split into four files (SVG and PDF separately)
-    # does any portion of baking belong into the export module?
-    # sketch out the code for GCODE and two-sided export
+# * does any portion of baking belong into the export module?
+# * sketch out the code for GCODE and two-sided export
 
 # TODO:
 # QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
 # rotate islands to minimize area -- and change that only if necessary to fill the page size
 
 # check conflicts in island naming and either:
-#  * append a number to the conflicting names or
-#  * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
+# * append a number to the conflicting names or
+# * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
 
 import bpy
 import bl_operators
@@ -123,7 +123,6 @@ def cage_fit(points, aspect):
             rot_polygon = [rot @ p for p in polygon]
             left, right = [fn(rot_polygon, key=lambda p: p.to_tuple()) for fn in (min, max)]
             bottom, top = [fn(rot_polygon, key=lambda p: p.yx.to_tuple()) for fn in (min, max)]
-            #print(f"{rot_polygon.index(left)}-{rot_polygon.index(right)}, {rot_polygon.index(bottom)}-{rot_polygon.index(top)}")
             horz, vert = right - left, top - bottom
             # solve (rot * a).y == (rot * b).y
             yield max(aspect * horz.x, vert.y), sinx, cosx
@@ -139,9 +138,7 @@ def cage_fit(points, aspect):
             rot = M.Matrix(((cosy, -siny), (siny, cosy)))
             for p in rot_polygon:
                 p[:] = rot @ p  # note: this also modifies left, right, bottom, top
-            #print(f"solve {aspect * (right - left).x} == {(top - bottom).y} with aspect = {aspect}")
             if left.x < right.x and bottom.y < top.y and all(left.x <= p.x <= right.x and bottom.y <= p.y <= top.y for p in rot_polygon):
-                #print(f"yield {max(aspect * (right - left).x, (top - bottom).y)}")
                 yield max(aspect * (right - left).x, (top - bottom).y), sinx*cosy + cosx*siny, cosx*cosy - sinx*siny
     polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
     height, sinx, cosx = min(guesses(polygon))
@@ -190,7 +187,7 @@ class Unfolder:
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
         self.mesh.check_correct()
-    
+
     def __del__(self):
         if not self.do_create_uvmap:
             self.mesh.delete_uvmap()
@@ -267,7 +264,7 @@ class Unfolder:
                 bk.use_pass_direct, bk.use_pass_indirect, bk.use_pass_color = False, False, True
                 sce.cycles.samples = 1
             else:
-                sce.cycles.samples = properties.bake_samples                
+                sce.cycles.samples = properties.bake_samples
             if sce.cycles.bake_type == 'COMBINED':
                 bk.use_pass_direct, bk.use_pass_indirect = True, True
                 bk.use_pass_diffuse, bk.use_pass_glossy, bk.use_pass_transmission, bk.use_pass_ambient_occlusion, bk.use_pass_emit = True, False, False, True, True
@@ -301,10 +298,10 @@ class Mesh:
             if edge.main_faces:
                 edge.calculate_angle()
         self.copy_freestyle_marks()
-    
+
     def delete_uvmap(self):
         self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
-    
+
     def copy_freestyle_marks(self):
         # NOTE: this is a workaround for NotImplementedError on bmesh.edges.layers.freestyle
         mesh = bpy.data.meshes.new("unfolder_temp")
@@ -312,7 +309,7 @@ class Mesh:
         for bmedge, edge in self.edges.items():
             edge.freestyle = mesh.edges[bmedge.index].use_freestyle_mark
         bpy.data.meshes.remove(mesh)
-    
+
     def mark_cuts(self):
         for bmedge, edge in self.edges.items():
             if edge.is_main_cut and not bmedge.is_boundary:
@@ -328,7 +325,7 @@ class Mesh:
             diameter = max((center - vertex.co).length for vertex in face.verts)
             threshold = 0.01 * diameter
             return any(abs(v.co.dot(face.normal) - plane_d) > threshold for v in face.verts)
-        
+
         null_edges = {e for e in self.edges.keys() if e.calc_length() < epsilon and e.link_faces}
         null_faces = {f for f in self.data.faces if f.calc_area() < epsilon}
         twisted_faces = {f for f in self.data.faces if is_twisted(f)}
@@ -336,8 +333,9 @@ class Mesh:
         if not (null_edges or null_faces or twisted_faces or inverted_scale):
             return True
         if inverted_scale:
-            raise UnfoldError("The object is flipped inside-out.\n"
-            "You can use Object -> Apply -> Scale to fix it. Export failed.")
+            raise UnfoldError(
+                "The object is flipped inside-out.\n"
+                "You can use Object -> Apply -> Scale to fix it. Export failed.")
         disease = [("Remove Doubles", null_edges or null_faces), ("Triangulate", twisted_faces)]
         cure = " and ".join(s for s, k in disease if k)
         raise UnfoldError(
@@ -451,7 +449,7 @@ class Mesh:
         def add_sticker(uvedge, index, target_uvedge):
             uvedge.sticker = Sticker(uvedge, default_width, index, target_uvedge)
             uvedge.uvface.island.add_marker(uvedge.sticker)
-        
+
         def is_index_obvious(uvedge, target):
             if uvedge in (target.neighbor_left, target.neighbor_right):
                 return True
@@ -630,7 +628,7 @@ class Mesh:
                 island.image_path = image_path
             image.user_clear()
             bpy.data.images.remove(image)
-    
+
     def bake(self, faces, image):
         if not self.looptex:
             raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
@@ -665,7 +663,8 @@ class Mesh:
 
 class Edge:
     """Wrapper for BPy Edge"""
-    __slots__ = ('data', 'va', 'vb', 'main_faces', 'uvedges',
+    __slots__ = (
+        'data', 'va', 'vb', 'main_faces', 'uvedges',
         'vector', 'angle',
         'is_main_cut', 'force_cut', 'priority', 'freestyle')
 
@@ -688,10 +687,11 @@ class Edge:
 
     def choose_main_faces(self):
         """Choose two main faces that might get connected in an island"""
-        from itertools import combinations
-        loops = self.data.link_loops
+
         def score(pair):
             return abs(pair[0].face.normal.dot(pair[1].face.normal))
+
+        loops = self.data.link_loops
         if len(loops) == 2:
             self.main_faces = list(loops)
         elif len(loops) > 2:
@@ -708,7 +708,7 @@ class Edge:
             self.angle = -3  # just a very sharp angle
         else:
             s = normal_a.cross(normal_b).dot(self.vector.normalized())
-            s = max(min(s, 1.0), -1.0) # deal with rounding errors
+            s = max(min(s, 1.0), -1.0)  # deal with rounding errors
             self.angle = asin(s)
             if loop_a.link_loop_next.vert != loop_b.vert or loop_b.link_loop_next.vert != loop_a.vert:
                 self.angle = abs(self.angle)
@@ -740,7 +740,8 @@ class Edge:
 
 class Island:
     """Part of the net to be exported"""
-    __slots__ = ('mesh', 'faces', 'edges', 'vertices', 'fake_vertices', 'boundary', 'markers',
+    __slots__ = (
+        'mesh', 'faces', 'edges', 'vertices', 'fake_vertices', 'boundary', 'markers',
         'pos', 'bounding_box',
         'image_path', 'embedded_image',
         'number', 'label', 'abbreviation', 'title',
@@ -764,14 +765,14 @@ class Island:
         self.is_inside_out = False  # swaps concave <-> convex edges
         self.has_safe_geometry = True
         self.sticker_numbering = 0
-        
+
         uvface = UVFace(face, self, matrix, normal_matrix)
         self.vertices.update(uvface.vertices)
         self.edges.update(uvface.edges)
         self.faces[face] = uvface
         # UVEdges on the boundary
         self.boundary = list(self.edges.values())
-    
+
     def add_marker(self, marker):
         self.fake_vertices.extend(marker.bounds)
         self.markers.append(marker)
@@ -801,6 +802,7 @@ class Island:
         scale_x, scale_y = 1 / self.bounding_box.x, 1 / self.bounding_box.y
         for loop, uvvertex in self.vertices.items():
             loop[tex].uv = uvvertex.co.x * scale_x, uvvertex.co.y * scale_y
+
 
 def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     """
@@ -1080,7 +1082,7 @@ class Page:
 
     def __init__(self, num=1):
         self.islands = list()
-        self.name = "page{}".format(num)  # TODO delete me
+        self.name = "page{}".format(num)  # note: this is only used in svg files naming
         self.image_path = None
 
 
@@ -1097,7 +1099,8 @@ class UVEdge:
     """Edge in 2D"""
     # Every UVEdge is attached to only one UVFace
     # UVEdges are doubled as needed because they both have to point clockwise around their faces
-    __slots__ = ('va', 'vb', 'uvface', 'loop',
+    __slots__ = (
+        'va', 'vb', 'uvface', 'loop',
         'min', 'max', 'bottom', 'top',
         'neighbor_left', 'neighbor_right', 'sticker')
 
@@ -1260,6 +1263,7 @@ def init_exporter(self, properties):
     self.text_size = properties.sticker_width
     self.angle_epsilon = properties.angle_epsilon
 
+
 class Svg:
     """Simple SVG exporter"""
 
@@ -1364,7 +1368,7 @@ class Svg:
                                 label=island.title),
                             file=f)
 
-                    data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
+                    data_markers, data_stickerfill = list(), list()
                     for marker in island.markers:
                         if isinstance(marker, Sticker):
                             data_stickerfill.append("M {} Z".format(
@@ -1393,6 +1397,7 @@ class Svg:
                     if data_stickerfill and self.style.sticker_color[3] > 0:
                         print("<path class='sticker' d='", rows(data_stickerfill), "'/>", file=f)
 
+                    data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(4))
                     outer_edges = set(island.boundary)
                     while outer_edges:
                         data_loop = list()
@@ -1416,7 +1421,7 @@ class Svg:
                         if edge.is_cut(uvedge.uvface.face) and not uvedge.sticker:
                             continue
                         data_uvedge = "M {}".format(
-                            line_through(self.format_vertex(vertex.co + island.pos) for vertex in (uvedge.va, uvedge.vb)))
+                            line_through(self.format_vertex(v.co + island.pos) for v in (uvedge.va, uvedge.vb)))
                         if edge.freestyle:
                             data_freestyle.append(data_uvedge)
                         # each uvedge is in two opposite-oriented variants; we want to add each only once
@@ -1542,7 +1547,7 @@ class Pdf:
 
     def text_width(self, text, scale=None):
         return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
-    
+
     def styling(self, name, do_stroke=True):
         s, m, l = (length * self.style.line_width * 1000 for length in (1, 4, 9))
         format_style = {'SOLID': [], 'DOT': [s, m], 'DASH': [m, l], 'LONGDASH': [l, m], 'DASHDOT': [l, m, s, m]}
@@ -1575,10 +1580,12 @@ class Pdf:
 
     def write(self, mesh, filename):
         def format_dict(obj, refs=tuple()):
-            return "<< " + "".join("/{} {}\n".format(key, format_value(value, refs)) for (key, value) in obj.items()) + ">>"
+            content = "".join("/{} {}\n".format(key, format_value(value, refs)) for (key, value) in obj.items())
+            return f"<< {content} >>"
 
         def line_through(seq):
-            return "".join("{0.x:.6f} {0.y:.6f} {1} ".format(1000*co, cmd) for (co, cmd) in zip(seq, chain("m", repeat("l"))))
+            fmt = "{0.x:.6f} {0.y:.6f} {1} ".format
+            return "".join(fmt(1000*co, cmd) for (co, cmd) in zip(seq, chain("m", repeat("l"))))
 
         def format_value(value, refs=tuple()):
             if value in refs:
@@ -1651,7 +1658,7 @@ class Pdf:
                         label=island.title))
                     commands += reset_style
 
-                data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
+                data_markers, data_stickerfill = list(), list()
                 for marker in island.markers:
                     if isinstance(marker, Sticker):
                         data_stickerfill.append(line_through(marker.points) + "f")
@@ -1678,6 +1685,7 @@ class Pdf:
                             mat=marker.rot,
                             size=1000*marker.size))
 
+                data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(4))
                 outer_edges = set(island.boundary)
                 while outer_edges:
                     data_loop = list()
@@ -1969,7 +1977,7 @@ class ExportPaperModel(bpy.types.Operator):
     bl_label = "Export Paper Model"
     bl_description = "Export the selected object's net and optionally bake its texture"
     bl_options = {'PRESET'}
-    
+
     filepath: bpy.props.StringProperty(
         name="File Path", description="Target file to save the SVG", options={'SKIP_SAVE'})
     filename: bpy.props.StringProperty(
@@ -2032,13 +2040,16 @@ class ExportPaperModel(bpy.types.Operator):
         name="Scale", description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1)
     do_create_uvmap: bpy.props.BoolProperty(
-        name="Create UVMap", description="Create a new UV Map showing the islands and page layout",
+        name="Create UVMap",
+        description="Create a new UV Map showing the islands and page layout",
         default=False, options={'SKIP_SAVE'})
     ui_expanded_document: bpy.props.BoolProperty(
-        name="Show Document Settings Expanded", description="Shows the box 'Document Settings' expanded in user interface",
+        name="Show Document Settings Expanded",
+        description="Shows the box 'Document Settings' expanded in user interface",
         default=True, options={'SKIP_SAVE'})
     ui_expanded_style: bpy.props.BoolProperty(
-        name="Show Style Settings Expanded", description="Shows the box 'Colors and Style' expanded in user interface",
+        name="Show Style Settings Expanded",
+        description="Shows the box 'Colors and Style' expanded in user interface",
         default=False, options={'SKIP_SAVE'})
     style: bpy.props.PointerProperty(type=PaperModelStyle)
 
@@ -2047,7 +2058,7 @@ class ExportPaperModel(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         return context.active_object and context.active_object.type == 'MESH'
-    
+
     def prepare(self, context):
         sce = context.scene
         self.recall_mode = context.object.mode
@@ -2056,10 +2067,11 @@ class ExportPaperModel(bpy.types.Operator):
         self.object = context.active_object
         self.unfolder = Unfolder(self.object)
         cage_size = M.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y))
-        self.unfolder.prepare(cage_size, scale=sce.unit_settings.scale_length/self.scale, limit_by_page=sce.paper_model.limit_by_page)
+        unfolder_scale = sce.unit_settings.scale_length/self.scale
+        self.unfolder.prepare(cage_size, scale=unfolder_scale, limit_by_page=sce.paper_model.limit_by_page)
         if sce.paper_model.use_auto_scale:
             self.scale = ceil(self.get_scale_ratio(sce))
-    
+
     def recall(self):
         if self.unfolder:
             del self.unfolder
@@ -2215,7 +2227,7 @@ class SelectIsland(bpy.types.Operator):
     bl_idname = "mesh.select_paper_island"
     bl_label = "Select Island"
     bl_description = "Select an island of the paper model net"
-    
+
     operation: bpy.props.EnumProperty(
         name="Operation", description="Operation with the current selection",
         default='ADD', items=[
@@ -2454,7 +2466,7 @@ class PaperAddonPreferences(bpy.types.AddonPreferences):
     export_category: bpy.props.StringProperty(
         name="Export Panel Category", description="Category in 3D View Toolbox where the Export panel is displayed",
         default="Paper", update=factory_update_addon_category(VIEW3D_PT_paper_model_settings, 'export_category'))
-    
+
     def draw(self, context):
         sub = self.layout.column(align=True)
         sub.use_property_split = True
