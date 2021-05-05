@@ -2086,6 +2086,7 @@ class ExportPaperModel(bpy.types.Operator):
             self.recall()
             return {'CANCELLED'}
         wm = context.window_manager
+        self.filename = f"{self.object.name}.{self.file_format.lower()}"
         wm.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
