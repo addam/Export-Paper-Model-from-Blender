@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from itertools import chain, repeat
 import mathutils as M
 from .unfolder import Sticker, Arrow, NumberAlone

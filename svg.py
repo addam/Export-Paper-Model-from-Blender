@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os.path as os_path
 import mathutils as M
 from .unfolder import Sticker, Arrow, NumberAlone

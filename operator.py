@@ -1,10 +1,5 @@
-# TODO:
-# QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
-# rotate islands to minimize area -- and change that only if necessary to fill the page size
-
-# check conflicts in island naming and either:
-# * append a number to the conflicting names or
-# * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
+# -*- coding: utf-8 -*-
+# operator.py: interaction with Blender and the user
 
 from re import compile as re_compile
 from math import pi, ceil
@@ -39,7 +34,7 @@ def init_exporter(self, properties):
     self.style = properties.style
     margin = properties.output_margin
     self.margin = mathutils.Vector((margin, margin))
-    self.pure_net = (properties.output_type == 'NONE')
+    self.pure_net = (properties.texture_type == 'NONE')
     self.do_create_stickers = properties.do_create_stickers
     self.text_size = properties.sticker_width
     self.angle_epsilon = properties.angle_epsilon
@@ -274,7 +269,7 @@ class ExportPaperModel(bpy.types.Operator):
     output_margin: bpy.props.FloatProperty(
         name="Page Margin", description="Distance from page borders to the printable area",
         default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH")
-    output_type: bpy.props.EnumProperty(
+    texture_type: bpy.props.EnumProperty(
         name="Textures", description="Source of a texture for the model",
         default='NONE', items=[
             ('NONE', "No Texture", "Export the net only"),
@@ -282,6 +277,13 @@ class ExportPaperModel(bpy.types.Operator):
             ('AMBIENT_OCCLUSION', "Ambient Occlusion", "Render the Ambient Occlusion pass"),
             ('RENDER', "Full Render", "Render the material in actual scene illumination"),
             ('SELECTED_TO_ACTIVE', "Selected to Active", "Render all selected surrounding objects as a texture")
+        ])
+    output_layers: bpy.props.EnumProperty(
+        name="Layers", description="Separation of drawings by meaning",
+        default='ONESIDE', items=[
+            ('ONESIDE', "Single Sided", "All layers exported on top of each other"),
+            ('TWOSIDE', "Two Sided", "Texture exported to odd pages, drawing to even pages"),
+            ('SEPARATE', "Separate", "Texture and drawing exported as two separate documents"),
         ])
     do_create_stickers: bpy.props.BoolProperty(
         name="Create Tabs", description="Create gluing tabs around the net (useful for paper)",
@@ -436,15 +438,15 @@ class ExportPaperModel(bpy.types.Operator):
             col.prop(self.properties, "sticker_width")
             box.prop(self.properties, "angle_epsilon")
 
-            box.prop(self.properties, "output_type")
+            box.prop(self.properties, "texture_type")
             col = box.column()
-            col.active = (self.output_type != 'NONE')
+            col.active = (self.texture_type != 'NONE')
             if len(self.object.data.uv_layers) >= 8:
                 col.label(text="No UV slots left, No Texture is the only option.", icon='ERROR')
-            elif context.scene.render.engine != 'CYCLES' and self.output_type != 'NONE':
+            elif context.scene.render.engine != 'CYCLES' and self.texture_type != 'NONE':
                 col.label(text="Cycles will be used for texture baking.", icon='ERROR')
             row = col.row()
-            row.active = self.output_type in ('AMBIENT_OCCLUSION', 'RENDER', 'SELECTED_TO_ACTIVE')
+            row.active = self.texture_type in ('AMBIENT_OCCLUSION', 'RENDER', 'SELECTED_TO_ACTIVE')
             row.prop(self.properties, "bake_samples")
             col.prop(self.properties, "output_dpi")
             row = col.row()
@@ -465,10 +467,10 @@ class ExportPaperModel(bpy.types.Operator):
             col.prop(self.style, "outer_width", text="Relative width")
             col.prop(self.style, "outer_style", text="Style")
             col = box.column()
-            col.active = self.output_type != 'NONE'
+            col.active = self.texture_type != 'NONE'
             col.prop(self.style, "use_outbg", text="Outer Lines Highlight:")
             sub = col.column()
-            sub.active = self.output_type != 'NONE' and self.style.use_outbg
+            sub.active = self.texture_type != 'NONE' and self.style.use_outbg
             sub.prop(self.style, "outbg_color", text="")
             sub.prop(self.style, "outbg_width", text="Relative width")
             col = box.column()
@@ -484,10 +486,10 @@ class ExportPaperModel(bpy.types.Operator):
             col.prop(self.style, "freestyle_width", text="Relative width")
             col.prop(self.style, "freestyle_style", text="Style")
             col = box.column()
-            col.active = self.output_type != 'NONE'
+            col.active = self.texture_type != 'NONE'
             col.prop(self.style, "use_inbg", text="Inner Lines Highlight:")
             sub = col.column()
-            sub.active = self.output_type != 'NONE' and self.style.use_inbg
+            sub.active = self.texture_type != 'NONE' and self.style.use_inbg
             sub.prop(self.style, "inbg_color", text="")
             sub.prop(self.style, "inbg_width", text="Relative width")
             col = box.column()

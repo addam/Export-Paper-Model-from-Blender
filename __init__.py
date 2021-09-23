@@ -14,6 +14,16 @@ bl_info = {
     "category": "Import-Export",
 }
 
+
+# TODO:
+# QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
+# rotate islands to minimize area -- and change that only if necessary to fill the page size
+
+# check conflicts in island naming and either:
+# * append a number to the conflicting names or
+# * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
+
+
 if "bpy" in locals():
     from importlib import reload
     reload(operator)
@@ -36,7 +46,7 @@ def factory_update_addon_category(cls, prop):
 
 
 class PaperAddonPreferences(bpy.types.AddonPreferences):
-    bl_idname = "io_export_paper_model"
+    bl_idname = __name__
     unfold_category: bpy.props.StringProperty(
         name="Unfold Panel Category", description="Category in 3D View Toolbox where the Unfold panel is displayed",
         default="Paper", update=factory_update_addon_category(operator.VIEW3D_PT_paper_model_tools, 'unfold_category'))

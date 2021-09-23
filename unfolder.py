@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# unfolder.py: processing of geometry and representation of the resulting net
+
 import os.path as os_path
 from itertools import chain, repeat, product, combinations
 from math import pi, asin, atan2
@@ -189,7 +192,7 @@ class Unfolder:
         self.mesh.finalize_islands(printable_size, title_height=text_height * 1.2)
         self.mesh.fit_islands(printable_size)
 
-        if properties.output_type != 'NONE':
+        if properties.texture_type != 'NONE':
             # bake an image and save it as a PNG to disk or into memory
             image_packing = properties.image_packing if properties.file_format == 'SVG' else 'ISLAND_EMBED'
             use_separate_images = image_packing in ('ISLAND_LINK', 'ISLAND_EMBED')
@@ -201,12 +204,12 @@ class Unfolder:
             recall = store_rna_properties(rd, bk, sce.cycles)
             rd.engine = 'CYCLES'
             for p in ('ambient_occlusion', 'color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'transmission'):
-                setattr(bk, f"use_pass_{p}", (properties.output_type != 'TEXTURE'))
+                setattr(bk, f"use_pass_{p}", (properties.texture_type != 'TEXTURE'))
             lookup = {'TEXTURE': 'DIFFUSE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
-            sce.cycles.bake_type = lookup[properties.output_type]
-            bk.use_selected_to_active = (properties.output_type == 'SELECTED_TO_ACTIVE')
+            sce.cycles.bake_type = lookup[properties.texture_type]
+            bk.use_selected_to_active = (properties.texture_type == 'SELECTED_TO_ACTIVE')
             bk.margin, bk.cage_extrusion, bk.use_cage, bk.use_clear = 1, 10, False, False
-            if properties.output_type == 'TEXTURE':
+            if properties.texture_type == 'TEXTURE':
                 bk.use_pass_direct, bk.use_pass_indirect, bk.use_pass_color = False, False, True
                 sce.cycles.samples = 1
             else:
