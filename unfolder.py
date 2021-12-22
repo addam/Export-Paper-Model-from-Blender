@@ -203,7 +203,7 @@ class Unfolder:
             bk = rd.bake
             recall = store_rna_properties(rd, bk, sce.cycles)
             rd.engine = 'CYCLES'
-            for p in ('ambient_occlusion', 'color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'transmission'):
+            for p in ('color', 'diffuse', 'direct', 'emit', 'glossy', 'indirect', 'transmission'):
                 setattr(bk, f"use_pass_{p}", (properties.texture_type != 'TEXTURE'))
             lookup = {'TEXTURE': 'DIFFUSE', 'AMBIENT_OCCLUSION': 'AO', 'RENDER': 'COMBINED', 'SELECTED_TO_ACTIVE': 'COMBINED'}
             sce.cycles.bake_type = lookup[properties.texture_type]
@@ -216,7 +216,7 @@ class Unfolder:
                 sce.cycles.samples = properties.bake_samples
             if sce.cycles.bake_type == 'COMBINED':
                 bk.use_pass_direct, bk.use_pass_indirect = True, True
-                bk.use_pass_diffuse, bk.use_pass_glossy, bk.use_pass_transmission, bk.use_pass_ambient_occlusion, bk.use_pass_emit = True, False, False, True, True
+                bk.use_pass_diffuse, bk.use_pass_glossy, bk.use_pass_transmission, bk.use_pass_emit = True, False, False, True
 
             if image_packing == 'PAGE_LINK':
                 self.mesh.save_image(printable_size * ppm, filepath)
