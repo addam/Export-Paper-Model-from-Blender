@@ -25,7 +25,7 @@ bl_info = {
 
 
 import bpy
-from . import operator, unfolder, svg, pdf
+from . import operator
 
 
 def factory_update_addon_category(cls, prop):
@@ -93,8 +93,3 @@ def unregister():
     bpy.types.VIEW3D_MT_edit_mesh.remove(operator.menu_func_unfold)
     for cls in reversed(module_classes):
         bpy.utils.unregister_class(cls)
-
-
-if __name__ == "__main__":
-    register()
-
