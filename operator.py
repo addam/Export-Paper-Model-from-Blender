@@ -316,6 +316,13 @@ class ExportPaperModel(bpy.types.Operator):
             ('ISLAND_LINK', "Linked", "Bake images separately for each island and save them in a directory"),
             ('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")
         ])
+    nesting_method: bpy.props.EnumProperty(
+        name="Nesting Method", description="How to pack islands onto pages",
+        default='CUSTOM', items=[
+            ('CUSTOM', "Custom", "Custom algorithm"),
+            ('BLENDER', "Blender", "Default Blender methods and brute force"),
+            ('SVGNEST', "Svg Nest", "Algorithm developed by Svgnest.com"),
+        ])
     scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
         default=1, soft_min=1.0, soft_max=100.0, subtype='FACTOR', precision=1)
@@ -329,6 +336,10 @@ class ExportPaperModel(bpy.types.Operator):
         default=True, options={'SKIP_SAVE'})
     ui_expanded_style: bpy.props.BoolProperty(
         name="Show Style Settings Expanded",
+        description="Shows the box 'Colors and Style' expanded in user interface",
+        default=False, options={'SKIP_SAVE'})
+    ui_expanded_development: bpy.props.BoolProperty(
+        name="Show Development Settings Expanded",
         description="Shows the box 'Colors and Style' expanded in user interface",
         default=False, options={'SKIP_SAVE'})
     style: bpy.props.PointerProperty(type=PaperModelStyle)
@@ -496,6 +507,16 @@ class ExportPaperModel(bpy.types.Operator):
             col.active = self.do_create_stickers
             col.prop(self.style, "sticker_color")
             box.prop(self.style, "text_color")
+
+        box = layout.box()
+        row = box.row(align=True)
+        row.prop(
+            self.properties, "ui_expanded_development", text="",
+            icon=('TRIA_DOWN' if self.ui_expanded_development else 'TRIA_RIGHT'), emboss=False)
+        row.label(text="Development")
+
+        if self.ui_expanded_development:
+            box.prop(self.properties, "nesting_method", text="Format")
 
 
 def menu_func_export(self, context):

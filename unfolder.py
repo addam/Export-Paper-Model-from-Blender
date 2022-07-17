@@ -8,6 +8,8 @@ import bpy
 import bmesh
 import mathutils as M
 
+from .nesting import get_nester
+
 default_priority_effect = {
     'CONVEX': 0.5,
     'CONCAVE': 1,
@@ -93,6 +95,17 @@ def cage_fit(points, aspect):
     polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
     height, sinx, cosx = min(guesses(polygon))
     return atan2(sinx, cosx), height
+
+
+def paginate_islands(islands, cage_size, method='CUSTOM'):  # -> pages
+    """Move and rotate islands so that they fit onto pages, based on their bounding boxes"""
+    if any(island.bounding_box.x > cage_size.x or island.bounding_box.y > cage_size.y for island in islands):
+        raise UnfoldError(
+            "An island is too big to fit onto page of the given size. "
+            "Either downscale the model or find and split that island manually.\n"
+            "Export failed, sorry.")
+    fn = get_nester(method)
+    return fn(islands, cage_size)
 
 
 def create_blank_image(image_name, dimensions, alpha=1):
@@ -190,7 +203,7 @@ class Unfolder:
         text_height = properties.sticker_width if (properties.do_create_numbers and len(self.mesh.islands) > 1) else 0
         # title height must be somewhat larger that text size, glyphs go below the baseline
         self.mesh.finalize_islands(printable_size, title_height=text_height * 1.2)
-        self.mesh.fit_islands(printable_size)
+        self.mesh.pages = paginate_islands(self.mesh.islands, printable_size, properties.nesting_method)
 
         if properties.texture_type != 'NONE':
             # bake an image and save it as a PNG to disk or into memory
@@ -472,73 +485,6 @@ class Mesh:
 
     def largest_island_ratio(self, cage_size):
         return max(i / p for island in self.islands for (i, p) in zip(island.bounding_box, cage_size))
-
-    def fit_islands(self, cage_size):
-        """Move islands so that they fit onto pages, based on their bounding boxes"""
-
-        def try_emplace(island, page_islands, stops_x, stops_y, occupied_cache):
-            """Tries to put island to each pair from stops_x, stops_y
-            and checks if it overlaps with any islands present on the page.
-            Returns True and positions the given island on success."""
-            bbox_x, bbox_y = island.bounding_box.xy
-            for x in stops_x:
-                if x + bbox_x > cage_size.x:
-                    continue
-                for y in stops_y:
-                    if y + bbox_y > cage_size.y or (x, y) in occupied_cache:
-                        continue
-                    for i, obstacle in enumerate(page_islands):
-                        # if this obstacle overlaps with the island, try another stop
-                        if (x + bbox_x > obstacle.pos.x and
-                                obstacle.pos.x + obstacle.bounding_box.x > x and
-                                y + bbox_y > obstacle.pos.y and
-                                obstacle.pos.y + obstacle.bounding_box.y > y):
-                            if x >= obstacle.pos.x and y >= obstacle.pos.y:
-                                occupied_cache.add((x, y))
-                            # just a stupid heuristic to make subsequent searches faster
-                            if i > 0:
-                                page_islands[1:i+1] = page_islands[:i]
-                                page_islands[0] = obstacle
-                            break
-                    else:
-                        # if no obstacle called break, this position is okay
-                        island.pos.xy = x, y
-                        page_islands.append(island)
-                        stops_x.append(x + bbox_x)
-                        stops_y.append(y + bbox_y)
-                        return True
-            return False
-
-        def drop_portion(stops, border, divisor):
-            stops.sort()
-            # distance from left neighbor to the right one, excluding the first stop
-            distances = [right - left for left, right in zip(stops, chain(stops[2:], [border]))]
-            quantile = sorted(distances)[len(distances) // divisor]
-            return [stop for stop, distance in zip(stops, chain([quantile], distances)) if distance >= quantile]
-
-        if any(island.bounding_box.x > cage_size.x or island.bounding_box.y > cage_size.y for island in self.islands):
-            raise UnfoldError(
-                "An island is too big to fit onto page of the given size. "
-                "Either downscale the model or find and split that island manually.\n"
-                "Export failed, sorry.")
-        # sort islands by their diagonal... just a guess
-        remaining_islands = sorted(self.islands, reverse=True, key=lambda island: island.bounding_box.length_squared)
-        page_num = 1  # TODO delete me
-
-        while remaining_islands:
-            # create a new page and try to fit as many islands onto it as possible
-            page = Page(page_num)
-            page_num += 1
-            occupied_cache = set()
-            stops_x, stops_y = [0], [0]
-            for island in remaining_islands:
-                try_emplace(island, page.islands, stops_x, stops_y, occupied_cache)
-                # if overwhelmed with stops, drop a quarter of them
-                if len(stops_x)**2 > 4 * len(self.islands) + 100:
-                    stops_x = drop_portion(stops_x, cage_size.x, 4)
-                    stops_y = drop_portion(stops_y, cage_size.y, 4)
-            remaining_islands = [island for island in remaining_islands if island not in page.islands]
-            self.pages.append(page)
 
     def save_uv(self, cage_size=M.Vector((1, 1)), separate_image=False):
         if separate_image:
@@ -1021,16 +967,6 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
 
     # everything seems to be OK
     return island_b
-
-
-class Page:
-    """Container for several Islands"""
-    __slots__ = ('islands', 'name', 'image_path')
-
-    def __init__(self, num=1):
-        self.islands = list()
-        self.name = "page{}".format(num)  # note: this is only used in svg files naming
-        self.image_path = None
 
 
 class UVVertex:
