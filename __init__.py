@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This script is Free software. Please share and reuse.
-# ♡2010-2021 Adam Dominec <adominec@gmail.com>
+# ♡2010-2022 Adam Dominec <adominec@gmail.com>
 
 bl_info = {
     "name": "Export Paper Model",
@@ -24,16 +24,8 @@ bl_info = {
 # * enumerate faces uniquely within all islands of the same name (requires a check that both label and abbr. equals)
 
 
-if "bpy" in locals():
-    from importlib import reload
-    reload(operator)
-    reload(unfolder)
-    reload(svg)
-    reload(pdf)
-    del reload
-
 import bpy
-from . import operator
+from . import operator, unfolder, svg, pdf
 
 
 def factory_update_addon_category(cls, prop):
