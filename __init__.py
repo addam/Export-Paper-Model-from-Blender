@@ -91,5 +91,8 @@ def register():
 def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(operator.menu_func_export)
     bpy.types.VIEW3D_MT_edit_mesh.remove(operator.menu_func_unfold)
+    del bpy.types.Scene.paper_model
+    del bpy.types.Mesh.paper_island_list
+    del bpy.types.Mesh.paper_island_index
     for cls in reversed(module_classes):
         bpy.utils.unregister_class(cls)
