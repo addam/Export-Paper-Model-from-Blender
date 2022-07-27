@@ -317,11 +317,10 @@ class ExportPaperModel(bpy.types.Operator):
             ('ISLAND_EMBED', "Embedded", "Bake images separately for each island and embed them into the SVG")
         ])
     nesting_method: bpy.props.EnumProperty(
-        name="Nesting Method", description="How to pack islands onto pages",
-        default='CUSTOM', items=[
-            ('CUSTOM', "Custom", "Custom algorithm"),
-            ('BLENDER', "Blender", "Default Blender methods and brute force"),
-            ('SVGNEST', "Svg Nest", "Algorithm developed by Svgnest.com"),
+        name="Nesting Method", description="How to pack islands onto a page",
+        default='BOX', items=[
+            ('BOX', "Bounding Box", "Built-in Blender method with bounding boxes"),
+            ('CCOR', "Raster", "Cross-correlation of rasterized shapes"),
         ])
     scale: bpy.props.FloatProperty(
         name="Scale", description="Divisor of all dimensions when exporting",
@@ -508,15 +507,16 @@ class ExportPaperModel(bpy.types.Operator):
             col.prop(self.style, "sticker_color")
             box.prop(self.style, "text_color")
 
-        box = layout.box()
-        row = box.row(align=True)
-        row.prop(
-            self.properties, "ui_expanded_development", text="",
-            icon=('TRIA_DOWN' if self.ui_expanded_development else 'TRIA_RIGHT'), emboss=False)
-        row.label(text="Development")
-
-        if self.ui_expanded_development:
-            box.prop(self.properties, "nesting_method", text="Format")
+        if 0:
+            box = layout.box()
+            row = box.row(align=True)
+            row.prop(
+                self.properties, "ui_expanded_development", text="",
+                icon=('TRIA_DOWN' if self.ui_expanded_development else 'TRIA_RIGHT'), emboss=False)
+            row.label(text="Development")
+    
+            if self.ui_expanded_development:
+                box.prop(self.properties, "nesting_method", text="Format")
 
 
 def menu_func_export(self, context):

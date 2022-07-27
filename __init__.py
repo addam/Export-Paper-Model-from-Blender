@@ -17,7 +17,6 @@ bl_info = {
 
 # TODO:
 # QuickSweepline is very much broken -- it throws GeometryError for all nets > ~15 faces
-# rotate islands to minimize area -- and change that only if necessary to fill the page size
 
 # check conflicts in island naming and either:
 # * append a number to the conflicting names or
