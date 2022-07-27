@@ -141,7 +141,10 @@ class UnfoldError(ValueError):
                 elem.select = False
             for elem in chain(*elems.values()):
                 elem.select_set(True)
-            bmesh.update_edit_mesh(bpy.context.object.data, False, False)
+            bmesh.update_edit_mesh(bpy.context.object.data, loop_triangles=False, destructive=False)
+
+    def __str__(self):
+        return f'{type(self).__name__}("""{self.args[0]}""")'
 
 
 class Unfolder:
@@ -149,7 +152,6 @@ class Unfolder:
         self.do_create_uvmap = False
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
-        self.mesh.check_correct()
 
     def __del__(self):
         if not self.do_create_uvmap:
@@ -157,6 +159,7 @@ class Unfolder:
 
     def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1, limit_by_page=False):
         """Create the islands of the net"""
+        self.mesh.check_correct()
         self.mesh.generate_cuts(cage_size / scale if limit_by_page and cage_size else None, priority_effect)
         self.mesh.finalize_islands(cage_size or M.Vector((1, 1)))
         self.mesh.enumerate_islands()

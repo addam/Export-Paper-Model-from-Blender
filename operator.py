@@ -99,6 +99,7 @@ class Unfold(bpy.types.Operator):
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
             error.mesh_select()
+            del unfolder
             bpy.ops.object.mode_set(mode=recall_mode)
             return {'CANCELLED'}
         mesh = self.object.data
@@ -363,8 +364,7 @@ class ExportPaperModel(bpy.types.Operator):
             self.scale = ceil(self.get_scale_ratio(sce))
 
     def recall(self):
-        if self.unfolder:
-            del self.unfolder
+        self.unfolder = None
         bpy.ops.object.mode_set(mode=self.recall_mode)
 
     def invoke(self, context, event):
@@ -382,10 +382,10 @@ class ExportPaperModel(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def execute(self, context):
-        if not self.unfolder:
-            self.prepare(context)
-        self.unfolder.do_create_uvmap = self.do_create_uvmap
         try:
+            if not self.unfolder:
+                self.prepare(context)
+            self.unfolder.do_create_uvmap = self.do_create_uvmap
             if self.object.data.paper_island_list:
                 self.unfolder.copy_island_names(self.object.data.paper_island_list)
             exporter_class = Svg if self.properties.file_format == 'SVG' else Pdf
@@ -400,6 +400,7 @@ class ExportPaperModel(bpy.types.Operator):
             return {'CANCELLED'}
         finally:
             self.recall()
+            self.unfolder = None
 
     def get_scale_ratio(self, sce):
         margin = self.output_margin + self.sticker_width
@@ -576,7 +577,7 @@ class SelectIsland(bpy.types.Operator):
                 edge.select = any(face.select for face in edge.link_faces)
             for vert in verts:
                 vert.select = any(edge.select for edge in vert.link_edges)
-        bmesh.update_edit_mesh(me, False, False)
+        bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
         return {'FINISHED'}
 
 
