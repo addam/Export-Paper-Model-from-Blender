@@ -152,6 +152,9 @@ class Unfolder:
         self.do_create_uvmap = False
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
+        # api bug workaround to make mesh.save_uv work correctly
+        # (the bug is that BMLoop[BMLayerItem] always modifies the active layer)
+        ob.data.uv_layers.active = ob.data.uv_layers[self.mesh.looptex.name]
 
     def __del__(self):
         if not self.do_create_uvmap:
