@@ -237,5 +237,3 @@ class Pdf:
     command_sticker = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align:.6f} 0 Td ({label}) Tj ET Q"
     command_arrow = "q /F1 {size:.6f} Tf BT {pos.x:.6f} {pos.y:.6f} Td ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q"
     command_number = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT ({label}) Tj ET Q"
-
-

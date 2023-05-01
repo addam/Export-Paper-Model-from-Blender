@@ -529,13 +529,19 @@ class Mesh:
             bpy.data.images.remove(image)
 
     def bake(self, faces, image):
+        # FIXME: as of 3.5.0, this detection does not work properly
+        # and one of existing 8 UVLayers would be overwritten
         if not self.looptex:
             raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
         ob = bpy.context.active_object
         me = ob.data
         # in Cycles, the image for baking is defined by the active Image Node
         temp_nodes = dict()
-        for mat in me.materials:
+        temp_mat = None
+        if not any(me.materials):
+            temp_mat = bpy.data.materials.new("Unfolded")
+            me.materials.append(temp_mat)
+        for mat in filter(None, me.materials):
             mat.use_nodes = True
             img = mat.node_tree.nodes.new('ShaderNodeTexImage')
             img.image = image
@@ -556,6 +562,9 @@ class Mesh:
         finally:
             for mat, node in temp_nodes.items():
                 mat.node_tree.nodes.remove(node)
+            if temp_mat:
+                me.materials.pop()
+                bpy.data.materials.remove(temp_mat)
         for uv in ignored_uvs:
             uv *= -1
 
