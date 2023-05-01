@@ -16,7 +16,7 @@ class Page:
 
 def can_pack_ccor(islands, cage_size):
     if len(islands) <= 1:
-        islands[0].bounding_box.xy = 0, 0
+        islands[0].pos.xy = 0, 0
         return True
     for isle in islands[1:]:
         ...
@@ -31,7 +31,7 @@ def can_pack_ccor(islands, cage_size):
 
 def can_pack_bpy(islands, cage_size):
     if len(islands) <= 1:
-        islands[0].bounding_box.xy = 0, 0
+        islands[0].pos.xy = 0, 0
         return True
     aspect = cage_size.y / cage_size.x
     boxes = [[0, 0, isle.bounding_box.x, isle.bounding_box.y / aspect] for isle in islands]
