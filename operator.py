@@ -682,8 +682,11 @@ def island_item_changed(self, context):
     def increment(abbrev, collisions):
         letters = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789"
         while abbrev in collisions:
-            abbrev = abbrev.rstrip(letters[-1])
-            abbrev = abbrev[:2] + letters[letters.find(abbrev[-1]) + 1 if len(abbrev) == 3 else 0]
+            if len(abbrev) < 3:
+                abbrev += letters[0]
+            else:
+                abbrev = abbrev.rstrip(letters[-1])
+                abbrev = abbrev[:-1] + letters[letters.find(abbrev[-1]) + 1]
         return abbrev
 
     # accessing properties via [..] to avoid a recursive call after the update
