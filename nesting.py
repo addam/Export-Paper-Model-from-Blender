@@ -1,4 +1,6 @@
 from mathutils.geometry import box_pack_2d
+from time import time
+
 
 def get_nester(method):
     return rect_pack_custom if method == 'CCOR' else rect_pack_bpy
@@ -43,10 +45,13 @@ def can_pack_bpy(islands, cage_size):
     return False
 
 
-def branch_and_bound(can_pack_fn):
+def branch_and_bound(can_pack_fn, timeout_seconds=15):
     # exhaustive search for minimal number of pages
     def result(islands, cage_size):
+        time_limit = time() + timeout_seconds
+        # default solution: each island goes to i-th page on position [0, 0]
         best = [(i, [0, 0]) for i, _ in enumerate(islands)]
+        # current solution: first island will definitely go to page 0
         path = [0]
         while True:
             if path[-1] > max(path[:-1], default=0) + 1 or max(path) >= max(i for i, _ in best):
@@ -67,6 +72,8 @@ def branch_and_bound(can_pack_fn):
                     path.append(0)
             else:
                 # bad step
+                if time() > time_limit:
+                    break
                 path[-1] += 1
         pages = [list() for _ in range(max(i for i, _ in best) + 1)]
         for (i, pos), isle in zip(best, islands):
