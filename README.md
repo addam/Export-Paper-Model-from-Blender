@@ -1,6 +1,8 @@
 # Export-Paper-Model-from-Blender
 Python addon that lets you create paper models directly from Blender objects, even complex ones. Just clicking a button and selecting a file name produces results.
 
+![preview](https://addam.github.io/Export-Paper-Model-from-Blender/header.png)
+
 The script is included in Blender. Do not install from this repository unless you have an explicit reason.
 This branch is only compatible with Blender 2.83 or newer.
 
