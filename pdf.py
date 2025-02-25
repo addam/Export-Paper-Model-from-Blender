@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from itertools import chain, repeat
-from math import atan2, sin, cos, sqrt  # ADD THIS IMPORT AT TOP
+from math import atan2, sin, cos
 import mathutils as M
 from .unfolder import Sticker, Arrow, NumberAlone
 

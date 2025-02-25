@@ -153,6 +153,7 @@ class ClearAllSeams(bpy.types.Operator):
 
 
 def page_size_preset_changed(self, context):
+    """Update the actual document size to correct values"""
     if hasattr(self, "limit_by_page") and not self.limit_by_page:
         return
     if self.page_size_preset == 'A4':
