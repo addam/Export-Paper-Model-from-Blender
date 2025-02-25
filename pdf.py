@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-
 from itertools import chain, repeat
+from math import atan2, sin, cos, sqrt  # ADD THIS IMPORT AT TOP
 import mathutils as M
 from .unfolder import Sticker, Arrow, NumberAlone
 
@@ -16,6 +16,14 @@ class Pdf:
 
     def __init__(self, properties):
         self.styles = dict()
+        self.style = properties.style
+        self.text_size = properties.sticker_width
+        self.scale = properties.scale
+        self.angle_epsilon = properties.angle_epsilon
+        self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+        self.margin = M.Vector((properties.output_margin, properties.output_margin))
+        self.pure_net = (properties.texture_type == 'NONE')
+        self.create_measures = properties.do_create_measures
 
     def text_width(self, text, scale=None):
         return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
@@ -130,6 +138,55 @@ class Pdf:
                         label=island.title))
                     commands += reset_style
 
+                # ========== ADD MEASUREMENTS ==========
+                if self.create_measures:
+                    data_measurements = []  # NEW MEASUREMENTS STORAGE
+
+                    for loop in island.edges:
+                        uvedge = island.edges[loop]
+                        edge = mesh.edges[loop.edge]
+                        
+                        # Only process one direction of each edge
+                        if uvedge.sticker or uvedge.uvface.flipped != (id(uvedge.va) > id(uvedge.vb)):
+                            continue
+
+                        # Calculate edge length in centimeters
+                        start = uvedge.va.co
+                        end = uvedge.vb.co
+                        direction = end - start
+                        length_cm = (direction.length * 100) / self.scale  # Account for export scale
+
+                        # Calculate midpoint position
+                        midpoint = (start + end) * 0.5
+                        
+                        # Calculate text rotation
+                        angle = atan2(direction.y, direction.x)
+                        cos_theta = cos(angle)
+                        sin_theta = sin(angle)
+                        
+                        # Create position offset perpendicular to edge
+                        offset = M.Vector((-direction.y, direction.x)).normalized() * 0.005
+                        text_pos = midpoint + offset
+
+                        # Format measurement text
+                        text = f"{length_cm:.1f} cm"
+                        
+                        # Add measurement command
+                        data_measurements.append(self.command_measurement.format(
+                            text=text,
+                            pos=1000 * text_pos,
+                            mat=[[cos_theta, -sin_theta], [sin_theta, cos_theta]],
+                            size=1000 * self.text_size * 0.8  # Slightly smaller text
+                        ))
+
+                    # ========== ADD MEASUREMENTS TO DRAW COMMANDS ==========
+                    if data_measurements:
+                        commands += chain(
+                            self.styling("text", do_stroke=False),
+                            data_measurements,
+                            reset_style
+                        )
+
                 data_markers, data_stickerfill = list(), list()
                 for marker in island.markers:
                     if isinstance(marker, Sticker):
@@ -156,6 +213,9 @@ class Pdf:
                             pos=1000*marker.center,
                             mat=marker.rot,
                             size=1000*marker.size))
+
+                if data_markers:
+                    commands += chain(self.styling("text", do_stroke=False), data_markers, reset_style)
 
                 data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(4))
                 outer_edges = set(island.boundary)
@@ -237,3 +297,4 @@ class Pdf:
     command_sticker = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align:.6f} 0 Td ({label}) Tj ET Q"
     command_arrow = "q /F1 {size:.6f} Tf BT {pos.x:.6f} {pos.y:.6f} Td ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q"
     command_number = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT ({label}) Tj ET Q"
+    command_measurement = "q {mat[0][0]:.6f} {mat[0][1]:.6f} {mat[1][0]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT /F1 {size:.6f} Tf ({text}) Tj ET Q"

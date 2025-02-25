@@ -17,10 +17,12 @@ global_paper_sizes = [
     ('USER', "User defined", "User defined paper size"),
     ('A4', "A4", "International standard paper size"),
     ('A3', "A3", "International standard paper size"),
+    ('A2', "A2", "International standard paper size"),
+    ('A1', "A1", "International standard paper size"),
+    ('A0', "A0", "International standard paper size"),
     ('US_LETTER', "Letter", "North American paper size"),
     ('US_LEGAL', "Legal", "North American paper size")
 ]
-
 
 def first_letters(text):
     """Iterator over the first letter of each word"""
@@ -151,7 +153,6 @@ class ClearAllSeams(bpy.types.Operator):
 
 
 def page_size_preset_changed(self, context):
-    """Update the actual document size to correct values"""
     if hasattr(self, "limit_by_page") and not self.limit_by_page:
         return
     if self.page_size_preset == 'A4':
@@ -160,13 +161,21 @@ def page_size_preset_changed(self, context):
     elif self.page_size_preset == 'A3':
         self.output_size_x = 0.297
         self.output_size_y = 0.420
+    elif self.page_size_preset == 'A2':
+        self.output_size_x = 0.420
+        self.output_size_y = 0.594
+    elif self.page_size_preset == 'A1':
+        self.output_size_x = 0.594
+        self.output_size_y = 0.841
+    elif self.page_size_preset == 'A0':
+        self.output_size_x = 0.841
+        self.output_size_y = 1.189
     elif self.page_size_preset == 'US_LETTER':
         self.output_size_x = 0.216
         self.output_size_y = 0.279
     elif self.page_size_preset == 'US_LEGAL':
         self.output_size_x = 0.216
         self.output_size_y = 0.356
-
 
 class PaperModelStyle(bpy.types.PropertyGroup):
     line_styles = [
@@ -292,6 +301,9 @@ class ExportPaperModel(bpy.types.Operator):
     do_create_numbers: bpy.props.BoolProperty(
         name="Create Numbers", description="Enumerate edges to make it clear which edges should be sticked together",
         default=True)
+    do_create_measures: bpy.props.BoolProperty(
+        name="Create measures", description="Add measures",
+        default=False)
     sticker_width: bpy.props.FloatProperty(
         name="Tabs and Text Size", description="Width of gluing tabs and their numbers",
         default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
@@ -385,6 +397,19 @@ class ExportPaperModel(bpy.types.Operator):
         try:
             if not self.unfolder:
                 self.prepare(context)
+            
+            # Foam material check
+            obj = context.active_object
+            if not obj or obj.type != 'MESH':
+                self.report({'ERROR'}, "Active object is not a mesh")
+                return {'CANCELLED'}
+                
+            has_foam = any(m and "foam" in m.name.lower() 
+                         for m in obj.data.materials) if obj.data.materials else False
+            if not has_foam:
+                self.report({'ERROR'}, "Object must have a material containing 'foam' in its name")
+                return {'CANCELLED'}
+
             self.unfolder.do_create_uvmap = self.do_create_uvmap
             if self.object.data.paper_island_list:
                 self.unfolder.copy_island_names(self.object.data.paper_island_list)
@@ -444,8 +469,9 @@ class ExportPaperModel(bpy.types.Operator):
             col = box.column()
             col.prop(self.properties, "do_create_stickers")
             col.prop(self.properties, "do_create_numbers")
+            col.prop(self.properties, "do_create_measures")
             col = box.column()
-            col.active = self.do_create_stickers or self.do_create_numbers
+            col.active = self.do_create_stickers or self.do_create_numbers or self.do_create_measures
             col.prop(self.properties, "sticker_width")
             box.prop(self.properties, "angle_epsilon")
 
