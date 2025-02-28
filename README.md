@@ -12,5 +12,7 @@ Features:
  * Customizable colors and line style
  * Visualization of the net in UV editor and 3D View
  * Interactive recalculation in Edit Mode
+ * Support now the output format A2, A1 and A0 for PDF and SVG files
+ * Enable/Disable measurements in the generated documents
 
 Documentation is available on the [github.io site](http://addam.github.io/Export-Paper-Model-from-Blender).

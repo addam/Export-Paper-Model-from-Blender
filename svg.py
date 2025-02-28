@@ -2,13 +2,21 @@
 
 import os.path as os_path
 import mathutils as M
+from math import atan2, degrees
 from .unfolder import Sticker, Arrow, NumberAlone
 
 class Svg:
     """Simple SVG exporter"""
 
     def __init__(self, properties):
-        pass
+        self.style = properties.style
+        self.text_size = properties.sticker_width
+        self.scale = properties.scale
+        self.angle_epsilon = properties.angle_epsilon
+        self.page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+        self.margin = M.Vector((properties.output_margin, properties.output_margin))
+        self.pure_net = (properties.texture_type == 'NONE')
+        self.create_measures = properties.do_create_measures
 
     @classmethod
     def encode_image(cls, bpy_image):
@@ -107,6 +115,73 @@ class Svg:
                                 y=1000 * (self.page_size.y - island.pos.y - self.margin.y - 0.2 * self.text_size),
                                 label=island.title),
                             file=f)
+
+                    # ========== ADD MEASUREMENTS ==========
+                    if self.create_measures:
+                        measurement_elements = []
+                        visited_edges = set()
+                        
+                        for loop, uvedge in island.edges.items():
+                            edge = mesh.edges[loop.edge]
+                            
+                            # Skip processed edges and stickers
+                            if (uvedge.sticker or 
+                                edge.is_cut(uvedge.uvface.face) or 
+                                uvedge.uvface.flipped != (id(uvedge.va) > id(uvedge.vb))):
+                                continue
+                                
+                            # Get edge points in PAGE coordinates (Blender space)
+                            va_blender = uvedge.va.co + island.pos
+                            vb_blender = uvedge.vb.co + island.pos
+
+                            # Convert to SVG coordinate system (Y-flipped)
+                            va_svg = M.Vector((
+                                va_blender.x + self.margin.x,
+                                self.page_size.y - va_blender.y - self.margin.y
+                            )) * 1000
+                            
+                            vb_svg = M.Vector((
+                                vb_blender.x + self.margin.x,
+                                self.page_size.y - vb_blender.y - self.margin.y
+                            )) * 1000
+                
+                            # Skip duplicate edges
+                            edge_key = frozenset((tuple(va_svg), tuple(vb_svg)))
+                            if edge_key in visited_edges:
+                                continue
+                            visited_edges.add(edge_key)
+                            
+                            # Calculate length in cm (with scale conversion)
+                            direction = vb_svg - va_svg
+                            length_cm = (direction.length / 1000) * 100 * self.scale  # Convert to real-world cm
+                            
+                            # Calculate midpoint in SVG coordinates
+                            midpoint = (va_svg + vb_svg) * 0.5
+                            
+                            # Calculate perpendicular offset direction (SVG Y-axis is top-down)
+                            perp = M.Vector((-direction.y, direction.x)).normalized() * 5  # 5 SVG units offset
+                            
+                            # Calculate text position and rotation
+                            text_pos = midpoint + perp
+                            angle = degrees(atan2(direction.y, direction.x))
+                            
+                            # Create measurement text element
+                            measurement = (
+                                f'<text transform="translate({text_pos.x:.2f} {text_pos.y:.2f}) '
+                                f'rotate({angle:.1f})" '
+                                f'font-size="{self.text_size * 800:.2f}" '
+                                f'text-anchor="middle" '
+                                f'dominant-baseline="central" '
+                                f'fill="{styleargs["text_color"]}" '
+                                f'fill-opacity="{styleargs["text_alpha"]:.2f}">'
+                                f'{length_cm:.1f} cm</text>'
+                            )
+                            measurement_elements.append(measurement)
+
+                        if measurement_elements:
+                            print("<!-- Edge Measurements -->", file=f)
+                            print("\n".join(measurement_elements), file=f)
+                        # ========== END MEASUREMENTS ==========
 
                     data_markers, data_stickerfill = list(), list()
                     for marker in island.markers:
