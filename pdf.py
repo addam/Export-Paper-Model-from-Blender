@@ -154,7 +154,7 @@ class Pdf:
                         start = uvedge.va.co
                         end = uvedge.vb.co
                         direction = end - start
-                        length_cm = (direction.length * 100) / self.scale  # Account for export scale
+                        length_cm = (direction.length * 100) * self.scale  # Account for export scale
 
                         # Calculate midpoint position
                         midpoint = (start + end) * 0.5

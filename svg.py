@@ -153,7 +153,7 @@ class Svg:
                             
                             # Calculate length in cm (with scale conversion)
                             direction = vb_svg - va_svg
-                            length_cm = (direction.length / 1000) * 100 / self.scale  # Convert to real-world cm
+                            length_cm = (direction.length / 1000) * 100 * self.scale  # Convert to real-world cm
                             
                             # Calculate midpoint in SVG coordinates
                             midpoint = (va_svg + vb_svg) * 0.5
@@ -164,9 +164,6 @@ class Svg:
                             # Calculate text position and rotation
                             text_pos = midpoint + perp
                             angle = degrees(atan2(direction.y, direction.x))
-                            
-                            # Calculate perpendicular offset direction (SVG Y-axis is top-down)
-                            perp = M.Vector((-direction.y, direction.x)).normalized() * 5  # 5 SVG units offset
                             
                             # Create measurement text element
                             measurement = (
