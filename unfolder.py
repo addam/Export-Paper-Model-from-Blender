@@ -35,8 +35,8 @@ def pairs(sequence):
     yield this, first
 
 
-def rotation_matrix(sinx, cosx):
-    return Matrix(((cosx, -sinx), (sinx, cosx)))
+def rotation_matrix(sin, cos):
+    return Matrix(((cos, -sin), (sin, cos)))
 
 
 def fitting_matrix(v1, v2):
@@ -476,7 +476,7 @@ class Mesh:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
             points = [vertex.co for vertex in set(island.vertices.values())] + island.fake_vertices
-            sinx, cosx, _ = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
+            _, sinx, cosx = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
             rot = rotation_matrix(sinx, cosx)
             for point in points:
                 point.rotate(rot)

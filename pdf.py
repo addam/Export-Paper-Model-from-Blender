@@ -25,7 +25,7 @@ class Pdf(Exporter):
     def styling(self, name, do_stroke=True):
         s, m, l = (length * self.style.line_width * 1000 for length in (1, 4, 9))
         format_style = {'SOLID': [], 'DOT': [s, m], 'DASH': [m, l], 'LONGDASH': [l, m], 'DASHDOT': [l, m, s, m]}
-        style, color, width = (getattr(self.style, f"{name}_{arg}") for arg in ("style", "color", "width"))
+        style, color, width = (getattr(self.style, f"{name}_{arg}", None) for arg in ("style", "color", "width"))
         style = style or 'SOLID'
         result = ["q"]
         if do_stroke:
@@ -116,7 +116,7 @@ class Pdf(Exporter):
             for island in page.islands:
                 commands.append("q 1 0 0 1 {0.x:.6f} {0.y:.6f} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
-                    identifier = f"I{len(resources["XObject"]) + 1}"
+                    identifier = f"I{len(resources['XObject']) + 1}"
                     commands.append(self.command_image.format(1000 * island.bounding_box, identifier))
                     objects.append(island.embedded_image)
                     resources["XObject"][identifier] = island.embedded_image
