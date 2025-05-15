@@ -4,7 +4,7 @@
 bl_info = {
     "name": "Export Paper Model",
     "author": "Addam Dominec",
-    "version": (1, 3),
+    "version": (1, 3, 1),
     "blender": (3, 0, 0),
     "location": "File > Export > Paper Model",
     "warning": "",
