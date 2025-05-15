@@ -1,12 +1,10 @@
-# -*- coding: utf-8 -*-
-# operator.py: interaction with Blender and the user
+# unfold_operator.py: interaction with Blender and the user
 
 from re import compile as re_compile
 from math import pi, ceil
 import bpy
-import bl_operators
 import bmesh
-import mathutils
+from mathutils import Vector
 
 from .unfolder import Unfolder, UnfoldError, default_priority_effect
 from .svg import Svg
@@ -27,17 +25,6 @@ def first_letters(text):
     for match in first_letters.pattern.finditer(text):
         yield text[match.start()]
 first_letters.pattern = re_compile("((?<!\w)\w)|\d")
-
-
-def init_exporter(self, properties):
-    self.page_size = mathutils.Vector((properties.output_size_x, properties.output_size_y))
-    self.style = properties.style
-    margin = properties.output_margin
-    self.margin = mathutils.Vector((margin, margin))
-    self.pure_net = (properties.texture_type == 'NONE')
-    self.do_create_stickers = properties.do_create_stickers
-    self.text_size = properties.sticker_width
-    self.angle_epsilon = properties.angle_epsilon
 
 
 class Unfold(bpy.types.Operator):
@@ -85,7 +72,7 @@ class Unfold(bpy.types.Operator):
 
         self.object = context.object
 
-        cage_size = mathutils.Vector((settings.output_size_x, settings.output_size_y))
+        cage_size = Vector((settings.output_size_x, settings.output_size_y))
         priority_effect = {
             'CONVEX': self.priority_effect_convex,
             'CONCAVE': self.priority_effect_concave,
@@ -357,7 +344,7 @@ class ExportPaperModel(bpy.types.Operator):
 
         self.object = context.active_object
         self.unfolder = Unfolder(self.object)
-        cage_size = mathutils.Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y))
+        cage_size = Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y))
         unfolder_scale = sce.unit_settings.scale_length/self.scale
         self.unfolder.prepare(cage_size, scale=unfolder_scale, limit_by_page=sce.paper_model.limit_by_page)
         if sce.paper_model.use_auto_scale:
@@ -390,8 +377,6 @@ class ExportPaperModel(bpy.types.Operator):
                 self.unfolder.copy_island_names(self.object.data.paper_island_list)
             exporter_class = Svg if self.properties.file_format == 'SVG' else Pdf
             exporter = exporter_class(self.properties)
-            # TODO make the constructor meaningful enough so that init_exporter is not necessary
-            init_exporter(exporter, self.properties)
             self.unfolder.save(self.properties, exporter)
             self.report({'INFO'}, "Saved a {}-page document".format(len(self.unfolder.mesh.pages)))
             return {'FINISHED'}
@@ -406,7 +391,7 @@ class ExportPaperModel(bpy.types.Operator):
         margin = self.output_margin + self.sticker_width
         if min(self.output_size_x, self.output_size_y) <= 2 * margin:
             return False
-        output_inner_size = mathutils.Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin))
+        output_inner_size = Vector((self.output_size_x - 2*margin, self.output_size_y - 2*margin))
         ratio = self.unfolder.mesh.largest_island_ratio(output_inner_size)
         return ratio * sce.unit_settings.scale_length / self.scale
 

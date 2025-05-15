@@ -3,7 +3,8 @@ from time import time
 
 
 def get_nester(method):
-    return rect_pack_custom if method == 'CCOR' else rect_pack_bpy
+    can_pack = can_pack_ccor if method == 'CCOR' else can_pack_bpy
+    return branch_and_bound(can_pack)
 
 
 class Page:
@@ -17,6 +18,7 @@ class Page:
 
 
 def can_pack_ccor(islands, cage_size):
+    raise NotImplementedError
     if len(islands) <= 1:
         islands[0].pos.xy = 0, 0
         return True
@@ -75,11 +77,9 @@ def branch_and_bound(can_pack_fn, timeout_seconds=15):
                 if time() > time_limit:
                     break
                 path[-1] += 1
-        pages = [list() for _ in range(max(i for i, _ in best) + 1)]
+        pages = [[] for _ in range(max(i for i, _ in best) + 1)]
         for (i, pos), isle in zip(best, islands):
             isle.pos.xy = pos
             pages[i].append(isle)
         return [Page(i, page) for i, page in enumerate(pages)]
     return result
-
-rect_pack_bpy = branch_and_bound(can_pack_bpy)

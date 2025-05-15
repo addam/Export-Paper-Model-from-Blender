@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 # unfolder.py: processing of geometry and representation of the resulting net
 
 import os.path as os_path
-from itertools import chain, repeat, product, combinations
-from math import pi, asin, atan2
+from itertools import chain, product, combinations
+from math import pi, asin
 import bpy
 import bmesh
-import mathutils as M
+from mathutils import Matrix, Vector
+from mathutils.geometry import convex_hull_2d
 
 from .nesting import get_nester
 
@@ -35,11 +35,13 @@ def pairs(sequence):
     yield this, first
 
 
+def rotation_matrix(sinx, cosx):
+    return Matrix(((cosx, -sinx), (sinx, cosx)))
+
+
 def fitting_matrix(v1, v2):
     """Get a matrix that rotates v1 to the same direction as v2"""
-    return (1 / v1.length_squared) * M.Matrix((
-        (v1.x*v2.x + v1.y*v2.y, v1.y*v2.x - v1.x*v2.y),
-        (v1.x*v2.y - v1.y*v2.x, v1.x*v2.x + v1.y*v2.y)))
+    return (1 / v1.length_squared) * rotation_matrix(v1.x*v2.y - v1.y*v2.x, v1.x*v2.x + v1.y*v2.y)
 
 
 def z_up_matrix(n):
@@ -47,18 +49,17 @@ def z_up_matrix(n):
     b = n.xy.length
     s = n.length
     if b > 0:
-        return M.Matrix((
+        return Matrix((
             (n.x*n.z/(b*s), n.y*n.z/(b*s), -b/s),
             (-n.y/b, n.x/b, 0),
             (0, 0, 0)
         ))
-    else:
-        # no need for rotation
-        return M.Matrix((
-            (1, 0, 0),
-            (0, (-1 if n.z < 0 else 1), 0),
-            (0, 0, 0)
-        ))
+    # no need for rotation
+    return Matrix((
+        (1, 0, 0),
+        (0, (-1 if n.z < 0 else 1), 0),
+        (0, 0, 0)
+    ))
 
 
 def cage_fit(points, aspect):
@@ -71,7 +72,7 @@ def cage_fit(points, aspect):
                 continue
             direction = (b - a).normalized()
             sinx, cosx = -direction.y, direction.x
-            rot = M.Matrix(((cosx, -sinx), (sinx, cosx)))
+            rot = rotation_matrix(sinx, cosx)
             rot_polygon = [rot @ p for p in polygon]
             left, right = [fn(rot_polygon, key=lambda p: p.to_tuple()) for fn in (min, max)]
             bottom, top = [fn(rot_polygon, key=lambda p: p.yx.to_tuple()) for fn in (min, max)]
@@ -87,14 +88,14 @@ def cage_fit(points, aspect):
             t = ((r**2 + q**2)**0.5 - r) / q if q != 0 else 0
             t = -1 / t if abs(t) > 1 else t  # pick the positive solution
             siny, cosy = 2 * t / (1 + t**2), (1 - t**2) / (1 + t**2)
-            rot = M.Matrix(((cosy, -siny), (siny, cosy)))
+            rot = rotation_matrix(siny, cosy)
             for p in rot_polygon:
                 p[:] = rot @ p  # note: this also modifies left, right, bottom, top
             if left.x < right.x and bottom.y < top.y and all(left.x <= p.x <= right.x and bottom.y <= p.y <= top.y for p in rot_polygon):
                 yield max(aspect * (right - left).x, (top - bottom).y), sinx*cosy + cosx*siny, cosx*cosy - sinx*siny
-    polygon = [points[i] for i in M.geometry.convex_hull_2d(points)]
+    polygon = [points[i] for i in convex_hull_2d(points)]
     height, sinx, cosx = min(guesses(polygon))
-    return atan2(sinx, cosx), height
+    return height, sinx, cosx
 
 
 def paginate_islands(islands, cage_size, method='CUSTOM'):  # -> pages
@@ -134,7 +135,7 @@ def apply_rna_properties(memory, *datablocks):
 
 class UnfoldError(ValueError):
     def mesh_select(self):
-        if len(self.args) > 1:
+        if len(self.args) >= 3:
             elems, bm = self.args[1:3]
             bpy.context.tool_settings.mesh_select_mode = [bool(elems[key]) for key in ("verts", "edges", "faces")]
             for elem in chain(bm.verts, bm.edges, bm.faces):
@@ -164,14 +165,14 @@ class Unfolder:
         """Create the islands of the net"""
         self.mesh.check_correct()
         self.mesh.generate_cuts(cage_size / scale if limit_by_page and cage_size else None, priority_effect)
-        self.mesh.finalize_islands(cage_size or M.Vector((1, 1)))
+        self.mesh.finalize_islands(cage_size or Vector((1, 1)))
         self.mesh.enumerate_islands()
         self.mesh.save_uv()
 
     def copy_island_names(self, island_list):
         """Copy island label and abbreviation from the best matching island in the list"""
         orig_islands = [{face.id for face in item.faces} for item in island_list]
-        matching = list()
+        matching = []
         for i, island in enumerate(self.mesh.islands):
             islfaces = {face.index for face in island.faces}
             matching.extend((len(islfaces.intersection(item)), i, j) for j, item in enumerate(orig_islands))
@@ -193,9 +194,9 @@ class Unfolder:
         extension = properties.file_format.lower()
         filepath = bpy.path.ensure_ext(filepath, "." + extension)
         # page size in meters
-        page_size = M.Vector((properties.output_size_x, properties.output_size_y))
+        page_size = Vector((properties.output_size_x, properties.output_size_y))
         # printable area size in meters
-        printable_size = page_size - 2 * properties.output_margin * M.Vector((1, 1))
+        printable_size = page_size - 2 * properties.output_margin * Vector((1, 1))
         unit_scale = bpy.context.scene.unit_settings.scale_length
         ppm = properties.output_dpi * 100 / 2.54  # pixels per meter
 
@@ -250,15 +251,15 @@ class Unfolder:
 
 
 class Mesh:
-    """Wrapper for Bpy Mesh"""
+    """Wrapper for Bpy BMesh"""
 
-    def __init__(self, bmesh, matrix):
-        self.data = bmesh
+    def __init__(self, bm, matrix):
+        self.data = bm
         self.matrix = matrix.to_3x3()
-        self.looptex = bmesh.loops.layers.uv.new("Unfolded")
-        self.edges = {bmedge: Edge(bmedge) for bmedge in bmesh.edges}
-        self.islands = list()
-        self.pages = list()
+        self.looptex = bm.loops.layers.uv.new("Unfolded")
+        self.edges = {bmedge: Edge(bmedge) for bmedge in bm.edges}
+        self.islands = []
+        self.pages = []
         for edge in self.edges.values():
             edge.choose_main_faces()
             if edge.main_faces:
@@ -266,7 +267,8 @@ class Mesh:
         self.copy_freestyle_marks()
 
     def delete_uvmap(self):
-        self.data.loops.layers.uv.remove(self.looptex) if self.looptex else None
+        if self.looptex:
+            self.data.loops.layers.uv.remove(self.looptex)
 
     def copy_freestyle_marks(self):
         # NOTE: this is a workaround for NotImplementedError on bmesh.edges.layers.freestyle
@@ -306,10 +308,10 @@ class Mesh:
         cure = " and ".join(s for s, k in disease if k)
         raise UnfoldError(
             "The model contains:\n" +
-            (" {} zero-length edge(s)\n".format(len(null_edges)) if null_edges else "") +
-            (" {} zero-area face(s)\n".format(len(null_faces)) if null_faces else "") +
-            (" {} twisted polygon(s)\n".format(len(twisted_faces)) if twisted_faces else "") +
-            "The offenders are selected and you can use {} to fix them. Export failed.".format(cure),
+            (f" {len(null_edges)} zero-length edge(s)\n" if null_edges else "") +
+            (f" {len(null_faces)} zero-area face(s)\n" if null_faces else "") +
+            (f" {len(twisted_faces)} twisted polygon(s)\n" if twisted_faces else "") +
+            f"The offenders are selected and you can use {cure} to fix them. Export failed.",
             {"verts": set(), "edges": null_edges, "faces": null_faces | twisted_faces}, self.data)
 
     def generate_cuts(self, page_size, priority_effect):
@@ -363,7 +365,7 @@ class Mesh:
 
             # construct a linked list from each island's boundary
             # uvedge.neighbor_right is clockwise = forward = via uvedge.vb if not uvface.flipped
-            neighbor_lookup, conflicts = dict(), dict()
+            neighbor_lookup, conflicts = {}, {}
             for uvedge in island.boundary:
                 uvvertex = uvedge.va if uvedge.uvface.flipped else uvedge.vb
                 if uvvertex not in neighbor_lookup:
@@ -461,8 +463,7 @@ class Mesh:
 
     def enumerate_islands(self):
         for num, island in enumerate(self.islands, 1):
-            island.number = num
-            island.generate_label()
+            island.generate_label(num)
 
     def scale_islands(self, scale):
         for island in self.islands:
@@ -475,24 +476,24 @@ class Mesh:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
             points = [vertex.co for vertex in set(island.vertices.values())] + island.fake_vertices
-            angle, _ = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
-            rot = M.Matrix.Rotation(angle, 2)
+            sinx, cosx, _ = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
+            rot = rotation_matrix(sinx, cosx)
             for point in points:
                 point.rotate(rot)
             for marker in island.markers:
                 marker.rot = rot @ marker.rot
-            bottom_left = M.Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
+            bottom_left = Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
             # DEBUG
-            # top_right = M.Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
+            # top_right = Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
             # print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
             for point in points:
                 point -= bottom_left
-            island.bounding_box = M.Vector((max(v.x for v in points), max(v.y for v in points)))
+            island.bounding_box = Vector((max(v.x for v in points), max(v.y for v in points)))
 
     def largest_island_ratio(self, cage_size):
         return max(i / p for island in self.islands for (i, p) in zip(island.bounding_box, cage_size))
 
-    def save_uv(self, cage_size=M.Vector((1, 1)), separate_image=False):
+    def save_uv(self, cage_size=Vector((1, 1)), separate_image=False):
         if separate_image:
             for island in self.islands:
                 island.save_uv_separate(self.looptex)
@@ -500,7 +501,7 @@ class Mesh:
             for island in self.islands:
                 island.save_uv(self.looptex, cage_size)
 
-    def save_image(self, page_size_pixels: M.Vector, filename):
+    def save_image(self, page_size_pixels: Vector, filename):
         for page in self.pages:
             image = create_blank_image("Page {}".format(page.name), page_size_pixels, alpha=1)
             image.filepath_raw = page.image_path = "{}_{}.png".format(filename, page.name)
@@ -536,7 +537,7 @@ class Mesh:
         ob = bpy.context.active_object
         me = ob.data
         # in Cycles, the image for baking is defined by the active Image Node
-        temp_nodes = dict()
+        temp_nodes = {}
         temp_mat = None
         if not any(me.materials):
             temp_mat = bpy.data.materials.new("Unfolded")
@@ -582,7 +583,7 @@ class Edge:
         self.vector = self.vb.co - self.va.co
         # if self.main_faces is set, then self.uvedges[:2] must correspond to self.main_faces, in their order
         # this constraint is assured at the time of finishing mesh.generate_cuts
-        self.uvedges = list()
+        self.uvedges = []
 
         self.force_cut = edge.seam  # such edges will always be cut
         self.main_faces = None  # two faces that may be connected in the island
@@ -652,22 +653,22 @@ class Island:
         'mesh', 'faces', 'edges', 'vertices', 'fake_vertices', 'boundary', 'markers',
         'pos', 'bounding_box',
         'image_path', 'embedded_image',
-        'number', 'label', 'abbreviation', 'title',
+        'label', 'abbreviation', 'title',
         'has_safe_geometry', 'is_inside_out',
         'sticker_numbering')
 
     def __init__(self, mesh, face, matrix, normal_matrix):
         """Create an Island from a single Face"""
         self.mesh = mesh
-        self.faces = dict()  # face -> uvface
-        self.edges = dict()  # loop -> uvedge
-        self.vertices = dict()  # loop -> uvvertex
-        self.fake_vertices = list()
-        self.markers = list()
+        self.faces = {}  # face -> uvface
+        self.edges = {}  # loop -> uvedge
+        self.vertices = {}  # loop -> uvvertex
+        self.fake_vertices = []
+        self.markers = []
         self.label = None
         self.abbreviation = None
         self.title = None
-        self.pos = M.Vector((0, 0))
+        self.pos = Vector((0, 0))
         self.image_path = None
         self.embedded_image = None
         self.is_inside_out = False  # swaps concave <-> convex edges
@@ -685,13 +686,13 @@ class Island:
         self.fake_vertices.extend(marker.bounds)
         self.markers.append(marker)
 
-    def generate_label(self, label=None, abbreviation=None):
+    def generate_label(self, number):
         """Assign a name to this island automatically"""
-        abbr = abbreviation or self.abbreviation or str(self.number)
+        abbr = self.abbreviation or str(number)
         # TODO: dots should be added in the last instant when outputting any text
         if is_upsidedown_wrong(abbr):
             abbr += "."
-        self.label = label or self.label or "Island {}".format(self.number)
+        self.label = self.label or f"Island {number}"
         self.abbreviation = abbr
 
     def save_uv(self, tex, cage_size):
@@ -767,7 +768,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     class QuickSweepline:
         """Efficient sweepline based on binary search, checking neighbors only"""
         def __init__(self):
-            self.children = list()
+            self.children = []
 
         def add(self, item, cmp=is_below):
             low, high = 0, len(self.children)
@@ -814,7 +815,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     def root_find(value, tree):
         """Find the root of a given value in a forest-like dictionary
         also updates the dictionary using path compression"""
-        parent, relink = tree.get(value), list()
+        parent, relink = tree.get(value), []
         while parent is not None:
             relink.append(value)
             value, parent = parent, tree.get(parent)
@@ -843,7 +844,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     if not flipped:
         rot = fitting_matrix(first_b.co - second_b.co, uvedge_a.vb.co - uvedge_a.va.co)
     else:
-        flip = M.Matrix(((-1, 0), (0, 1)))
+        flip = Matrix(((-1, 0), (0, 1)))
         rot = fitting_matrix(flip @ (first_b.co - second_b.co), uvedge_a.vb.co - uvedge_a.va.co) @ flip
     trans = uvedge_a.vb.co - rot @ first_b.co
     # preview of island_b's vertices after the join operation
@@ -858,14 +859,14 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
         if min(bbox_width, bbox_height)**2 > size_limit.x**2 + size_limit.y**2:
             return False
         if (bbox_width > size_limit.x or bbox_height > size_limit.y) and (bbox_height > size_limit.x or bbox_width > size_limit.y):
-            _, height = cage_fit(points, size_limit.y / size_limit.x)
+            height, *_ = cage_fit(points, size_limit.y / size_limit.x)
             if height > size_limit.y:
                 return False
 
     distance_limit = uvedge_a.loop.edge.calc_length() * epsilon
     # try and merge UVVertices closer than sqrt(distance_limit)
     merged_uvedges = set()
-    merged_uvedge_pairs = list()
+    merged_uvedge_pairs = []
 
     # merge all uvvertices that are close enough using a union-find structure
     # uvvertices will be merged only in cases island_b->island_a and island_a->island_a
@@ -910,7 +911,7 @@ def join(uvedge_a, uvedge_b, size_limit=None, epsilon=1e-6):
     # TODO: if is_merged_mine, it might make sense to create a similar list from island_a.boundary as well
 
     incidence = {vertex.tup for vertex in phantoms.values()}.intersection(vertex.tup for vertex in island_a.vertices.values())
-    incidence = {position: list() for position in incidence}  # from now on, 'incidence' is a dict
+    incidence = {position: [] for position in incidence}  # from now on, 'incidence' is a dict
     for uvedge in chain(boundary_other, island_a.boundary):
         if uvedge.va.co == uvedge.vb.co:
             continue
@@ -1065,8 +1066,8 @@ class Arrow:
         self.size = size
         tangent = edge.normalized()
         cos, sin = tangent
-        self.rot = M.Matrix(((cos, -sin), (sin, cos)))
-        normal = M.Vector((sin, -cos))
+        self.rot = rotation_matrix(sin, cos)
+        normal = Vector((sin, -cos))
         self.bounds = [self.center, self.center + (1.2 * normal + tangent) * size, self.center + (1.2 * normal - tangent) * size]
 
 
@@ -1117,21 +1118,21 @@ class Sticker:
         len_a = min(len_a, (edge.length * sin_b) / (sin_a * cos_b + sin_b * cos_a))
         len_b = 0 if sin_b == 0 else min(sticker_width / sin_b, (edge.length - len_a * cos_a) / cos_b)
 
-        v3 = second_vertex.co + M.Matrix(((cos_b, -sin_b), (sin_b, cos_b))) @ edge * len_b / edge.length
-        v4 = first_vertex.co + M.Matrix(((-cos_a, -sin_a), (sin_a, -cos_a))) @ edge * len_a / edge.length
+        v3 = second_vertex.co + rotation_matrix(sin_b, cos_b) @ edge * len_b / edge.length
+        v4 = first_vertex.co + rotation_matrix(sin_a, -cos_a) @ edge * len_a / edge.length
         if v3 != v4:
             self.points = [second_vertex.co, v3, v4, first_vertex.co]
         else:
             self.points = [second_vertex.co, v3, first_vertex.co]
 
         sin, cos = edge.y / edge.length, edge.x / edge.length
-        self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+        self.rot = rotation_matrix(sin, cos)
         self.width = sticker_width * 0.9
         if index and uvedge.uvface.island is not other.uvface.island:
             self.text = "{}:{}".format(other.uvface.island.abbreviation, index)
         else:
             self.text = index
-        self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot @ M.Vector((0, self.width * 0.2))
+        self.center = (uvedge.va.co + uvedge.vb.co) / 2 + self.rot @ Vector((0, self.width * 0.2))
         self.bounds = [v3, v4, self.center] if v3 != v4 else [v3, self.center]
 
 
@@ -1145,7 +1146,19 @@ class NumberAlone:
 
         self.size = default_size
         sin, cos = edge.y / edge.length, edge.x / edge.length
-        self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+        self.rot = rotation_matrix(sin, cos)
         self.text = index
-        self.center = (uvedge.va.co + uvedge.vb.co) / 2 - self.rot @ M.Vector((0, self.size * 1.2))
+        self.center = (uvedge.va.co + uvedge.vb.co) / 2 - self.rot @ Vector((0, self.size * 1.2))
         self.bounds = [self.center]
+
+
+class Exporter:
+    def __init__(self, properties):
+        self.page_size = Vector((properties.output_size_x, properties.output_size_y))
+        self.style = properties.style
+        margin = properties.output_margin
+        self.margin = Vector((margin, margin))
+        self.pure_net = (properties.texture_type == 'NONE')
+        self.do_create_stickers = properties.do_create_stickers
+        self.text_size = properties.sticker_width
+        self.angle_epsilon = properties.angle_epsilon

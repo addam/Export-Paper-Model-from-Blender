@@ -1,17 +1,14 @@
-# -*- coding: utf-8 -*-
+# svg.py: export to SVG
 
 import os.path as os_path
-import mathutils as M
-from .unfolder import Sticker, Arrow, NumberAlone
+from mathutils import Vector
+from .unfolder import Sticker, Arrow, NumberAlone, Exporter
 
-class Svg:
+class Svg(Exporter):
     """Simple SVG exporter"""
 
-    def __init__(self, properties):
-        pass
-
-    @classmethod
-    def encode_image(cls, bpy_image):
+    @staticmethod
+    def encode_image(bpy_image):
         import tempfile
         import base64
         with tempfile.TemporaryDirectory() as directory:
@@ -85,7 +82,7 @@ class Svg:
                     if island.image_path:
                         print(
                             self.image_linked_tag.format(
-                                pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))),
+                                pos=self.format_vertex(island.pos + Vector((0, island.bounding_box.y))),
                                 width=island.bounding_box.x*1000,
                                 height=island.bounding_box.y*1000,
                                 path=path_convert(island.image_path)),
@@ -93,7 +90,7 @@ class Svg:
                     elif island.embedded_image:
                         print(
                             self.image_embedded_tag.format(
-                                pos=self.format_vertex(island.pos + M.Vector((0, island.bounding_box.y))),
+                                pos=self.format_vertex(island.pos + Vector((0, island.bounding_box.y))),
                                 width=island.bounding_box.x*1000,
                                 height=island.bounding_box.y*1000,
                                 path=island.image_path),
@@ -108,7 +105,7 @@ class Svg:
                                 label=island.title),
                             file=f)
 
-                    data_markers, data_stickerfill = list(), list()
+                    data_markers, data_stickerfill = [], []
                     for marker in island.markers:
                         if isinstance(marker, Sticker):
                             data_stickerfill.append("M {} Z".format(
@@ -121,12 +118,12 @@ class Svg:
                                     size=marker.width * 1000))
                         elif isinstance(marker, Arrow):
                             size = marker.size * 1000
-                            position = marker.center + marker.size * marker.rot @ M.Vector((0, -0.9))
+                            position = marker.center + marker.size * marker.rot @ Vector((0, -0.9))
                             data_markers.append(self.arrow_marker_tag.format(
                                 index=marker.text,
                                 arrow_pos=self.format_vertex(marker.center + island.pos),
                                 scale=size,
-                                pos=self.format_vertex(position + island.pos - marker.size*M.Vector((0, 0.4))),
+                                pos=self.format_vertex(position + island.pos - marker.size * Vector((0, 0.4))),
                                 mat=format_matrix(size * marker.rot)))
                         elif isinstance(marker, NumberAlone):
                             data_markers.append(self.text_transformed_tag.format(
@@ -137,10 +134,10 @@ class Svg:
                     if data_stickerfill and self.style.sticker_color[3] > 0:
                         print("<path class='sticker' d='", rows(data_stickerfill), "'/>", file=f)
 
-                    data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(4))
+                    data_outer, data_convex, data_concave, data_freestyle = ([] for i in range(4))
                     outer_edges = set(island.boundary)
                     while outer_edges:
-                        data_loop = list()
+                        data_loop = []
                         uvedge = outer_edges.pop()
                         while 1:
                             if uvedge.sticker:

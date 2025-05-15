@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
+# pdf.py: export to PDF written in plain Python
 
 from itertools import chain, repeat
-import mathutils as M
-from .unfolder import Sticker, Arrow, NumberAlone
+from zlib import compress
+from mathutils import Vector
+from .unfolder import Sticker, Arrow, NumberAlone, Exporter
 
-class Pdf:
+class Pdf(Exporter):
     """Simple PDF exporter"""
 
     mm_to_pt = 72 / 25.4
@@ -15,7 +16,8 @@ class Pdf:
     character_width = {c: value for (value, chars) in character_width_packed.items() for c in chars}
 
     def __init__(self, properties):
-        self.styles = dict()
+        self.styles = {}
+        super().__init__(properties)
 
     def text_width(self, text, scale=None):
         return (scale or self.text_size) * sum(self.character_width.get(c, 556) for c in text) / 1000
@@ -23,7 +25,7 @@ class Pdf:
     def styling(self, name, do_stroke=True):
         s, m, l = (length * self.style.line_width * 1000 for length in (1, 4, 9))
         format_style = {'SOLID': [], 'DOT': [s, m], 'DASH': [m, l], 'LONGDASH': [l, m], 'DASHDOT': [l, m, s, m]}
-        style, color, width = (getattr(self.style, f"{name}_{arg}", None) for arg in ("style", "color", "width"))
+        style, color, width = (getattr(self.style, f"{name}_{arg}") for arg in ("style", "color", "width"))
         style = style or 'SOLID'
         result = ["q"]
         if do_stroke:
@@ -52,7 +54,7 @@ class Pdf:
 
     def write(self, mesh, filename):
         def format_dict(obj, refs=tuple()):
-            content = "".join("/{} {}\n".format(key, format_value(value, refs)) for (key, value) in obj.items())
+            content = "".join(f"/{key} {format_value(value, refs)}\n" for (key, value) in obj.items())
             return f"<< {content} >>"
 
         def line_through(seq):
@@ -61,24 +63,23 @@ class Pdf:
 
         def format_value(value, refs=tuple()):
             if value in refs:
-                return "{} 0 R".format(refs.index(value) + 1)
-            elif type(value) is dict:
+                return f"{refs.index(value) + 1} 0 R"
+            if type(value) is dict:
                 return format_dict(value, refs)
-            elif type(value) in (list, tuple):
+            if type(value) in (list, tuple):
                 return "[ " + " ".join(format_value(item, refs) for item in value) + " ]"
-            elif type(value) is int:
+            if type(value) is int:
                 return str(value)
-            elif type(value) is float:
-                return "{:.6f}".format(value)
-            elif type(value) is bool:
+            if type(value) is float:
+                return f"{value:.6f}"
+            if type(value) is bool:
                 return "true" if value else "false"
-            else:
-                return "/{}".format(value)  # this script can output only PDF names, no strings
+            return f"/{value}"  # this script can output only PDF names, no strings
 
         def write_object(index, obj, refs, f, stream=None):
-            byte_count = f.write("{} 0 obj\n".format(index).encode())
+            byte_count = f.write(f"{index} 0 obj\n".encode())
             if type(obj) is not dict:
-                stream, obj = obj, dict()
+                stream, obj = obj, {}
             elif "stream" in obj:
                 stream = obj.pop("stream")
             if stream:
@@ -93,14 +94,13 @@ class Pdf:
             return byte_count + f.write(b"\nendobj\n")
 
         def encode(data):
-            from zlib import compress
             if hasattr(data, "encode"):
                 data = data.encode()
             return compress(data)
 
         page_size_pt = 1000 * self.mm_to_pt * self.page_size
         reset_style = ["Q"]  # graphic command for later use
-        root = {"Type": "Pages", "MediaBox": [0, 0, page_size_pt.x, page_size_pt.y], "Kids": list()}
+        root = {"Type": "Pages", "MediaBox": [0, 0, page_size_pt.x, page_size_pt.y], "Kids": []}
         catalog = {"Type": "Catalog", "Pages": root}
         font = {
             "Type": "Font", "Subtype": "Type1", "Name": "F1",
@@ -111,12 +111,12 @@ class Pdf:
             commands = ["{0:.6f} 0 0 {0:.6f} 0 0 cm".format(self.mm_to_pt)]
             resources = {"Font": {"F1": font}, "ExtGState": self.styles, "ProcSet": ["PDF"]}
             if any(island.embedded_image for island in page.islands):
-                resources["XObject"] = dict()
+                resources["XObject"] = {}
                 resources["ProcSet"].append("ImageC")
             for island in page.islands:
                 commands.append("q 1 0 0 1 {0.x:.6f} {0.y:.6f} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
-                    identifier = "I{}".format(len(resources["XObject"]) + 1)
+                    identifier = f"I{len(resources["XObject"]) + 1}"
                     commands.append(self.command_image.format(1000 * island.bounding_box, identifier))
                     objects.append(island.embedded_image)
                     resources["XObject"][identifier] = island.embedded_image
@@ -130,7 +130,7 @@ class Pdf:
                         label=island.title))
                     commands += reset_style
 
-                data_markers, data_stickerfill = list(), list()
+                data_markers, data_stickerfill = [], []
                 for marker in island.markers:
                     if isinstance(marker, Sticker):
                         data_stickerfill.append(line_through(marker.points) + "f")
@@ -143,11 +143,11 @@ class Pdf:
                                 size=1000*marker.width))
                     elif isinstance(marker, Arrow):
                         size = 1000 * marker.size
-                        position = 1000 * (marker.center + marker.size * marker.rot @ M.Vector((0, -0.9)))
+                        position = 1000 * (marker.center + marker.size * marker.rot @ Vector((0, -0.9)))
                         data_markers.append(self.command_arrow.format(
                             index=marker.text,
                             arrow_pos=1000 * marker.center,
-                            pos=position - 1000 * M.Vector((0.5 * self.text_width(marker.text), 0.4 * self.text_size)),
+                            pos=position - 1000 * Vector((0.5 * self.text_width(marker.text), 0.4 * self.text_size)),
                             mat=size * marker.rot,
                             size=size))
                     elif isinstance(marker, NumberAlone):
@@ -157,10 +157,10 @@ class Pdf:
                             mat=marker.rot,
                             size=1000*marker.size))
 
-                data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(4))
+                data_outer, data_convex, data_concave, data_freestyle = ([] for i in range(4))
                 outer_edges = set(island.boundary)
                 while outer_edges:
-                    data_loop = list()
+                    data_loop = []
                     uvedge = outer_edges.pop()
                     while 1:
                         if uvedge.sticker:
@@ -216,7 +216,7 @@ class Pdf:
 
         root["Count"] = len(root["Kids"])
         with open(filename, "wb+") as f:
-            xref_table = list()
+            xref_table = []
             position = 0
             position += f.write(b"%PDF-1.4\n")
             position += f.write(b"%\xde\xad\xbe\xef\n")
