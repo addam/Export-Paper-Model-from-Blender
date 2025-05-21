@@ -443,6 +443,9 @@ class Mesh:
                                 index += "."
                             target_island.add_marker(Arrow(target, default_width, index))
                             break
+
+                sticker_offset = edge.offset
+                # TODO: add offset to source/sticker
                 add_sticker(source, index, target)
             elif len(edge.uvedges) > 2:
                 target = edge.uvedges[0]
@@ -593,6 +596,7 @@ class Edge:
         self.priority = None
         self.angle = None
         self.freestyle = False
+        self.offset = 0
 
     def choose_main_faces(self):
         """Choose two main faces that might get connected in an island"""
@@ -621,6 +625,15 @@ class Edge:
             self.angle = asin(s)
             if loop_a.link_loop_next.vert != loop_b.vert or loop_b.link_loop_next.vert != loop_a.vert:
                 self.angle = abs(self.angle)
+        
+        # TODO: add documentation
+        # TODO: add Input for paper-thickness
+        thickness = 1
+        if self.angle > pi:
+            self.offset = thickness / math.tan(self.angle/2)
+        else:
+            self.offset = thickness / math.cos(self.angle)
+
 
     def generate_priority(self, priority_effect, average_length):
         """Calculate the priority value for cutting"""
