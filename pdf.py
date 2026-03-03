@@ -113,6 +113,27 @@ class Pdf(Exporter):
             if any(island.embedded_image for island in page.islands):
                 resources["XObject"] = {}
                 resources["ProcSet"].append("ImageC")
+            if self.use_reg:
+                if self.reg_type == "TYPE 1":
+                    commands.append(self.command_reg.format(
+                        rect="{:.6f} {:.6f}".format(self.margin.x*1000,(self.page_size.y-self.margin.y-self.reg_box_size)*1000),
+                        L= self.reg_box_size*1000,
+                        pos1="{:.6f} {:.6f}".format(self.margin.x*1000,(self.margin.y+self.reg_corner_size)*1000),
+                        pos2="{:.6f} {:.6f}".format(self.margin.x*1000,self.margin.y*1000),
+                        pos3="{:.6f} {:.6f}".format((self.margin.x+self.reg_corner_size)*1000,self.margin.y*1000),
+                        pos4="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x-self.reg_corner_size)*1000,(self.page_size.y-self.margin.y)*1000),
+                        pos5="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.page_size.y-self.margin.y)*1000),
+                        pos6="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.page_size.y-self.margin.y-self.reg_corner_size)*1000)))
+                else:
+                    commands.append(self.command_reg.format(
+                        rect="{:.6f} {:.6f}".format(self.margin.x*1000,(self.margin.y)*1000),
+                        L= self.reg_box_size*1000,
+                        pos1="{:.6f} {:.6f}".format(self.margin.x*1000,(self.page_size.y-self.margin.y-self.reg_corner_size)*1000),
+                        pos2="{:.6f} {:.6f}".format(self.margin.x*1000,(self.page_size.y-self.margin.y)*1000),
+                        pos3="{:.6f} {:.6f}".format((self.margin.x+self.reg_corner_size)*1000,(self.page_size.y-self.margin.y)*1000),
+                        pos4="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x-self.reg_corner_size)*1000,(self.margin.y)*1000),
+                        pos5="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.margin.y)*1000),
+                        pos6="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.margin.y+self.reg_corner_size)*1000)))
             for island in page.islands:
                 commands.append("q 1 0 0 1 {0.x:.6f} {0.y:.6f} cm".format(1000*(self.margin + island.pos)))
                 if island.embedded_image:
@@ -237,3 +258,4 @@ class Pdf(Exporter):
     command_sticker = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT {align:.6f} 0 Td ({label}) Tj ET Q"
     command_arrow = "q /F1 {size:.6f} Tf BT {pos.x:.6f} {pos.y:.6f} Td ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q"
     command_number = "q /F1 {size:.6f} Tf {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {pos.x:.6f} {pos.y:.6f} cm BT ({label}) Tj ET Q"
+    command_reg = "q 0 0 0 rg {rect} {L:.3f} {L:.3f} re f Q q {pos1} m {pos2} l {pos3} l S Q q {pos4} m {pos5} l {pos6} l S Q"

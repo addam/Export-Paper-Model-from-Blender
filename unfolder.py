@@ -11,7 +11,7 @@ import bmesh
 from mathutils import Matrix, Vector
 from mathutils.geometry import convex_hull_2d
 
-from .nesting import get_nester
+from .nesting import Page, get_nester
 
 default_priority_effect = {
     'CONVEX': 0.5,
@@ -145,6 +145,29 @@ def apply_rna_properties(memory, *datablocks):
             setattr(data, key, value)
 
 
+class PageLayoutGrid:
+    def __init__(self,size_x,size_y,margin,count):
+        x=count*(size_x-2*margin)
+        y=count*(size_y-2*margin)
+        self.size = Vector((x,y))
+        scale_x = Matrix.Scale(x,4,(1.0,0,0))
+        scale_y = Matrix.Scale(y,4,(0,1.0,0))
+        pos = Matrix.Translation((x/2,y/2,0))
+        for obj in bpy.data.objects:
+            if "pagelayoutgrid" in obj.name:
+                bpy.data.meshes.remove(obj.data)
+
+        me = bpy.data.meshes.new("griddata")
+        bm = bmesh.new()
+        bmesh.ops.create_grid(bm, x_segments = count, y_segments = count, size= 0.5, matrix = pos@scale_x@scale_y, calc_uvs=True)
+        for edge in bm.edges:
+            edge.seam = True
+        bm.to_mesh(me)
+        bm.free()
+        self.object = bpy.data.objects.new("pagelayoutgrid", me)
+        bpy.context.collection.objects.link(self.object)
+
+
 class UnfoldError(ValueError):
     def mesh_select(self):
         if len(self.args) >= 3:
@@ -162,7 +185,7 @@ class UnfoldError(ValueError):
 
 class Unfolder:
     def __init__(self, ob):
-        self.do_create_uvmap = False
+        self.do_create_uvmap = True
         bm = bmesh.from_edit_mesh(ob.data)
         self.mesh = Mesh(bm, ob.matrix_world)
         # api bug workaround to make mesh.save_uv work correctly
@@ -173,13 +196,19 @@ class Unfolder:
         if not self.do_create_uvmap:
             self.mesh.delete_uvmap()
 
-    def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1, limit_by_page=False):
+    def prepare(self, cage_size=None, priority_effect=default_priority_effect, scale=1, limit_by_page=False, call= True, text_size = 0.005):
         """Create the islands of the net"""
+        settings = bpy.context.scene.paper_model
+        printable_size = cage_size - 2 * settings.output_margin * Vector((1, 1))
         self.mesh.check_correct()
         self.mesh.generate_cuts(cage_size / scale if limit_by_page and cage_size else None, priority_effect)
-        self.mesh.finalize_islands(cage_size or Vector((1, 1)))
+        self.mesh.generate_stickers(text_size, True)
+        self.mesh.finalize_islands(printable_size, title_height=text_size*1.2, method=False)
+        self.mesh.clear_marker()
         self.mesh.enumerate_islands()
-        self.mesh.save_uv()
+        if call:
+            self.mesh.pages = paginate_islands(self.mesh.islands, printable_size)
+            self.mesh.save_uv(printable_size, False, settings.page_count)
 
     def copy_island_names(self, island_list):
         """Copy island label and abbreviation from the best matching island in the list"""
@@ -212,6 +241,7 @@ class Unfolder:
         unit_scale = bpy.context.scene.unit_settings.scale_length
         ppm = properties.output_dpi * 100 / 2.54  # pixels per meter
 
+        self.mesh.uv_pos_read(printable_size)
         # after this call, all dimensions will be in meters
         self.mesh.scale_islands(unit_scale/properties.scale)
         if properties.tab_style == 'STICKER':
@@ -221,8 +251,7 @@ class Unfolder:
 
         text_height = properties.sticker_width if (properties.number_style != 'NONE' and len(self.mesh.islands) > 1) else 0
         # title height must be somewhat larger that text size, glyphs go below the baseline
-        self.mesh.finalize_islands(printable_size, title_height=text_height * 1.2)
-        self.mesh.pages = paginate_islands(self.mesh.islands, printable_size, properties.nesting_method)
+        self.mesh.finalize_islands(printable_size, title_height=text_height * 1.2, method=True)
 
         if properties.texture_type != 'NONE':
             # bake an image and save it as a PNG to disk or into memory
@@ -269,7 +298,12 @@ class Mesh:
     def __init__(self, bm, matrix):
         self.data = bm
         self.matrix = matrix.to_3x3()
-        self.looptex = bm.loops.layers.uv.new("Unfolded")
+        self.looptex = bm.loops.layers.uv.get("Unfolded")
+        if not self.looptex:
+            self.looptex = bm.loops.layers.uv.new("Unfolded")
+        self.looptex1 = bm.loops.layers.uv.get("exportuv")
+        if not self.looptex1:
+            self.looptex1 = bm.loops.layers.uv.new("exportuv")
         edge_layers = bm.edges.layers.bool
         freestyle_layer = edge_layers.get("freestyle_edge")
         self.edges = {bmedge: Edge(bmedge, freestyle_layer) for bmedge in bm.edges}
@@ -412,6 +446,52 @@ class Mesh:
                     right.neighbor_left = left
         return True
 
+    def uv_pos_read(self,cage_size):
+        x_co = y_co = page_index = 0
+        ob = bpy.context.active_object
+        bm = bmesh.from_edit_mesh(ob.data)
+        looptexture = bm.loops.layers.uv['Unfolded']
+        if len(self.pages) == 0:
+            page = Page(1)
+            for island in self.islands:
+                page.islands.append(island)
+            self.pages.append(page)
+        for island in self.islands:
+            loop = list(island.vertices.keys())[0]
+            x, y = loop[looptexture].uv.x, loop[looptexture].uv.y
+            for a in range(5):
+                if cage_size.x * a <= x <= (cage_size.x*(a+1)):
+                    x_co = a
+            for b in range(5):
+                if cage_size.y * b <= y <= (cage_size.y*(b+1)):
+                    y_co = b
+            page_index = x_co + (y_co*5)
+            for loop, uvvertex in island.vertices.items():
+                uvvertex.co.x = loop[looptexture].uv.x - (x_co*cage_size.x)
+                uvvertex.co.y = loop[looptexture].uv.y - (y_co*cage_size.y)
+            if page_index >= len(self.pages):
+                max = len(self.pages)
+                dif = page_index - (max-1)
+                for i in range(dif):
+                    page = Page(max+i+1)
+                    self.pages.append(page)
+            for index, page in enumerate(self.pages):
+                for island_b in page.islands:
+                    if island_b is island and index != page_index:
+                        if x_co < 0 or y_co < 0 or page_index < 0:
+                            self.pages[index].islands.remove(island)
+                        else:
+                            self.pages[page_index].islands.append(island)
+                            self.pages[index].islands.remove(island)
+        self.pages = [page for page in self.pages if page.islands]
+
+    def clear_marker(self):
+        for island in self.islands:
+            island.fake_vertices.clear()
+            island.markers.clear()
+            for uvedge in island.boundary:
+                uvedge.sticker = None
+
     def generate_stickers(self, default_width, number_style, paper_thickness=0.0):
         """Add sticker faces where they are needed."""
         def uvedge_priority(uvedge):
@@ -505,18 +585,21 @@ class Mesh:
             for point in chain((vertex.co for vertex in vertices), island.fake_vertices):
                 point *= scale
 
-    def finalize_islands(self, cage_size, title_height=0):
+    def finalize_islands(self, cage_size, title_height=0, method=True):
         for island in self.islands:
             if title_height:
                 island.title = "[{}] {}".format(island.abbreviation, island.label)
             points = [vertex.co for vertex in set(island.vertices.values())] + island.fake_vertices
-            _, sinx, cosx = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
-            rot = rotation_matrix(sinx, cosx)
-            for point in points:
-                point.rotate(rot)
-            for marker in island.markers:
-                marker.rot = rot @ marker.rot
+            if not method:
+                _, sinx, cosx = cage_fit(points, (cage_size.y - title_height) / cage_size.x)
+                rot = rotation_matrix(sinx, cosx)
+                for point in points:
+                    point.rotate(rot)
+                for marker in island.markers:
+                    marker.rot = rot @ marker.rot
             bottom_left = Vector((min(v.x for v in points), min(v.y for v in points) - title_height))
+            if method:
+                island.pos = bottom_left
             # DEBUG
             # top_right = Vector((max(v.x for v in points), max(v.y for v in points) - title_height))
             # print(f"fitted aspect: {(top_right.y - bottom_left.y) / (top_right.x - bottom_left.x)}")
@@ -527,13 +610,21 @@ class Mesh:
     def largest_island_ratio(self, cage_size):
         return max(i / p for island in self.islands for (i, p) in zip(island.bounding_box, cage_size))
 
-    def save_uv(self, cage_size=Vector((1, 1)), separate_image=False):
+    def save_uv(self, cage_size=Vector((1, 1)), separate_image=False, x=3):
         if separate_image:
             for island in self.islands:
-                island.save_uv_separate(self.looptex)
+                island.save_uv_separate(self.looptex1)
         else:
-            for island in self.islands:
-                island.save_uv(self.looptex, cage_size)
+            x_shift = y_shift = 0
+            for number, page in enumerate(self.pages):
+                x_shift = number % x
+                for island in page.islands:
+                    cor_pos = Vector((island.pos.x + (cage_size.x * x_shift),island.pos.y + (cage_size.y * y_shift)))
+                    for loop, uvvertex in island.vertices.items():
+                        uv = uvvertex.co + cor_pos
+                        loop[self.looptex].uv = uv
+                if x_shift % (x-1) == 0 and x_shift !=0:
+                    y_shift += 1
 
     def save_image(self, page_size_pixels: Vector, filename):
         for page in self.pages:
@@ -566,7 +657,7 @@ class Mesh:
     def bake(self, faces, image):
         # FIXME: as of 3.5.0, this detection does not work properly
         # and one of existing 8 UVLayers would be overwritten
-        if not self.looptex:
+        if not self.looptex1:
             raise UnfoldError("The mesh has no UV Map slots left. Either delete a UV Map or export the net without textures.")
         ob = bpy.context.active_object
         me = ob.data
@@ -686,7 +777,7 @@ class Island:
         'image_path', 'embedded_image',
         'label', 'abbreviation', 'title',
         'has_safe_geometry', 'is_inside_out',
-        'sticker_numbering')
+        'sticker_numbering', 'mat_index', 'isl_color')
 
     def __init__(self, mesh, face, matrix, normal_matrix):
         """Create an Island from a single Face"""
@@ -710,8 +801,14 @@ class Island:
         self.vertices.update(uvface.vertices)
         self.edges.update(uvface.edges)
         self.faces[face] = uvface
+        self.mat_index = face.material_index
         # UVEdges on the boundary
         self.boundary = list(self.edges.values())
+        object = bpy.context.active_object.data
+        if object.materials: 
+            self.isl_color=object.materials[self.mat_index].node_tree.nodes['Principled BSDF'].inputs[0].default_value
+        else:
+            self.isl_color=[1,1,1,1]
 
     def add_marker(self, marker):
         self.fake_vertices.extend(marker.bounds)
@@ -1250,3 +1347,8 @@ class Exporter:
         self.pure_net = (properties.texture_type == 'NONE')
         self.text_size = properties.sticker_width
         self.angle_epsilon = properties.angle_epsilon
+        self.use_mat_color = properties.use_mat_color
+        self.use_reg = properties.use_reg
+        self.reg_type = properties.reg_type
+        self.reg_box_size = properties.reg_box_size
+        self.reg_corner_size = properties.reg_corner_size

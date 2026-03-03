@@ -6,7 +6,8 @@ import bpy
 import bmesh
 from mathutils import Vector
 
-from .unfolder import Unfolder, UnfoldError, default_priority_effect
+from .unfolder import PageLayoutGrid, Unfolder, UnfoldError, default_priority_effect, is_upsidedown_wrong
+from .nesting import Page
 from .svg import Svg
 from .pdf import Pdf
 from .json import Json
@@ -28,6 +29,110 @@ def first_letters(text):
 first_letters.pattern = re_compile("((?<!\w)\w)|\d")
 
 
+class Pagelayout(bpy.types.Operator):
+    """Blender Operator: make plane as grid."""
+
+    bl_idname = "mesh.pagelayout"
+    bl_label = "Pagelayout"
+    bl_description = "place and unfold grid to have it as referance"
+    bl_options = {'REGISTER', 'UNDO'}
+    edit: bpy.props.BoolProperty(default=False, options={'HIDDEN'})
+    priority_effect_convex: bpy.props.FloatProperty(
+        name="Priority Convex", description="Priority effect for edges in convex angles",
+        default=default_priority_effect['CONVEX'], soft_min=-1, soft_max=10, subtype='FACTOR')
+    priority_effect_concave: bpy.props.FloatProperty(
+        name="Priority Concave", description="Priority effect for edges in concave angles",
+        default=default_priority_effect['CONCAVE'], soft_min=-1, soft_max=10, subtype='FACTOR')
+    priority_effect_length: bpy.props.FloatProperty(
+        name="Priority Length", description="Priority effect of edge length",
+        default=default_priority_effect['LENGTH'], soft_min=-10, soft_max=1, subtype='FACTOR')
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and context.active_object.type == "MESH" and context.active_object.name != 'pagelayoutgrid'
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column()
+        layout.label(text="Edge Cutting Factors:")
+        col = layout.column(align=True)
+        col.label(text="Face Angle:")
+        col.prop(self.properties, "priority_effect_convex", text="Convex")
+        col.prop(self.properties, "priority_effect_concave", text="Concave")
+        layout.prop(self.properties, "priority_effect_length", text="Edge Length")
+
+    def execute(self, context):
+        sce = bpy.context.scene
+        settings = sce.paper_model
+        recall_mode = context.object.mode
+        if bpy.context.mode == 'EDIT_MESH':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        grid = PageLayoutGrid(settings.output_size_x, settings.output_size_y, settings.output_margin,settings.page_count)
+        grid.object.select_set(True)
+        #grid.object.data.uv_layers.active = grid.data.object.uv_layers['Unfolded']
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        pagesize = Vector((settings.output_size_x,settings.output_size_y))
+        printable_size = pagesize - 2*settings.output_margin*Vector((1,1))
+
+        priority_effect = {
+            'CONVEX': self.priority_effect_convex,
+            'CONCAVE': self.priority_effect_concave,
+            'LENGTH': self.priority_effect_length}
+        try:
+            unfolder = Unfolder(grid.object) 
+            unfolder.mesh.generate_cuts(grid.size+Vector((0.1,0.1)), priority_effect)
+            unfolder.mesh.islands.sort(key = lambda island: list(island.faces.keys())[0].index)
+            for i,island in enumerate(unfolder.mesh.islands,1):
+                abbr = str(i)
+                points = [point.co for point in island.vertices.values()]
+                bottom_left = Vector((min(v.x for v in points),min(v.y for v in points)))
+                for point in points:
+                    point -= bottom_left
+                island.bounding_box = Vector((max(v.x for v in points),max(v.y for v in points)))
+        # TODO: dots should be added in the last instant when outputting any text
+                if is_upsidedown_wrong(abbr):
+                    abbr += "."
+                island.label = "Page {}".format(i)
+                island.abbreviation = abbr
+                page = Page(i)
+                page.islands.append(island)
+                unfolder.mesh.pages.append(page)
+            unfolder.mesh.save_uv(printable_size,False,settings.page_count)
+            unfolder.mesh.mark_cuts()
+            
+        except UnfoldError as error:
+            self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
+            error.mesh_select()
+            bpy.ops.object.mode_set(mode=recall_mode)
+            return {'CANCELLED'}
+        mesh = grid.object.data
+        mesh.update()
+        if mesh.paper_island_list:
+            unfolder.copy_island_names(mesh.paper_island_list)
+        island_list = mesh.paper_island_list
+        attributes = {item.label: (item.abbreviation, item.auto_label, item.auto_abbrev) for item in island_list}
+        island_list.clear()  # remove previously defined islands
+        for island in unfolder.mesh.islands:
+            # add islands to UI list and set default descriptions
+            list_item = island_list.add()
+            # add faces' IDs to the island
+            for face in island.faces:
+                lface = list_item.faces.add()
+                lface.id = face.index
+            list_item["label"] = island.label
+            list_item["abbreviation"], list_item["auto_label"], list_item["auto_abbrev"] = attributes.get(
+                island.label,
+                (island.abbreviation, False, False))
+            island_item_changed(list_item, context)
+            mesh.paper_island_index = -1
+
+        del unfolder
+        bpy.ops.object.mode_set(mode=recall_mode)
+        return {'FINISHED'}
+
+
 class Unfold(bpy.types.Operator):
     """Blender Operator: unfold the selected object."""
 
@@ -46,7 +151,7 @@ class Unfold(bpy.types.Operator):
         name="Priority Length", description="Priority effect of edge length",
         default=default_priority_effect['LENGTH'], soft_min=-10, soft_max=1, subtype='FACTOR')
     do_create_uvmap: bpy.props.BoolProperty(
-        name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=False)
+        name="Create UVMap", description="Create a new UV Map showing the islands and page layout", default=True)
     object = None
 
     @classmethod
@@ -82,7 +187,7 @@ class Unfold(bpy.types.Operator):
             unfolder = Unfolder(self.object)
             unfolder.do_create_uvmap = self.do_create_uvmap
             scale = sce.unit_settings.scale_length / settings.scale
-            unfolder.prepare(cage_size, priority_effect, scale, settings.limit_by_page)
+            unfolder.prepare(cage_size, priority_effect, scale, settings.limit_by_page, call=True, text_size=settings.sticker_width)
             unfolder.mesh.mark_cuts()
         except UnfoldError as error:
             self.report(type={'ERROR_INVALID_INPUT'}, message=error.args[0])
@@ -140,8 +245,8 @@ class ClearAllSeams(bpy.types.Operator):
 
 def page_size_preset_changed(self, context):
     """Update the actual document size to correct values"""
-    if hasattr(self, "limit_by_page") and not self.limit_by_page:
-        return
+    # if hasattr(self, "limit_by_page") and not self.limit_by_page:
+    #     return
     if self.page_size_preset == 'A4':
         self.output_size_x = 0.210
         self.output_size_y = 0.297
@@ -290,6 +395,12 @@ class ExportPaperModel(bpy.types.Operator):
     sticker_width: bpy.props.FloatProperty(
         name="Tabs and Text Size", description="Width of gluing tabs and numbers",
         default=0.005, min=0, soft_max=0.05, step=0.01, subtype="UNSIGNED", unit="LENGTH")
+    reg_box_size: bpy.props.FloatProperty(
+        name="box Size", description="size of the black squre",
+        default=0.006, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+    reg_corner_size: bpy.props.FloatProperty(
+        name="corner Size", description="length of the corner edges",
+        default=0.02, soft_min=0, soft_max=0.06, step=0.1, subtype="UNSIGNED", unit="LENGTH")
     paper_thickness: bpy.props.FloatProperty(
         name="Paper Thickness", description="Compensate for thick material before gluing tabs",
         default=0.000, min=0, soft_max=0.05, step=0.001, subtype="UNSIGNED", unit="LENGTH")
@@ -308,6 +419,12 @@ class ExportPaperModel(bpy.types.Operator):
             ('PDF', "PDF", "Adobe Portable Document Format 1.4"),
             ('SVG', "SVG", "W3C Scalable Vector Graphics"),
             ('JSON', 'JSON', 'JavaScript Object Notation'),
+        ])
+    reg_type: bpy.props.EnumProperty(
+        name="Reg. Marks Type", description="Cameo registration marks compatible",
+        default='TYPE 1', items=[
+            ('TYPE 1', "Type 1", "Box at top left corner"),
+            ('TYPE 2', "Inverted", "Box at bottom left corner"),
         ])
     image_packing: bpy.props.EnumProperty(
         name="Image Packing Method", description="Method of attaching baked image(s) to the SVG",
@@ -328,11 +445,23 @@ class ExportPaperModel(bpy.types.Operator):
     do_create_uvmap: bpy.props.BoolProperty(
         name="Create UVMap",
         description="Create a new UV Map showing the islands and page layout",
+        default=True, options={'SKIP_SAVE'})
+    use_reg: bpy.props.BoolProperty(
+        name="Create Reg. marks",
+        description="Create Reg. matks on the page for cameo machine",
+        default=False, options={'SKIP_SAVE'})
+    use_mat_color: bpy.props.BoolProperty(
+        name="Use Materials Color",
+        description="Use the materials(Principled BSDF) base color as fill layer",
         default=False, options={'SKIP_SAVE'})
     ui_expanded_document: bpy.props.BoolProperty(
         name="Show Document Settings Expanded",
         description="Shows the box 'Document Settings' expanded in user interface",
         default=True, options={'SKIP_SAVE'})
+    ui_expanded_reg: bpy.props.BoolProperty(
+        name="Show Reg. Settings Expanded",
+        description="Shows the box 'Reg settings' expanded in user interface",
+        default=False, options={'SKIP_SAVE'})
     ui_expanded_style: bpy.props.BoolProperty(
         name="Show Style Settings Expanded",
         description="Shows the box 'Colors and Style' expanded in user interface",
@@ -358,7 +487,8 @@ class ExportPaperModel(bpy.types.Operator):
         self.unfolder = Unfolder(self.object)
         cage_size = Vector((sce.paper_model.output_size_x, sce.paper_model.output_size_y))
         unfolder_scale = sce.unit_settings.scale_length/self.scale
-        self.unfolder.prepare(cage_size, scale=unfolder_scale, limit_by_page=sce.paper_model.limit_by_page)
+        m_call = not bpy.context.active_object.data.paper_island_list
+        self.unfolder.prepare(cage_size, scale=unfolder_scale, limit_by_page=sce.paper_model.limit_by_page, call=m_call, text_size=sce.paper_model.sticker_width)
         if sce.paper_model.use_auto_scale:
             self.scale = ceil(self.get_scale_ratio(sce))
 
@@ -439,6 +569,7 @@ class ExportPaperModel(bpy.types.Operator):
             col.prop(self.properties, "output_size_y")
             box.prop(self.properties, "output_margin")
             col = box.column()
+            col.prop(self.properties, "use_mat_color")
             col.prop(self.properties, "tab_style")
             col.prop(self.properties, "number_style")
             col = box.column()
@@ -463,6 +594,18 @@ class ExportPaperModel(bpy.types.Operator):
             row = col.row()
             row.active = self.file_format == 'SVG'
             row.prop(self.properties, "image_packing", text="Images")
+
+        box = layout.box()
+        row = box.row(align=True)
+        row.prop(
+            self.properties, "ui_expanded_reg", text="",
+            icon=('TRIA_DOWN' if self.ui_expanded_reg else 'TRIA_RIGHT'), emboss=False)
+        row.label(text="REG Settings")
+        if self.ui_expanded_reg:
+            box.prop(self.properties, "use_reg")
+            box.prop(self.properties, "reg_type", text="Type")
+            box.prop(self.properties,"reg_box_size")
+            box.prop(self.properties,"reg_corner_size")
 
         box = layout.box()
         row = box.row(align=True)
@@ -592,7 +735,8 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
         sce = context.scene
         obj = context.active_object
         mesh = obj.data if obj and obj.type == 'MESH' else None
-
+        props = sce.paper_model
+        layout.column().prop(props,"page_count")
         layout.operator("mesh.unfold")
 
         if context.mode == 'EDIT_MESH':
@@ -601,6 +745,7 @@ class VIEW3D_PT_paper_model_tools(bpy.types.Panel):
             row.operator("mesh.mark_seam", text="Clear Seam").clear = True
         else:
             layout.operator("mesh.clear_all_seams")
+        layout.operator("mesh.pagelayout", text="Grid")
 
 
 class VIEW3D_PT_paper_model_settings(bpy.types.Panel):
@@ -750,6 +895,15 @@ class PaperModelSettings(bpy.types.PropertyGroup):
     output_size_y: bpy.props.FloatProperty(
         name="Height", description="Maximal height of an island",
         default=0.29, soft_min=0.148, soft_max=1.189, subtype="UNSIGNED", unit="LENGTH")
+    sticker_width: bpy.props.FloatProperty(
+        name="Tabs and Text Size", description="Width of gluing tabs and their numbers",
+        default=0.005, soft_min=0, soft_max=0.05, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+    output_margin: bpy.props.FloatProperty(
+        name="Page Margin", description="Distance from page borders to the printable area",
+        default=0.005, min=0, soft_max=0.1, step=0.1, subtype="UNSIGNED", unit="LENGTH")
+    page_count: bpy.props.IntProperty(
+        name="page count", description="number of pages x^2",
+        default=3, min=3, soft_max=9, step=1, subtype="UNSIGNED")
     use_auto_scale: bpy.props.BoolProperty(
         name="Automatic Scale", description="Scale the net automatically to fit on paper",
         default=True)
