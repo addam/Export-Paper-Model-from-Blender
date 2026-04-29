@@ -144,7 +144,7 @@ def apply_rna_properties(memory, *datablocks):
         for key, value in recall.items():
             try:
                 setattr(data, key, value)
-            except:
+            except TypeError:
                 print(f'WARN: cannot restore rna property "{key}" to "{value}"')
 
 
