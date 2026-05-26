@@ -78,7 +78,7 @@ def register():
         name="Island List", type=unfold_operator.IslandList)
     bpy.types.Mesh.paper_island_index = bpy.props.IntProperty(
         name="Island List Index",
-        default=-1, min=-1, max=100, options={'SKIP_SAVE'}, update=unfold_operator.island_index_changed)
+        default=-1, min=-1, options={'SKIP_SAVE'}, update=unfold_operator.island_index_changed)
     bpy.types.TOPBAR_MT_file_export.append(unfold_operator.menu_func_export)
     bpy.types.VIEW3D_MT_edit_mesh.prepend(unfold_operator.menu_func_unfold)
     # Force an update on the panel category properties
