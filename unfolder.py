@@ -142,7 +142,10 @@ def store_rna_properties(*datablocks):
 def apply_rna_properties(memory, *datablocks):
     for recall, data in zip(memory, datablocks):
         for key, value in recall.items():
-            setattr(data, key, value)
+            try:
+                setattr(data, key, value)
+            except TypeError:
+                print(f'WARN: cannot restore rna property "{key}" to "{value}"')
 
 
 class UnfoldError(ValueError):
