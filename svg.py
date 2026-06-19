@@ -165,7 +165,7 @@ class Svg(Exporter):
                         vertex_pair = frozenset((uvedge.va, uvedge.vb))
                         if vertex_pair not in visited_edges:
                             visited_edges.add(vertex_pair)
-                            if abs(edge.angle) > self.angle_epsilon:
+                            if abs(edge.angle) >= self.angle_epsilon:
                                 edge_group = data_convex if edge.is_convex() else data_concave
                                 edge_group.append(data_uvedge)
                     if island.is_inside_out:
