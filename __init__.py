@@ -55,6 +55,7 @@ class PaperAddonPreferences(bpy.types.AddonPreferences):
 
 module_classes = (
     unfold_operator.Unfold,
+    unfold_operator.Pagelayout,
     unfold_operator.ExportPaperModel,
     unfold_operator.ClearAllSeams,
     unfold_operator.SelectIsland,

@@ -74,6 +74,32 @@ class Svg(Exporter):
                             height=(self.page_size.y - 2 * self.margin.y)*1000,
                             path=path_convert(page.image_path)),
                         file=f)
+                if self.use_reg:
+                    if self.reg_type == "TYPE 1":
+                        print(
+                            self.registration_mark_tag.format(L=self.reg_box_size*1000,
+                                x=self.margin.x*1000,
+                                y=self.margin.y*1000,
+                                pos1="{:.6f} {:.6f}".format(self.margin.x*1000,(self.page_size.y-self.margin.y-self.reg_corner_size)*1000),
+                                pos2="{:.6f} {:.6f}".format(self.margin.x*1000,(self.page_size.y-self.margin.y)*1000),
+                                pos3="{:.6f} {:.6f}".format((self.margin.x+self.reg_corner_size)*1000,(self.page_size.y-self.margin.y)*1000),
+                                pos4="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x-self.reg_corner_size)*1000,self.margin.y*1000),
+                                pos5="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,self.margin.y*1000),
+                                pos6="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.margin.y+self.reg_corner_size)*1000)),
+                            file=f)
+                    else:
+                        print(
+                            self.registration_mark_tag.format(L=self.reg_box_size*1000,
+                                x=self.margin.x*1000,
+                                y=(self.page_size.y-self.margin.y-self.reg_box_size)*1000,
+                                pos1="{:.6f} {:.6f}".format(self.margin.x*1000,(self.margin.y+self.reg_corner_size)*1000),
+                                pos2="{:.6f} {:.6f}".format(self.margin.x*1000,(self.margin.y)*1000),
+                                pos3="{:.6f} {:.6f}".format((self.margin.x+self.reg_corner_size)*1000,(self.margin.y)*1000),
+                                pos4="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x-self.reg_corner_size)*1000,(self.page_size.y-self.margin.y)*1000),
+                                pos5="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.page_size.y-self.margin.y)*1000),
+                                pos6="{:.6f} {:.6f}".format((self.page_size.x-self.margin.x)*1000,(self.page_size.y-self.margin.y-self.reg_corner_size)*1000)),
+                            file=f)
+                
                 if len(page.islands) > 1:
                     print("<g>", file=f)
 
@@ -197,6 +223,8 @@ class Svg(Exporter):
     text_transformed_tag = "<text transform='matrix({mat} {pos})' style='font-size:{size:.2f}'><tspan>{label}</tspan></text>"
     arrow_marker_tag = "<g><path transform='matrix({mat} {arrow_pos})' class='arrow' d='M 0 0 L 1 1 L 0 0.25 L -1 1 Z'/>" \
         "<text transform='translate({pos})' style='font-size:{scale:.2f}'><tspan>{index}</tspan></text></g>"
+    registration_mark_tag = "<g id='reg mark'><rect width='{L:.6f}' height='{L:.6f}' x='{x:.6f}' y='{y:.6f}' fill = 'black' />" \
+        "<path class='reg' d='M {pos1} L {pos2} L {pos3} M {pos4} L {pos5} L {pos6}'/></g>"
 
     svg_base = """<?xml version='1.0' encoding='UTF-8' standalone='no'?>
     <svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' version='1.1'
@@ -214,6 +242,13 @@ class Svg(Exporter):
         stroke-dasharray: {outer_style};
         stroke-dashoffset: 0;
         stroke-width: {outer_width:.2};
+        stroke-opacity: {outer_alpha:.2};
+    }}
+    path.reg {{
+        stroke: {outer_color};
+        stroke-dasharray: {outer_style};
+        stroke-dashoffset: 0;
+        stroke-width: 0.5;
         stroke-opacity: {outer_alpha:.2};
     }}
     path.convex {{
